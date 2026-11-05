@@ -1,0 +1,61 @@
+# CMake-Embedded Contracts
+
+## Source Rules
+
+Record an item here only when it is a stable externally observable or cross-module invariant that future changes must preserve. Code and executable tests remain the final behavioral evidence.
+
+Do not append content merely because a batch changed code. Current or planned work, implementation status, bug narratives, task-specific acceptance notes, command output, test results, and completed history do not belong here. Put current work in `roadmap.md`, executable evidence in tests, stable design shape in `architecture.md`, and completed history in Git.
+
+Prefer precise constraints and links to the owning schema, symbol, test, or runbook over duplicated implementation prose. Remove an entry when the invariant no longer exists; do not retain it as historical context.
+
+Before adding an entry, name the exact invariant future changes must preserve. If no such invariant exists, do not add the entry. Whenever this file is edited, consolidate duplicate statements and remove obsolete or task-specific text in the sections being changed.
+
+## Public Interfaces
+
+- `DeviceProfile`（`src/devices/deviceProfiles.ts`）是生成器的唯一芯片契约；`part` 在注册表内唯一（大写归一化），未知 part 抛 `Unsupported MCU: <part>`。
+- `registerDeviceProfiles()` 允许运行时追加档案；`listDeviceProfiles()/getDeviceProfile()` 签名稳定，返回防御性拷贝。
+- 厂商必须先在 `vendorRegistry` 注册（id 唯一，`getVendorMetadata` 未知 id 抛错）。
+- 命令 ID：`cmakeEmbedded.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/scanEnvironment/importPack/buildProject/selectArmToolchain`。
+- `buildProject` 使用已有 `debug` 或 `release` CMake 预设；配置失败或取消后不得开始编译步骤。构建日志包含 stdout、stderr 和最终不带换行的输出。
+- `cmakeEmbedded.armToolchainPath` 为 ARM GNU bin 目录，由侧栏、构建与生成的 Cortex-Debug/IntelliSense 配置共享；侧栏保存和浏览只接受含 GCC、G++、objcopy、size 的目录，GCC 可执行文件输入归一化为 bin 目录，留空使用 PATH。
+- 工具链设置写入已有的最具体作用域（workspace folder、workspace、global）；显式构建仅叠加子进程 PATH，不修改系统环境或在工程工具链文件中写入机器绝对路径。
+- 工具链侧栏状态仅验证 `arm-none-eabi-gcc/g++/objcopy/size` 文件存在，不代表固件已编译或调试硬件已连接。
+- 生成文件落盘前必须经过覆盖确认（`shared/generatedFiles.ts`）。
+- 内核向量表 16 槽 + `interruptHandlers` 按序拼接，槽位 `'0'` 表示保留（`startupGenerator`）。
+
+## Data And Persistence
+
+- Pack 导入持久化在扩展 globalStorage：`packs/<vendor>/<file>.pack` + `packs.json`（含序列化 DeviceProfile）；同 part 重复导入覆盖旧版。
+- Keil 安装目录中的已解压 Pack 以目录引用方式导入（`packs.json` 记录元数据但不复制文件）；`importPackDirectory` 删除导入记录不触碰原目录。
+- `CMAKE_EMBEDDED_SKIP_FIRMWARE_BUILDS=1` 跳过真实固件编译用例；CI（release.yml）默认置位。
+- `.mcu-cmake.json`、`.vscode/launch.json`、`c_cpp_properties.json` 的写入保留用户已有内容（JSONC 解析合并）。
+
+## Compatibility
+
+- `architecture` 字段仅 `'arm'`；非 ARM Dcore 的 Pack 设备跳过并报告，不生成半成品档案。
+- PDSC `<processor Dcore>` 在 family/subFamily/device 任一层均有效，device 层缺失时继承上层；`CM0` 缩写与 `Cortex-M0` 全名等价。
+- `Dvendor` 的数字后缀（如 `Sinomcu:985`）不进入厂商显示名；vendor id 由完整值 sanitize 得出。
+- 烧录后端 `openocd|jlink|pyocd` 与探针兼容矩阵见 `src/flash/backendProfiles.ts`；pyocd 后端不支持 J-Link 探针（硬件限制）。
+- 侧栏 MCU 选择中，series 不属于当前 vendor 时回退到该 vendor 首个系列，不保留跨 vendor 残留。
+- 侧栏调试器列表仅提供当前烧录后端支持的探针；切换后端时不保留不兼容探针。
+
+## Performance And Resources
+
+- 无运行时性能契约；注册表构建为启动期一次性成本。
+
+## Safety And Failure Behavior
+
+- 生成器绝不执行外部工具；flash.py 由用户显式运行。
+- 构建命令只在已信任工作区由用户显式触发，最多执行一个构建；取消终止构建进程树，构建命令不执行烧录。
+- zip 读取器遇 Zip64/加密条目抛显式错误，不部分解压。
+- 校验失败的 Pack 设备进入 skipped 并给出原因，不中断整包导入。
+
+## Verification Matrix
+
+| Contract | Automated evidence location | Operational acceptance surface |
+| --- | --- | --- |
+| DeviceProfile 注册表唯一性与校验 | `src/test/deviceProfile.test.ts` | 侧边栏三级选择流 |
+| Pack 导入→档案可查 | `src/test/packParser.test.ts`、`src/test/importedProfiles.test.ts` | 扩展宿主导入真实 pack 后生成 |
+| 三后端 flash.py/launch.json | `src/test/flashScriptGenerator.test.ts`、`src/test/debugConfigGenerator.test.ts` | 本机 J-Link/pyOCD 真机烧录（用户侧） |
+| 生成工程可编译 | `src/test/cmakeBuild.test.ts` | `cmake --preset debug && cmake --build --preset debug` |
+| 工具链扫描 | `src/test/toolchainScanner.test.ts` | 扩展宿主「扫描环境」按钮 |

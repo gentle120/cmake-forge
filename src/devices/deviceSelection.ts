@@ -1,12 +1,20 @@
 import type { DeviceProfile, DeviceSeries, DeviceVendor } from './deviceProfiles';
+import { getVendorMetadata } from './vendorRegistry';
 
-const vendorOrder: Record<DeviceVendor, number> = { STM: 0, GD: 1 };
-const seriesOrder: Record<DeviceSeries, number> = { F1x: 0, F4x: 1, L4x: 2 };
+const builtinSeriesOrder = [
+  'F0x', 'F1x', 'F2x', 'F3x', 'F4x', 'F7x', 'G0x', 'G4x', 'H7x',
+  'L0x', 'L1x', 'L4x', 'L5x', 'U5x', 'WBx', 'WLx'
+];
+
+function seriesRank(series: DeviceSeries): number {
+  const index = builtinSeriesOrder.indexOf(series);
+  return index === -1 ? builtinSeriesOrder.length : index;
+}
 
 export function listDeviceVendors(profiles: DeviceProfile[]): DeviceVendor[] {
   return [...new Set(profiles.map((profile) => profile.vendor))]
     .sort((left, right) =>
-      vendorOrder[left] - vendorOrder[right]
+      getVendorMetadata(left).order - getVendorMetadata(right).order
     );
 }
 
@@ -15,7 +23,9 @@ export function listDeviceSeries(profiles: DeviceProfile[], vendor: DeviceVendor
     profiles
       .filter((profile) => profile.vendor === vendor)
       .map((profile) => profile.series)
-  )].sort((left, right) => seriesOrder[left] - seriesOrder[right]);
+  )].sort((left, right) =>
+    seriesRank(left) - seriesRank(right) || left.localeCompare(right)
+  );
 }
 
 export function listDeviceProfilesForSeries(

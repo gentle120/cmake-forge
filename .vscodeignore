@@ -3,6 +3,8 @@
 docs
 CHANGELOG.md
 .github
+.playwright-mcp
+AGENTS.md
 src
 test
 out/**/*.map
@@ -14,5 +16,6 @@ tsconfig.json
 ~$*
 *.doc
 *.vsix
+flash.py
 images/icon-electric.png
 img/demo.png

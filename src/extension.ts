@@ -1,7 +1,28 @@
 import * as vscode from 'vscode';
+import { registerBuildProject } from './integration/buildProject';
+import { getArmToolchainPath, registerArmToolchainSettings, saveArmToolchainPath } from './integration/toolchainSettings';
 import { getDeviceProfile, listDeviceProfiles, type DeviceSeries, type DeviceVendor } from './devices/deviceProfiles';
 import { listDeviceProfilesForSeries, listDeviceSeries, listDeviceVendors } from './devices/deviceSelection';
+import { getVendorMetadata } from './devices/vendorRegistry';
 import { getFlashProbeProfile, listFlashProbeProfiles, type FlashProbeProfile } from './flash/probeProfiles';
+import {
+  importPack,
+  importPackDirectory,
+  listImportedPacks,
+  loadImportedProfiles,
+  type ImportPackResult
+} from './devices/importedProfiles';
+import { defaultScanRoots, listKeilPacks, scanToolchains, type ToolchainHit } from './env/toolchainScanner';
+import { downloadPack, searchPacks, type FetchLike } from './packs/packIndex';
+import { existsSync, readdirSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import * as os from 'node:os';
+import {
+  defaultBackendFor,
+  listFlashBackendProfiles,
+  type FlashBackendId
+} from './flash/backendProfiles';
+import type { FlashDeviceContext, FlashExecutablePaths } from './generator/flashScriptGenerator';
 import {
   getFlashTargetProfile,
   getFlashTargetProfileForDevice,
@@ -28,6 +49,12 @@ import { linuxConfigFileName } from './linux/types';
 import { describeNativeProject } from './native/projectStructure';
 import { scanProject, ScanCancelledError, type ProjectDescription } from './scanner/projectScanner';
 import { SidebarProvider } from './sidebar/provider';
+import type { CommandResult } from './shared/commandResult';
+import {
+  armGccExecutablePath,
+  normalizeArmToolchainPath,
+  prioritizeArmToolchainHits
+} from './env/armToolchain';
 
 async function scanWorkspace(root: string): Promise<ProjectDescription | undefined> {
   try {
@@ -103,7 +130,7 @@ async function selectDeviceProfile(): Promise<ReturnType<typeof getDeviceProfile
   const profiles = listDeviceProfiles();
   const vendorSelection = await vscode.window.showQuickPick(
     listDeviceVendors(profiles).map((vendor) => ({
-      label: vendor === 'STM' ? 'STM32' : 'GD32',
+      label: getVendorMetadata(vendor).label,
       description: `${profiles.filter((profile) => profile.vendor === vendor).length} 个支持的型号`,
       vendor
     })),
@@ -211,9 +238,258 @@ function getOpenOcdPath(): string {
     .get<string>('openocdPath', 'openocd')?.trim() || 'openocd';
 }
 
-function getArmToolchainPath(): string | undefined {
-  return vscode.workspace.getConfiguration('cmakeEmbedded')
-    .get<string>('armToolchainPath', '')?.trim() || undefined;
+let packStorageRoot = '';
+let activeSidebar: SidebarProvider | undefined;
+const packFileByPart = new Map<string, string>();
+
+async function syncPackFileIndex(): Promise<void> {
+  packFileByPart.clear();
+  for (const record of await listImportedPacks(packStorageRoot)) {
+    for (const part of record.parts) {
+      packFileByPart.set(part, record.packFile);
+    }
+  }
+}
+
+function executablePaths(): FlashExecutablePaths {
+  const configuration = vscode.workspace.getConfiguration('cmakeEmbedded');
+  return {
+    jlink: configuration.get<string>('jlinkPath', 'JLink')?.trim() || 'JLink',
+    pyocd: configuration.get<string>('pyocdPath', 'pyocd')?.trim() || 'pyocd'
+  };
+}
+
+const scanFileSystem = { exists: existsSync, readDir: readdirSync };
+
+function scanRoots() {
+  const drives = process.platform === 'win32'
+    ? Array.from({ length: 24 }, (_, index) => `${String.fromCharCode(67 + index)}:/`).filter(existsSync)
+    : [];
+  const roots = defaultScanRoots(process.platform, process.env, os.homedir(), drives);
+  const configured = getArmToolchainPath();
+  if (configured) {
+    roots.pathDirs.unshift(configured);
+  }
+  return roots;
+}
+
+const fetchWithTimeout: FetchLike = (url) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+};
+
+async function scanEnvironmentOnly(): Promise<CommandResult> {
+  const hits = scanToolchains(scanRoots(), scanFileSystem);
+  if (hits.length === 0) {
+    const message = '环境扫描未发现工具链（ARM GNU / EIDE / STM32CubeCLT / Keil / J-Link / PATH）。';
+    void vscode.window.showInformationMessage(message);
+    return { ok: false, message };
+  }
+  const configuration = vscode.workspace.getConfiguration('cmakeEmbedded');
+  const settingsByKind = new Map<ToolchainHit['kind'], string>([
+    ['openocd', 'openocdPath'],
+    ['arm-gcc', 'armToolchainPath'],
+    ['jlink', 'jlinkPath'],
+    ['pyocd', 'pyocdPath']
+  ]);
+  const applied: string[] = [];
+  const notes: string[] = [];
+  const currentArm = normalizeArmToolchainPath(getArmToolchainPath() ?? '');
+  const discoveredArm = hits.filter((candidate) => candidate.kind === 'arm-gcc');
+  let armGccHits = prioritizeArmToolchainHits(
+    discoveredArm,
+    currentArm
+  );
+  if (armGccHits.length > 1) {
+    const picked = await vscode.window.showQuickPick(
+      armGccHits.map((hit) => ({
+        label: hit.label,
+        description: hit.path,
+        detail: currentArm && normalizeArmToolchainPath(hit.path) === currentArm
+          ? '当前设置'
+          : undefined,
+        hit
+      })),
+      { placeHolder: '发现多个 ARM GNU 工具链，选择构建使用的一个' }
+    );
+    armGccHits = picked ? [picked.hit] : [];
+    if (!picked) {
+      notes.push('保留当前 ARM GNU 工具链设置。');
+    }
+  }
+  for (const [kind, setting] of settingsByKind) {
+    const hit = kind === 'arm-gcc'
+      ? armGccHits[0]
+      : hits.find((candidate) => candidate.kind === kind);
+    if (!hit) {
+      continue;
+    }
+    if (kind === 'arm-gcc') {
+      if (!(await saveArmToolchainPath(hit.path)).ok) {
+        continue;
+      }
+    } else {
+      await configuration.update(setting, hit.path, vscode.ConfigurationTarget.Global);
+    }
+    applied.push(`${hit.label}: ${hit.path}`);
+  }
+  const details = [
+    ...(applied.length > 0 ? [`已写入设置：\n${applied.join('\n')}`] : []),
+    ...notes
+  ];
+  const message = details.length > 0
+    ? `环境扫描完成。${details.join('\n')}`
+    : `环境扫描发现 ${hits.length} 项工具链，无可自动填充的设置。`;
+  void vscode.window.showInformationMessage(message);
+  return { ok: true, message };
+}
+
+async function pickLocalPack(): Promise<{ buffer: Buffer; fileName: string } | undefined> {
+  const picked = await vscode.window.showOpenDialog({
+    filters: { 'CMSIS Pack': ['pack'] }
+  });
+  if (!picked || picked.length === 0) {
+    return undefined;
+  }
+  const fileName = picked[0].path.split('/').pop() ?? 'imported.pack';
+  return { buffer: await readFile(picked[0].fsPath), fileName };
+}
+
+async function pickKeilPack(): Promise<{ kind: 'buffer'; buffer: Buffer; fileName: string } | { kind: 'directory'; root: string; pdscPath: string } | undefined> {
+  const packs = listKeilPacks(scanRoots().packRoots, scanFileSystem);
+  if (packs.length === 0) {
+    vscode.window.showWarningMessage('未在 Keil Pack 目录中发现已安装的 Pack。');
+    return undefined;
+  }
+  const picked = await vscode.window.showQuickPick(
+    packs.map((pack) => ({
+      label: `${pack.vendor} ${pack.name}`,
+      description: pack.version,
+      detail: pack.source === 'directory'
+        ? `${pack.packFile}/${pack.vendor}.${pack.name}.${pack.version}.pdsc`
+        : pack.packFile,
+      packFile: pack.packFile,
+      source: pack.source
+    })),
+    { placeHolder: `发现 ${packs.length} 个已安装 Pack，选择要导入的` }
+  );
+  if (!picked) {
+    return undefined;
+  }
+  if (picked.source === 'directory') {
+    return { kind: 'directory', root: picked.packFile, pdscPath: picked.detail };
+  }
+  const fileName = picked.packFile.split(/[/\\]/).pop() ?? 'imported.pack';
+  return { kind: 'buffer', buffer: await readFile(picked.packFile), fileName };
+}
+
+async function pickOnlinePack(): Promise<{ buffer: Buffer; fileName: string } | undefined> {
+  const keyword = await vscode.window.showInputBox({
+    placeHolder: '输入厂商或芯片关键字，例如 MS32'
+  });
+  if (keyword === undefined || keyword.trim() === '') {
+    return undefined;
+  }
+  const results = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `正在搜索 keil.com Pack 索引「${keyword.trim()}」…` },
+    () => searchPacks(fetchWithTimeout, keyword)
+  );
+  if (results.length === 0) {
+    vscode.window.showInformationMessage(`keil.com 在线索引中没有匹配「${keyword}」的 Pack。`);
+    return undefined;
+  }
+  const picked = await vscode.window.showQuickPick(
+    results.map((pack) => ({
+      label: pack.name,
+      description: pack.version,
+      detail: pack.description,
+      packUrl: pack.packUrl
+    })),
+    { placeHolder: `匹配 ${results.length} 个 Pack，选择要下载导入的包` }
+  );
+  if (!picked) {
+    return undefined;
+  }
+  const buffer = await downloadPack(fetchWithTimeout, picked.packUrl);
+  const fileName = picked.packUrl.split('/').pop() ?? 'imported.pack';
+  return { buffer, fileName };
+}
+
+async function importPackOnly(): Promise<CommandResult> {
+  const cancelled: CommandResult = { ok: false, cancelled: true, message: '未执行 Pack 导入。' };
+  const source = await vscode.window.showQuickPick(
+    [
+      { label: '本地 .pack 文件', value: 'local' as const },
+      { label: 'Keil 已安装 Pack', value: 'keil' as const },
+      { label: 'keil.com 在线索引', value: 'online' as const }
+    ],
+    { placeHolder: '选择 CMSIS Pack 来源' }
+  );
+  if (!source) {
+    return cancelled;
+  }
+  try {
+    let result: ImportPackResult;
+    if (source.value === 'local') {
+      const picked = await pickLocalPack();
+      if (!picked) {
+        return cancelled;
+      }
+      result = await importPack(picked.buffer, picked.fileName, packStorageRoot);
+    } else if (source.value === 'keil') {
+      const picked = await pickKeilPack();
+      if (!picked) {
+        return cancelled;
+      }
+      if (picked.kind === 'directory') {
+        result = await importPackDirectory(picked.root, picked.pdscPath, packStorageRoot);
+      } else {
+        result = await importPack(picked.buffer, picked.fileName, packStorageRoot);
+      }
+    } else {
+      const picked = await pickOnlinePack();
+      if (!picked) {
+        return cancelled;
+      }
+      result = await importPack(picked.buffer, picked.fileName, packStorageRoot);
+    }
+    await syncPackFileIndex();
+    activeSidebar?.refresh();
+    const skipped = result.skipped.length > 0
+      ? `\n跳过 ${result.skipped.length} 个型号：${result.skipped
+          .map((item) => `${item.part}（${item.reason}）`)
+          .join('、')}`
+      : '';
+    const message = `Pack 导入完成：${result.imported.length} 个新型号已注册。${skipped}`;
+    void vscode.window.showInformationMessage(message);
+    return { ok: true, message };
+  } catch (error) {
+    const message = `Pack 导入失败：${error instanceof Error ? error.message : String(error)}`;
+    void vscode.window.showErrorMessage(message);
+    return { ok: false, message };
+  }
+}
+
+async function selectFlashBackend(
+  probe: FlashProbeProfile,
+  profile?: { debugTarget?: string }
+): Promise<FlashBackendId | undefined> {
+  const compatible = listFlashBackendProfiles()
+    .filter((backend) => backend.probes.includes(probe.id));
+  const fallback = defaultBackendFor(profile ?? {}, probe.id);
+  const selection = await vscode.window.showQuickPick(
+    compatible.map((backend) => ({
+      label: backend.label,
+      description: backend.id === 'openocd'
+        ? 'target cfg 驱动'
+        : backend.id === 'jlink' ? 'SEGGER J-Link Commander' : 'pyOCD（CMSIS Pack 设备）',
+      id: backend.id,
+      picked: backend.id === fallback
+    })),
+    { placeHolder: '选择烧录/调试后端' }
+  );
+  return selection?.id as FlashBackendId | undefined;
 }
 
 async function ensureCortexDebugInstalled(): Promise<boolean> {
@@ -252,12 +528,17 @@ async function generateDebugConfigurationOnly(): Promise<void> {
   if (!probe) {
     return;
   }
+  const backend = await selectFlashBackend(probe);
+  if (!backend) {
+    return;
+  }
   reportWorkflowResult(await generateDebugWorkflow(
     createWorkflowHost(),
     target,
     probe,
     getOpenOcdPath(),
-    getArmToolchainPath()
+    getArmToolchainPath(),
+    backend
   ));
 }
 
@@ -275,11 +556,18 @@ async function generateFlashScriptOnly(): Promise<void> {
   if (!probe) {
     return;
   }
+  const backend = await selectFlashBackend(probe);
+  if (!backend) {
+    return;
+  }
   reportWorkflowResult(await generateFlashWorkflow(
     createWorkflowHost(),
     target,
     probe,
-    getOpenOcdPath()
+    getOpenOcdPath(),
+    backend,
+    undefined,
+    executablePaths()
   ));
 }
 
@@ -292,26 +580,39 @@ async function generateProject(): Promise<void> {
   if (generateFlash === undefined) {
     return;
   }
-  let flash: {
-    target: FlashTargetProfile;
-    probe: FlashProbeProfile;
-    openocdPath: string;
-  } | undefined;
+  let flash: Parameters<typeof generateMcuWorkflow>[2]['flash'];
   if (generateFlash) {
     const probe = await selectFlashProbe();
     if (!probe) {
       return;
     }
+    let backend: FlashBackendId = 'openocd';
+    const device: FlashDeviceContext = { part: profile.part, core: profile.core };
+    let target: FlashTargetProfile;
+    if (profile.debugTarget) {
+      target = getFlashTargetProfileForDevice(profile);
+    } else {
+      const picked = await selectFlashBackend(probe, profile);
+      if (!picked) {
+        return;
+      }
+      backend = picked;
+      // jlink/pyocd scripts never read the OpenOCD target; any entry satisfies the type.
+      target = getFlashTargetProfile('stm32f1xx');
+    }
     flash = {
-      target: getFlashTargetProfileForDevice(profile),
+      target,
       probe,
-      openocdPath: getOpenOcdPath()
+      openocdPath: getOpenOcdPath(),
+      backend,
+      device,
+      executables: executablePaths()
     };
   }
   reportWorkflowResult(await generateMcuWorkflow(
     createWorkflowHost(),
     profile,
-    { flash }
+    { flash, compilerPath: armGccExecutablePath(getArmToolchainPath() ?? '') }
   ));
 }
 
@@ -378,7 +679,10 @@ async function generateNativeProject(): Promise<void> {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  registerArmToolchainSettings(context);
+  registerBuildProject(context);
   const host = createWorkflowHost();
+  packStorageRoot = context.globalStorageUri.fsPath;
   const sidebarProvider = new SidebarProvider(context, {
     workflow: host,
     confirmOverwrite: async (files) => {
@@ -389,7 +693,15 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       return action === '覆盖';
     },
-    discoverToolchains: () => discoverLinuxToolchains()
+    discoverToolchains: () => discoverLinuxToolchains(),
+    packFileForPart: (part) => packFileByPart.get(part)
+  });
+  activeSidebar = sidebarProvider;
+  void loadImportedProfiles(packStorageRoot).then(async (profiles) => {
+    await syncPackFileIndex();
+    if (profiles.length > 0) {
+      sidebarProvider.refresh();
+    }
   });
   context.subscriptions.push(
     vscode.commands.registerCommand('cmakeEmbedded.generateMcu', () => generateProject()),
@@ -400,6 +712,8 @@ export function activate(context: vscode.ExtensionContext): void {
       'cmakeEmbedded.generateDebugConfiguration',
       () => generateDebugConfigurationOnly()
     ),
+    vscode.commands.registerCommand('cmakeEmbedded.scanEnvironment', () => scanEnvironmentOnly()),
+    vscode.commands.registerCommand('cmakeEmbedded.importPack', () => importPackOnly()),
     vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebarProvider, {
       webviewOptions: { retainContextWhenHidden: true }
     }),

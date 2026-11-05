@@ -1,0 +1,379 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {
+  defaultScanRoots,
+  listKeilPacks,
+  scanToolchains,
+  type ScanFileSystem,
+  type ScanRoots
+} from '../env/toolchainScanner';
+
+function createFakeFs(
+  directories: Record<string, string[]>,
+  files: string[] = []
+): ScanFileSystem {
+  const fileSet = new Set(files);
+  return {
+    exists: (path) =>
+      Object.prototype.hasOwnProperty.call(directories, path) || fileSet.has(path),
+    readDir: (path) => {
+      const entries = directories[path];
+      if (!entries) {
+        throw new Error(`ENOENT: ${path}`);
+      }
+      return [...entries];
+    }
+  };
+}
+
+function scanRoots(overrides: Partial<ScanRoots> = {}): ScanRoots {
+  return {
+    keilDirs: [],
+    packRoots: [],
+    cltRoots: [],
+    seggerRoots: [],
+    pathDirs: [],
+    ...overrides
+  };
+}
+
+test('builds win32 scan roots from the environment', () => {
+  const roots = defaultScanRoots('win32', {
+    PATH: 'C:/tools/bin;C:/segger',
+    LOCALAPPDATA: 'C:\\Users\\dev\\AppData\\Local',
+    CMSIS_PACK_ROOT: 'C:/packs',
+    KEIL_PATH: 'D:/Keil5'
+  }, 'C:/Users/dev');
+
+  assert.deepEqual(roots.keilDirs, ['C:/Keil_v5', 'C:/Keil', 'D:/Keil5']);
+  assert.deepEqual(roots.packRoots, [
+    'C:/packs',
+    'C:/Users/dev/AppData/Local/Arm/Packs',
+    'C:/Keil_v5/ARM/PACK',
+    'C:/Keil/ARM/PACK',
+    'D:/Keil5/ARM/PACK'
+  ]);
+  assert.deepEqual(roots.cltRoots, ['C:/ST', 'C:/']);
+  assert.deepEqual(roots.seggerRoots, ['C:/Program Files/SEGGER']);
+  assert.deepEqual(roots.pathDirs, ['C:/tools/bin', 'C:/segger']);
+});
+
+test('includes detected drives and EIDE / standalone ARM GNU installations', () => {
+  const roots = defaultScanRoots('win32', {}, 'C:/Users/dev', ['C:/', 'D:/']);
+  assert.deepEqual(roots.cltRoots, ['C:/ST', 'C:/', 'D:/ST', 'D:/']);
+  assert.ok(roots.armGccRoots?.includes('C:/Users/dev/.eide/tools/gcc_arm'));
+  assert.ok(roots.armGccRoots?.includes('C:/Program Files/Arm GNU Toolchain arm-none-eabi'));
+});
+
+test('finds EIDE and a CubeCLT installation outside the system drive', () => {
+  const fs = createFakeFs({ 'D:/': ['STM32CubeCLT_1.20.0'] }, [
+    'C:/Users/dev/.eide/tools/gcc_arm/bin/arm-none-eabi-gcc.exe',
+    'D:/STM32CubeCLT_1.20.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc.exe'
+  ]);
+  const hits = scanToolchains(scanRoots({
+    armGccRoots: ['C:/Users/dev/.eide/tools/gcc_arm'], cltRoots: ['D:/']
+  }), fs);
+  assert.deepEqual(hits.map(hit => hit.path), [
+    'C:/Users/dev/.eide/tools/gcc_arm/bin',
+    'D:/STM32CubeCLT_1.20.0/GNU-tools-for-STM32/bin'
+  ]);
+});
+
+test('uses numeric installation versions and deduplicates an ARM bin found on PATH', () => {
+  const fs = createFakeFs({ 'D:/': ['STM32CubeCLT_1.9.0', 'STM32CubeCLT_1.20.0'] }, [
+    'D:/STM32CubeCLT_1.9.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc.exe',
+    'D:/STM32CubeCLT_1.20.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc.exe'
+  ]);
+  const hits = scanToolchains(scanRoots({
+    cltRoots: ['D:/'], pathDirs: ['D:/STM32CubeCLT_1.20.0/GNU-tools-for-STM32/bin']
+  }), fs);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].path, 'D:/STM32CubeCLT_1.20.0/GNU-tools-for-STM32/bin');
+});
+
+test('omits win32 environment entries that are not set', () => {
+  const roots = defaultScanRoots('win32', {}, 'C:/Users/dev');
+
+  assert.deepEqual(roots.keilDirs, ['C:/Keil_v5', 'C:/Keil']);
+  assert.deepEqual(roots.packRoots, ['C:/Keil_v5/ARM/PACK', 'C:/Keil/ARM/PACK']);
+  assert.deepEqual(roots.pathDirs, []);
+});
+
+test('builds posix scan roots from the environment', () => {
+  const linux = defaultScanRoots('linux', { PATH: '/usr/bin:/usr/local/bin' }, '/home/dev');
+  assert.deepEqual(linux.keilDirs, ['/home/dev/keil', '/Applications/Keil']);
+  assert.deepEqual(linux.packRoots, ['/home/dev/keil/ARM/PACK', '/Applications/Keil/ARM/PACK']);
+  assert.deepEqual(linux.cltRoots, ['/opt/st']);
+  assert.deepEqual(linux.seggerRoots, ['/opt/SEGGER']);
+  assert.deepEqual(linux.pathDirs, ['/usr/bin', '/usr/local/bin']);
+
+  const darwin = defaultScanRoots('darwin', { PATH: '/usr/bin' }, '/Users/dev');
+  assert.deepEqual(darwin.keilDirs, ['/Users/dev/keil', '/Applications/Keil']);
+  assert.deepEqual(darwin.cltRoots, ['/opt/st']);
+  assert.deepEqual(darwin.seggerRoots, ['/opt/SEGGER']);
+});
+
+test('reports the Keil installation directory', () => {
+  const fs = createFakeFs({ 'C:/Keil_v5': ['ARM', 'UV4'] });
+
+  assert.deepEqual(scanToolchains(scanRoots({ keilDirs: ['C:/Keil_v5', 'C:/Keil'] }), fs), [
+    { kind: 'keil', label: 'Keil MDK', path: 'C:/Keil_v5' }
+  ]);
+});
+
+test('probes every STM32CubeCLT tool in the newest installation', () => {
+  const fs = createFakeFs(
+    {
+      'C:/ST': ['STM32CubeCLT_1.13.1', 'STM32CubeCLT_1.16.0']
+    },
+    [
+      'C:/ST/STM32CubeCLT_1.13.1/OpenOCD/bin/openocd.exe',
+      'C:/ST/STM32CubeCLT_1.16.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc.exe',
+      'C:/ST/STM32CubeCLT_1.16.0/OpenOCD/bin/openocd.exe',
+      'C:/ST/STM32CubeCLT_1.16.0/STLink-gdb-server/bin/ST-LINK_gdbserver.exe',
+      'C:/ST/STM32CubeCLT_1.16.0/STM32CubeProgrammer/bin/STM32_Programmer_CLI.exe'
+    ]
+  );
+
+  assert.deepEqual(scanToolchains(scanRoots({ cltRoots: ['C:/ST'] }), fs), [
+    {
+      kind: 'arm-gcc',
+      label: 'STM32CubeCLT ARM GCC',
+      path: 'C:/ST/STM32CubeCLT_1.16.0/GNU-tools-for-STM32/bin'
+    },
+    {
+      kind: 'openocd',
+      label: 'OpenOCD (STM32CubeCLT)',
+      path: 'C:/ST/STM32CubeCLT_1.16.0/OpenOCD/bin/openocd.exe'
+    },
+    {
+      kind: 'stlink-gdbserver',
+      label: 'ST-LINK GDB Server (STM32CubeCLT)',
+      path: 'C:/ST/STM32CubeCLT_1.16.0/STLink-gdb-server/bin/ST-LINK_gdbserver.exe'
+    },
+    {
+      kind: 'stm32cubeprogrammer',
+      label: 'STM32CubeProgrammer (STM32CubeCLT)',
+      path: 'C:/ST/STM32CubeCLT_1.16.0/STM32CubeProgrammer/bin/STM32_Programmer_CLI.exe'
+    }
+  ]);
+});
+
+test('keeps STM32CubeCLT tools that exist and skips the missing ones', () => {
+  const fs = createFakeFs(
+    { 'C:/ST': ['STM32CubeCLT_1.16.0'] },
+    ['C:/ST/STM32CubeCLT_1.16.0/OpenOCD/bin/openocd']
+  );
+
+  assert.deepEqual(scanToolchains(scanRoots({ cltRoots: ['C:/ST'] }), fs), [
+    {
+      kind: 'openocd',
+      label: 'OpenOCD (STM32CubeCLT)',
+      path: 'C:/ST/STM32CubeCLT_1.16.0/OpenOCD/bin/openocd'
+    }
+  ]);
+});
+
+test('uses a clt root that already is an installation directory', () => {
+  const fs = createFakeFs(
+    {},
+    ['C:/ST/STM32CubeCLT_1.15.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc']
+  );
+
+  assert.deepEqual(
+    scanToolchains(scanRoots({ cltRoots: ['C:/ST/STM32CubeCLT_1.15.0'] }), fs),
+    [
+      {
+        kind: 'arm-gcc',
+        label: 'STM32CubeCLT ARM GCC',
+        path: 'C:/ST/STM32CubeCLT_1.15.0/GNU-tools-for-STM32/bin'
+      }
+    ]
+  );
+});
+
+test('takes the newest SEGGER J-Link installation and its launcher', () => {
+  const windows = createFakeFs(
+    { 'C:/Program Files/SEGGER': ['Config', 'JLink_V788', 'JLink_V794e'] },
+    ['C:/Program Files/SEGGER/JLink_V794e/JLink.exe']
+  );
+  assert.deepEqual(
+    scanToolchains(scanRoots({ seggerRoots: ['C:/Program Files/SEGGER'] }), windows),
+    [{ kind: 'jlink', label: 'SEGGER J-Link', path: 'C:/Program Files/SEGGER/JLink_V794e/JLink.exe' }]
+  );
+
+  const posix = createFakeFs(
+    { '/opt/SEGGER': ['JLink_V794e'] },
+    ['/opt/SEGGER/JLink_V794e/JLinkExe']
+  );
+  assert.deepEqual(scanToolchains(scanRoots({ seggerRoots: ['/opt/SEGGER'] }), posix), [
+    { kind: 'jlink', label: 'SEGGER J-Link', path: '/opt/SEGGER/JLink_V794e/JLinkExe' }
+  ]);
+});
+
+test('finds the supported tools on PATH', () => {
+  const fs = createFakeFs(
+    {},
+    [
+      'C:/tools/bin/arm-none-eabi-gcc.exe',
+      'C:/tools/bin/openocd.exe',
+      'C:/tools/bin/pyocd.exe',
+      'C:/segger/JLinkExe'
+    ]
+  );
+
+  assert.deepEqual(
+    scanToolchains(scanRoots({ pathDirs: ['C:/tools/bin', 'C:/segger', 'C:/empty'] }), fs),
+    [
+      { kind: 'arm-gcc', label: 'arm-none-eabi-gcc (PATH)', path: 'C:/tools/bin' },
+      { kind: 'openocd', label: 'OpenOCD (PATH)', path: 'C:/tools/bin/openocd.exe' },
+      { kind: 'pyocd', label: 'pyOCD (PATH)', path: 'C:/tools/bin/pyocd.exe' },
+      { kind: 'jlink', label: 'SEGGER J-Link (PATH)', path: 'C:/segger/JLinkExe' }
+    ]
+  );
+});
+
+test('prefers JLink.exe over JLinkExe in a PATH directory', () => {
+  const fs = createFakeFs({}, ['C:/segger/JLink.exe', 'C:/segger/JLinkExe']);
+
+  assert.deepEqual(scanToolchains(scanRoots({ pathDirs: ['C:/segger'] }), fs), [
+    { kind: 'jlink', label: 'SEGGER J-Link (PATH)', path: 'C:/segger/JLink.exe' }
+  ]);
+});
+
+test('does not report a PATH executable twice when it sits in a scanned directory', () => {
+  const fs = createFakeFs(
+    { 'C:/Program Files/SEGGER': ['JLink_V794e'] },
+    ['C:/Program Files/SEGGER/JLink_V794e/JLink.exe']
+  );
+
+  const hits = scanToolchains(
+    scanRoots({
+      seggerRoots: ['C:/Program Files/SEGGER'],
+      pathDirs: ['C:/Program Files/SEGGER/JLink_V794e']
+    }),
+    fs
+  );
+
+  assert.deepEqual(hits, [
+    { kind: 'jlink', label: 'SEGGER J-Link', path: 'C:/Program Files/SEGGER/JLink_V794e/JLink.exe' }
+  ]);
+});
+
+test('keeps the scan order Keil, STM32CubeCLT, SEGGER, PATH', () => {
+  const fs = createFakeFs(
+    {
+      'C:/Keil_v5': ['ARM'],
+      'C:/ST': ['STM32CubeCLT_1.16.0'],
+      'C:/Program Files/SEGGER': ['JLink_V794e']
+    },
+    [
+      'C:/ST/STM32CubeCLT_1.16.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc.exe',
+      'C:/Program Files/SEGGER/JLink_V794e/JLink.exe',
+      'D:/pyocd/pyocd.exe'
+    ]
+  );
+
+  assert.deepEqual(
+    scanToolchains(
+      scanRoots({
+        keilDirs: ['C:/Keil_v5'],
+        cltRoots: ['C:/ST'],
+        seggerRoots: ['C:/Program Files/SEGGER'],
+        pathDirs: ['D:/pyocd']
+      }),
+      fs
+    ).map((hit) => hit.kind),
+    ['keil', 'arm-gcc', 'jlink', 'pyocd']
+  );
+});
+
+test('reports nothing when the machine has none of the tools', () => {
+  const fs = createFakeFs({});
+
+  assert.deepEqual(
+    scanToolchains(
+      scanRoots({
+        keilDirs: ['C:/Keil_v5'],
+        cltRoots: ['C:/ST'],
+        seggerRoots: ['C:/Program Files/SEGGER'],
+        pathDirs: ['C:/Windows']
+      }),
+      fs
+    ),
+    []
+  );
+});
+
+test('lists the packs of the Keil CMSIS layout and skips unrelated entries', () => {
+  const packRoot = 'C:/Keil_v5/ARM/PACK';
+  const fs = createFakeFs(
+    {
+      [packRoot]: ['ARM', 'Keil', 'Readme.txt'],
+      [`${packRoot}/ARM`]: ['CMSIS'],
+      [`${packRoot}/ARM/CMSIS`]: ['5.9.0'],
+      [`${packRoot}/ARM/CMSIS/5.9.0`]: ['ARM.CMSIS.5.9.0.pack'],
+      [`${packRoot}/Keil`]: ['STM32F0xx_DFP', 'STM32F7xx_DFP'],
+      [`${packRoot}/Keil/STM32F0xx_DFP`]: ['1.0.0'],
+      [`${packRoot}/Keil/STM32F0xx_DFP/1.0.0`]: ['notes.md'],
+      [`${packRoot}/Keil/STM32F7xx_DFP`]: ['2.1.0'],
+      [`${packRoot}/Keil/STM32F7xx_DFP/2.1.0`]: ['Keil.STM32F7xx_DFP.2.1.0.pack']
+    },
+    [
+      `${packRoot}/ARM/CMSIS/5.9.0/ARM.CMSIS.5.9.0.pack`,
+      `${packRoot}/Keil/STM32F7xx_DFP/2.1.0/Keil.STM32F7xx_DFP.2.1.0.pack`
+    ]
+  );
+
+  assert.deepEqual(listKeilPacks(['C:/missing', packRoot], fs), [
+    {
+      packFile: `${packRoot}/ARM/CMSIS/5.9.0/ARM.CMSIS.5.9.0.pack`,
+      vendor: 'ARM',
+      name: 'CMSIS',
+      version: '5.9.0',
+      source: 'file'
+    },
+    {
+      packFile: `${packRoot}/Keil/STM32F7xx_DFP/2.1.0/Keil.STM32F7xx_DFP.2.1.0.pack`,
+      vendor: 'Keil',
+      name: 'STM32F7xx_DFP',
+      version: '2.1.0',
+      source: 'file'
+    }
+  ]);
+});
+
+test('lists extracted pack directories and prefers them over the .pack file', () => {
+  const packRoot = 'C:/Arm/Packs';
+  const fs = createFakeFs({
+    [packRoot]: ['Sinomcu', 'Keil'],
+    [`${packRoot}/Sinomcu`]: ['MS32F0xx_DFP'],
+    [`${packRoot}/Sinomcu/MS32F0xx_DFP`]: ['1.1.1'],
+    // Keil installs packs unpacked: version directory holds the .pdsc.
+    [`${packRoot}/Sinomcu/MS32F0xx_DFP/1.1.1`]: ['Sinomcu.MS32F0xx_DFP.pdsc', 'CMSIS'],
+    [`${packRoot}/Keil`]: ['STM32F1xx_DFP'],
+    [`${packRoot}/Keil/STM32F1xx_DFP`]: ['2.4.1'],
+    [`${packRoot}/Keil/STM32F1xx_DFP/2.4.1`]: ['Keil.STM32F1xx_DFP.2.4.1.pack']
+  },
+  [
+    `${packRoot}/Sinomcu/MS32F0xx_DFP/1.1.1/Sinomcu.MS32F0xx_DFP.pdsc`,
+    `${packRoot}/Keil/STM32F1xx_DFP/2.4.1/Keil.STM32F1xx_DFP.2.4.1.pack`
+  ]);
+
+  assert.deepEqual(listKeilPacks([packRoot], fs), [
+    {
+      packFile: `${packRoot}/Keil/STM32F1xx_DFP/2.4.1/Keil.STM32F1xx_DFP.2.4.1.pack`,
+      vendor: 'Keil',
+      name: 'STM32F1xx_DFP',
+      version: '2.4.1',
+      source: 'file'
+    },
+    {
+      packFile: `${packRoot}/Sinomcu/MS32F0xx_DFP/1.1.1`,
+      vendor: 'Sinomcu',
+      name: 'MS32F0xx_DFP',
+      version: '1.1.1',
+      source: 'directory'
+    }
+  ]);
+});

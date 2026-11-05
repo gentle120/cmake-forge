@@ -8,7 +8,7 @@ import {
   listDeviceSeries,
   listDeviceVendors
 } from '../devices/deviceSelection';
-import { listFlashProbeProfiles } from '../flash/probeProfiles';
+import { listFlashProbeProfiles, type FlashProbeId } from '../flash/probeProfiles';
 import { listFlashTargetProfiles } from '../flash/targets/targetProfiles';
 import { buildLinuxToolchainChoices } from '../linux/toolchainChoices';
 import {
@@ -17,14 +17,18 @@ import {
   type LinuxToolchainFamily,
   type LinuxToolchainHit
 } from '../linux/types';
+import { getVendorMetadata, hasVendor } from '../devices/vendorRegistry';
+import { backendSupportsProbe, listFlashBackendProfiles, type FlashBackendId } from '../flash/backendProfiles';
+import { inspectArmToolchainPath, type ArmToolchainStatus } from '../env/armToolchain';
 
 export type SidebarMode = 'mcu' | 'linux' | 'native';
 
 export interface SidebarFlashSelection {
   enabled: boolean;
   targetId: string;
-  probeId: string;
+  probeId: FlashProbeId;
   openocdPath: string;
+  backend: FlashBackendId;
 }
 
 export interface SidebarSelection {
@@ -60,7 +64,9 @@ export interface SidebarBootstrapState {
   devices: SidebarOption[];
   flashTargets: SidebarOption[];
   flashProbes: SidebarOption[];
+  flashBackends: SidebarOption[];
   linuxToolchains: SidebarOption[];
+  armToolchain: ArmToolchainStatus;
   selection: SidebarSelection;
 }
 
@@ -79,11 +85,12 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function isVendor(value: unknown): value is DeviceVendor {
-  return value === 'STM' || value === 'GD';
+  return typeof value === 'string' && hasVendor(value);
 }
 
 function isSeries(value: unknown): value is DeviceSeries {
-  return value === 'F1x' || value === 'F4x' || value === 'L4x';
+  return typeof value === 'string'
+    && listDeviceProfiles().some((profile) => profile.series === value);
 }
 
 function partFor(
@@ -108,10 +115,16 @@ function validTarget(value: unknown): string {
     ?? defaultFlashTarget;
 }
 
-function validProbe(value: unknown): string {
+function validProbe(value: unknown): FlashProbeId {
   const selected = typeof value === 'string' ? value.trim().toLowerCase() : '';
   return listFlashProbeProfiles().find((probe) => probe.id === selected)?.id
     ?? defaultFlashProbe;
+}
+
+function validBackend(value: unknown): FlashBackendId {
+  const selected = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return listFlashBackendProfiles().find((backend) => backend.id === selected)?.id
+    ?? 'openocd';
 }
 
 export function defaultSidebarSelection(): SidebarSelection {
@@ -135,7 +148,8 @@ export function defaultSidebarSelection(): SidebarSelection {
       enabled: false,
       targetId: defaultFlashTarget,
       probeId: defaultFlashProbe,
-      openocdPath: 'openocd'
+      openocdPath: 'openocd',
+      backend: 'openocd'
     }
   };
 }
@@ -150,11 +164,20 @@ export function sanitizeSidebarSelection(
   const native = asRecord(record?.native);
   const flash = asRecord(record?.flash);
   const vendor = isVendor(mcu?.vendor) ? mcu.vendor : fallback.mcu.vendor;
-  const series = isSeries(mcu?.series) ? mcu.series : fallback.mcu.series;
+  // The stored series may belong to another vendor (stale state after a pack
+  // import); it is valid only when the vendor actually offers it.
+  const series = isSeries(mcu?.series) && seriesBelongsToVendor(mcu.series, vendor)
+    ? mcu.series
+    : firstSeriesForVendor(vendor);
   const family = typeof linux?.toolchainFamily === 'string'
     && isLinuxToolchainFamily(linux.toolchainFamily)
     ? linux.toolchainFamily
     : fallback.linux.toolchainFamily;
+  const backend = validBackend(flash?.backend);
+  const requestedProbe = validProbe(flash?.probeId);
+  const probeId = backendSupportsProbe(backend, requestedProbe)
+    ? requestedProbe
+    : listFlashProbeProfiles().find(probe => backendSupportsProbe(backend, probe.id))!.id;
 
   return {
     mode: record?.mode === 'mcu' || record?.mode === 'linux' || record?.mode === 'native'
@@ -188,7 +211,8 @@ export function sanitizeSidebarSelection(
         ? flash.enabled
         : false,
       targetId: validTarget(flash?.targetId),
-      probeId: validProbe(flash?.probeId),
+      probeId,
+      backend,
       openocdPath: typeof flash?.openocdPath === 'string' && flash.openocdPath.trim()
         ? flash.openocdPath.trim()
         : 'openocd'
@@ -198,6 +222,12 @@ export function sanitizeSidebarSelection(
 
 function firstSeriesForVendor(vendor: DeviceVendor): DeviceSeries {
   return listDeviceSeries(listDeviceProfiles(), vendor)[0] ?? defaultSeries;
+}
+
+function seriesBelongsToVendor(series: DeviceSeries, vendor: DeviceVendor): boolean {
+  return listDeviceProfiles().some((profile) =>
+    profile.vendor === vendor && profile.series === series
+  );
 }
 
 export function nextMcuSelection(
@@ -259,7 +289,8 @@ export function buildSidebarState(
     verified: boolean;
     binDir?: string;
     source: string;
-  }> = []
+  }> = [],
+  armToolchain: ArmToolchainStatus = inspectArmToolchainPath('')
 ): SidebarBootstrapState {
   const profiles = listDeviceProfiles();
   const hits: LinuxToolchainHit[] = discoveredToolchains.map((hit) => ({
@@ -276,7 +307,7 @@ export function buildSidebarState(
     workspaceName,
     vendors: listDeviceVendors(profiles).map((vendor) => ({
       value: vendor,
-      label: vendor === 'STM' ? 'STM32' : 'GD32'
+      label: getVendorMetadata(vendor).label
     })),
     series: mcuOptions.series,
     devices: mcuOptions.devices,
@@ -286,10 +317,15 @@ export function buildSidebarState(
       description: `${target.vendor} / ${target.series}`,
       detail: target.targetConfig
     })),
-    flashProbes: listFlashProbeProfiles().map((probe) => ({
+    flashProbes: listFlashProbeProfiles().filter(probe => backendSupportsProbe(selection.flash.backend, probe.id)).map((probe) => ({
       value: probe.id,
       label: probe.label,
       description: probe.interfaceConfig
+    })),
+    flashBackends: listFlashBackendProfiles().map((backend) => ({
+      value: backend.id,
+      label: backend.label,
+      description: backend.probes.join(', ')
     })),
     linuxToolchains: choices.map((choice) => ({
       value: choice.family,
@@ -297,6 +333,7 @@ export function buildSidebarState(
       description: choice.description,
       detail: choice.detail
     })),
+    armToolchain,
     selection
   };
 }

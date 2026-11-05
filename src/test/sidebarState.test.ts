@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { inspectArmToolchainPath } from '../env/armToolchain';
 import {
   buildSidebarState,
   defaultSidebarSelection,
@@ -27,7 +28,8 @@ test('replaces stale values with current registry defaults', () => {
   });
 
   assert.equal(selection.mode, 'linux');
-  assert.equal(selection.mcu.part, 'STM32F103C8T6');
+  assert.equal(selection.mcu.series, 'F0x');
+  assert.equal(selection.mcu.part, 'STM32F030C8T6');
   assert.equal(selection.linux.toolchainFamily, 'loongson');
   assert.equal(selection.debugEnabled, false);
   assert.equal(selection.flash.enabled, false);
@@ -51,6 +53,18 @@ test('changing series selects its first part', () => {
   assert.match(updated.mcu.part, /^STM32F4/);
 });
 
+test('a stored series from another vendor falls back to the vendor first series', () => {
+  // Stale state after a pack import: vendor switched to GD but the stored
+  // series belongs to STM32; the series must not survive the vendor change.
+  const selection = sanitizeSidebarSelection({
+    mcu: { vendor: 'GD', series: 'F1x', part: 'STM32F103C8T6' }
+  });
+
+  assert.equal(selection.mcu.vendor, 'GD');
+  assert.equal(selection.mcu.series, 'F1x');
+  assert.equal(selection.mcu.part, 'GD32F103C8T6');
+});
+
 test('bootstrap filters parts and annotates detected toolchains', () => {
   const state = buildSidebarState(
     'firmware',
@@ -61,6 +75,26 @@ test('bootstrap filters parts and annotates detected toolchains', () => {
   assert.ok(state.devices.every((device) => device.value.startsWith('STM32F1')));
   assert.ok(state.linuxToolchains.some((toolchain) => toolchain.value === 'arm'));
   assert.match(state.linuxToolchains.find((toolchain) => toolchain.value === 'arm')?.detail ?? '', /PATH/);
+});
+
+test('bootstrap exposes the effective ARM GNU toolchain independently of MCU selection', () => {
+  const toolchain = inspectArmToolchainPath('C:/ARM GNU/bin', () => true);
+  const state = buildSidebarState('firmware', defaultSidebarSelection(), [], toolchain);
+  assert.equal(state.armToolchain.binDir, 'C:/ARM GNU/bin');
+  assert.equal(state.armToolchain.state, 'ready');
+  assert.equal(buildSidebarState('firmware', defaultSidebarSelection()).armToolchain.state, 'path');
+});
+
+test('normalizes incompatible probes and only offers probes supported by the selected backend', () => {
+  for (const [backend, unsupported, expected] of [
+    ['jlink', 'stlink', 'jlink-ob'], ['pyocd', 'jlink', 'stlink']
+  ]) {
+    const selection = sanitizeSidebarSelection({ ...defaultSidebarSelection(), flash: { backend, probeId: unsupported } });
+    const state = buildSidebarState('firmware', selection);
+    assert.equal(selection.flash.probeId, expected);
+    assert.ok(state.flashProbes.some(probe => probe.value === expected));
+    assert.ok(!state.flashProbes.some(probe => probe.value === unsupported));
+  }
 });
 
 test('defaults ordinary C/C++ projects to a C11/C++17 executable', () => {

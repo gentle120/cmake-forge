@@ -1,5 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
+import { listVendorMetadata, vendorRegistryVersion } from '../devices/vendorRegistry';
 
 export interface ProjectDescription {
   sources: string[];
@@ -49,10 +50,25 @@ function toProjectPath(root: string, filePath: string): string {
   return relative(root, filePath).split(sep).join('/');
 }
 
+let definePattern: RegExp | null = null;
+let definePatternVersion = -1;
+
+function relevantDefinePattern(): RegExp {
+  if (definePattern === null || definePatternVersion !== vendorRegistryVersion()) {
+    const prefixes = [...new Set([
+      ...listVendorMetadata().flatMap((metadata) => metadata.definePrefixes),
+      'USE_HAL_DRIVER'
+    ])].sort((left, right) => right.length - left.length);
+    definePattern = new RegExp(`^(${prefixes.join('|')})`);
+    definePatternVersion = vendorRegistryVersion();
+  }
+  return definePattern;
+}
+
 function isRelevantDefine(name: string, includeGuard?: string): boolean {
   return name !== includeGuard
     && !name.endsWith('_H')
-    && /^(GD32|STM32|USE_HAL_DRIVER)/.test(name);
+    && relevantDefinePattern().test(name);
 }
 
 function findIncludeGuard(content: string): string | undefined {

@@ -1,4 +1,5 @@
 import type { DeviceProfile } from './deviceProfiles';
+import { hasVendor } from './vendorRegistry';
 
 export function validateDeviceProfile(profile: DeviceProfile): void {
   const requiredTextFields: Array<keyof DeviceProfile> = [
@@ -17,10 +18,10 @@ export function validateDeviceProfile(profile: DeviceProfile): void {
       throw new Error(`Invalid MCU profile ${profile.part}: ${String(field)} is required`);
     }
   }
-  if (!['F1x', 'F4x', 'L4x'].includes(profile.series)) {
-    throw new Error(`Invalid MCU profile ${profile.part}: series is unsupported`);
+  if (typeof profile.series !== 'string' || profile.series.trim().length === 0) {
+    throw new Error(`Invalid MCU profile ${profile.part}: series is required`);
   }
-  if (!['STM', 'GD'].includes(profile.vendor)) {
+  if (!hasVendor(profile.vendor)) {
     throw new Error(`Invalid MCU profile ${profile.part}: vendor is unsupported`);
   }
   if (profile.architecture !== 'arm') {
@@ -55,7 +56,10 @@ export function validateDeviceProfile(profile: DeviceProfile): void {
     }
     memoryNames.add(regionName);
   }
-  if (new Set(profile.interruptHandlers).size !== profile.interruptHandlers.length) {
+  // '0' marks reserved vector slots; vendor tables repeat it, so only named
+  // handlers must stay unique.
+  const namedHandlers = profile.interruptHandlers.filter((handler) => handler !== '0');
+  if (new Set(namedHandlers).size !== namedHandlers.length) {
     throw new Error(`Invalid MCU profile ${profile.part}: interruptHandlers contains duplicates`);
   }
 }

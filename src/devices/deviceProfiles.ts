@@ -3,8 +3,8 @@ export interface MemoryRegion {
   length: number;
 }
 
-export type DeviceSeries = 'F1x' | 'F4x' | 'L4x';
-export type DeviceVendor = 'STM' | 'GD';
+export type DeviceSeries = string;
+export type DeviceVendor = string;
 
 export interface AdditionalMemoryRegion {
   name: string;
@@ -40,12 +40,26 @@ import { validateDeviceProfile } from './profileValidation';
 const allProfiles = [...gd32Profiles, ...stm32Profiles];
 const profiles: Record<string, DeviceProfile> = {};
 for (const profile of allProfiles) {
+  addProfile(profile, false);
+}
+
+function addProfile(profile: DeviceProfile, replace: boolean): void {
   validateDeviceProfile(profile);
   const key = profile.part.toUpperCase();
-  if (profiles[key]) {
+  if (!replace && profiles[key]) {
     throw new Error(`Invalid MCU profile ${profile.part}: duplicate part`);
   }
   profiles[key] = profile;
+}
+
+/**
+ * Appends runtime-imported device profiles (CMSIS packs). Registering a part
+ * again replaces the previous record so pack upgrades win.
+ */
+export function registerDeviceProfiles(imported: DeviceProfile[]): void {
+  for (const profile of imported) {
+    addProfile(profile, true);
+  }
 }
 
 function copyProfile(profile: DeviceProfile): DeviceProfile {

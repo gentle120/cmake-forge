@@ -20,6 +20,7 @@
 
 - 选择结果按工作区保存，下次打开自动恢复。
 - MCU 页面可同时生成 `flash.py` 和 Cortex-Debug 配置。
+- MCU 页面提供“构建”按钮，选择 Debug 或 Release 后依次执行 CMake 配置和编译。
 - 桌面 C/C++ 页面可选择可执行文件、静态库或动态库以及语言标准。
 - 扫描工作区后可查看源文件、头文件目录和宏的数量。
 - 原有命令面板入口全部保留，可继续单独生成烧录脚本或调试配置。
@@ -33,6 +34,36 @@
 | `CMake-Embedded: Generate C/C++ Project` | 桌面 | 选择目标类型和语言标准，生成普通 CMake 工程 |
 | `CMake-Embedded: Generate OpenOCD Flash Script` | MCU | 仅生成 `flash.py` |
 | `CMake-Embedded: Generate Cortex-Debug Configuration` | MCU | 仅生成 `.vscode/launch.json` 调试配置 |
+| `CMake-Embedded: Build Project` | 全部 | 使用 Debug/Release 预设配置并编译已有 CMake 工程 |
+| `CMake-Embedded: Select ARM GNU GCC Toolchain` | MCU | 浏览并保存 ARM GNU 工具链 bin 目录 |
+
+## 配置与编译
+
+先生成工程，再点击 MCU 页面的“构建”，或运行 `CMake-Embedded: Build Project`。
+命令只在已信任的工作区执行，编译日志显示在输出面板 **CMake-Embedded Build**。
+配置失败不会继续编译；进度通知可以取消当前构建。构建操作不会执行烧录。
+
+需要安装 CMake 和 Ninja，并让它们可从 `PATH` 查找；CMake 的路径也可以通过
+`cmake.cmakePath` 设置。MCU 工程还需要 **ARM GNU Toolchain**，其中包含
+`arm-none-eabi-gcc`、`arm-none-eabi-g++`、`arm-none-eabi-objcopy` 和
+`arm-none-eabi-size`。在 MCU 页面的 **ARM GNU GCC** 区域填写 `bin` 目录，
+或点击“浏览…”选择目录；输入后按 Enter 或移出字段保存。也可用“扫描环境”发现
+EIDE、ARM GNU 独立安装、已挂载盘中的 STM32CubeCLT 和 PATH 工具链。
+设置与 `cmakeEmbedded.armToolchainPath` 同步，留空使用 PATH；已有工作区覆盖值
+会在同一作用域更新。状态只验证工具文件存在，不代表固件已编译或硬件已连接。
+
+构建子进程会使用该目录，生成的 Cortex-Debug 与 C/C++ IntelliSense 配置也使用
+同一有效路径；不会修改系统环境或在生成的 CMake 工具链文件中写入机器绝对路径。
+Keil 的 `armclang` 不能替代此 GNU 工具链。
+
+Debug 和 Release 分别输出到 `build/debug` 和 `build/release`。
+MCU 工程正常构建后生成 `.elf`、`.hex`、`.bin` 和 `.map`；只有烧录脚本或调试配置，
+没有 `CMakeLists.txt` 和 `CMakePresets.json` 时，需要先生成完整工程。
+
+Windows 下应避免过深的工程目录。若日志同时提示 `CMAKE_OBJECT_PATH_MAX` 和
+无法写入 `.su` 文件，说明 GNU 工具链输出路径超过了 Windows 路径限制；请缩短
+工程目录路径后重新配置，或改用支持长路径的工具链（例如 STM32CubeCLT）。
+重新安装同一工具链不能解决此类路径错误。
 
 ---
 

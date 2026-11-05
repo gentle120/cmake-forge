@@ -1,9 +1,18 @@
 import * as vscode from 'vscode';
+import type { BuildRunResult } from '../generation/buildRunner';
+import { armGccExecutablePath, inspectArmToolchainPath, normalizeArmToolchainPath } from '../env/armToolchain';
+import type { CommandResult } from '../shared/commandResult';
 import { randomBytes } from 'node:crypto';
 import { getDeviceProfile, listDeviceProfiles } from '../devices/deviceProfiles';
 import { listDeviceProfilesForSeries, listDeviceSeries } from '../devices/deviceSelection';
 import { getFlashProbeProfile } from '../flash/probeProfiles';
 import { getFlashTargetProfile } from '../flash/targets/targetProfiles';
+import {
+  backendSupportsProbe,
+  defaultBackendFor,
+  type FlashBackendId
+} from '../flash/backendProfiles';
+import type { FlashDeviceContext, FlashExecutablePaths } from '../generator/flashScriptGenerator';
 import {
   generateDebugWorkflow,
   generateFlashWorkflow,
@@ -31,6 +40,8 @@ export interface SidebarProviderDependencies {
   workflow: ProjectWorkflowHost;
   confirmOverwrite(files: string[]): Promise<boolean>;
   discoverToolchains(): ReturnType<typeof discoverLinuxToolchains>;
+  /** Resolves the stored CMSIS pack path for an imported part, when available. */
+  packFileForPart?(part: string): string | undefined;
 }
 
 function workspaceName(): string {
@@ -40,11 +51,13 @@ function workspaceName(): string {
 
 function normalizeResult(result: WorkflowResult): {
   ok: boolean;
+  cancelled?: boolean;
   message: string;
   files: string[];
 } {
   return {
     ok: result.ok,
+    cancelled: result.cancelled,
     message: result.message,
     files: result.files
   };
@@ -125,7 +138,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     return buildSidebarState(
       workspaceName(),
       this.selectionValue,
-      this.dependencies.discoverToolchains()
+      this.dependencies.discoverToolchains(),
+      inspectArmToolchainPath(this.armToolchainPath())
     );
   }
 
@@ -201,7 +215,47 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     return hit ?? createLinuxToolchain(family);
   }
 
+  private executablePaths(): FlashExecutablePaths {
+    const configuration = vscode.workspace.getConfiguration('cmakeEmbedded');
+    return {
+      jlink: configuration.get<string>('jlinkPath', 'JLink')?.trim() || 'JLink',
+      pyocd: configuration.get<string>('pyocdPath', 'pyocd')?.trim() || 'pyocd'
+    };
+  }
+
+  private armToolchainPath(): string {
+    return normalizeArmToolchainPath(vscode.workspace
+      .getConfiguration('cmakeEmbedded', vscode.workspace.workspaceFolders?.[0]?.uri)
+      .get<string>('armToolchainPath', ''));
+  }
+
+  private flashGenerationOptions() {
+    const selection = this.selectionValue.flash;
+    const profile = getDeviceProfile(this.selectionValue.mcu.part);
+    const probe = getFlashProbeProfile(selection.probeId);
+    const requested = selection.backend as FlashBackendId;
+    const backend: FlashBackendId = backendSupportsProbe(requested, probe.id)
+      ? requested
+      : defaultBackendFor(profile, probe.id);
+    const device: FlashDeviceContext = {
+      part: profile.part,
+      core: profile.core,
+      packFile: this.dependencies.packFileForPart?.(profile.part)
+    };
+    return {
+      target: getFlashTargetProfile(selection.targetId),
+      probe,
+      openocdPath: selection.openocdPath,
+      backend,
+      device,
+      executables: this.executablePaths()
+    };
+  }
+
   private async handleMessage(message: SidebarIncomingMessage): Promise<void> {
+    if (this.busy && message.type !== 'ready' && message.type !== 'openSettings') {
+      return;
+    }
     if (message.type === 'ready') {
       this.postState();
       if (this.selectionValue.debugEnabled) {
@@ -230,11 +284,49 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       await this.scan();
       return;
     }
+    if (message.type === 'scanEnvironment') {
+      await this.runGeneration('正在扫描本机工具链', async () => {
+        const result = await vscode.commands.executeCommand<CommandResult>('cmakeEmbedded.scanEnvironment');
+        return { kind: 'mcu', ...result, files: [] };
+      });
+      this.postState();
+      return;
+    }
+    if (message.type === 'importPack') {
+      await this.runGeneration('正在导入 Pack', async () => {
+        const result = await vscode.commands.executeCommand<CommandResult>('cmakeEmbedded.importPack');
+        return { kind: 'mcu', ...result, files: [] };
+      });
+      this.postState();
+      return;
+    }
+    if (message.type === 'setArmToolchainPath' || message.type === 'browseArmToolchain') {
+      await this.runGeneration('正在设置 ARM GNU 工具链', async () => {
+        const result = await vscode.commands.executeCommand<CommandResult>('cmakeEmbedded.selectArmToolchain',
+          message.type === 'setArmToolchainPath' ? message.path : undefined);
+        return { kind: 'mcu', ...result, files: [] };
+      });
+      this.postState();
+      return;
+    }
     if (message.type === 'openSettings') {
       await vscode.commands.executeCommand(
         'workbench.action.openSettings',
         '@ext:gentle120.cmake-embedded'
       );
+      return;
+    }
+    if (message.type === 'buildProject') {
+      await this.runGeneration('正在配置并编译', async () => {
+        const result = await vscode.commands.executeCommand<BuildRunResult | undefined>('cmakeEmbedded.buildProject');
+        return {
+          kind: 'mcu',
+          ok: result?.ok ?? false,
+          cancelled: result?.cancelled ?? !result,
+          message: result?.message ?? '构建未执行，详情见通知或输出面板。',
+          files: []
+        };
+      });
       return;
     }
     if (message.type === 'generateProject') {
@@ -283,21 +375,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         }
         const profile = getDeviceProfile(this.selectionValue.mcu.part);
         const flash = this.selectionValue.flash.enabled
-          ? {
-              target: getFlashTargetProfile(this.selectionValue.flash.targetId),
-              probe: getFlashProbeProfile(this.selectionValue.flash.probeId),
-              openocdPath: this.selectionValue.flash.openocdPath
-            }
+          ? this.flashGenerationOptions()
           : undefined;
-        const project = await generateMcuWorkflow(this.workflowHost(), profile, { flash });
-        if (!project.ok || !this.selectionValue.debugEnabled) {
+        const project = await generateMcuWorkflow(this.workflowHost(), profile, {
+          flash, compilerPath: armGccExecutablePath(this.armToolchainPath())
+        });
+        if (!project.ok || !this.selectionValue.debugEnabled || !flash) {
           return project;
         }
         const debug = await generateDebugWorkflow(
           this.workflowHost(),
-          getFlashTargetProfile(this.selectionValue.flash.targetId),
-          getFlashProbeProfile(this.selectionValue.flash.probeId),
-          this.selectionValue.flash.openocdPath
+          flash.target,
+          flash.probe,
+          flash.openocdPath,
+          this.armToolchainPath() || undefined,
+          flash.backend,
+          flash.device
         );
         return {
           ...project,
@@ -309,23 +402,31 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       return;
     }
     if (message.type === 'generateFlashScript') {
-      await this.runGeneration('正在生成 flash.py', () =>
-        generateFlashWorkflow(
+      await this.runGeneration('正在生成 flash.py', () => {
+        const flash = this.flashGenerationOptions();
+        return generateFlashWorkflow(
           this.workflowHost(),
-          getFlashTargetProfile(this.selectionValue.flash.targetId),
-          getFlashProbeProfile(this.selectionValue.flash.probeId),
-          this.selectionValue.flash.openocdPath
-        )
-      );
+          flash.target,
+          flash.probe,
+          flash.openocdPath,
+          flash.backend,
+          flash.device,
+          flash.executables
+        );
+      });
       return;
     }
     if (message.type === 'generateDebugConfiguration') {
       await this.runGeneration('正在生成调试配置', async () => {
+        const flash = this.flashGenerationOptions();
         const debug = await generateDebugWorkflow(
           this.workflowHost(),
-          getFlashTargetProfile(this.selectionValue.flash.targetId),
-          getFlashProbeProfile(this.selectionValue.flash.probeId),
-          this.selectionValue.flash.openocdPath
+          flash.target,
+          flash.probe,
+          flash.openocdPath,
+          this.armToolchainPath() || undefined,
+          flash.backend,
+          flash.device
         );
         return {
           ...debug,

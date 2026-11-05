@@ -8,10 +8,10 @@ interface CppProperties {
   [key: string]: unknown;
 }
 
-function configureEntry(entry: CppConfiguration): CppConfiguration {
+function configureEntry(entry: CppConfiguration, compilerPath: string): CppConfiguration {
   const configured = { ...entry };
   configured.name = 'ARM GCC (arm-none-eabi)';
-  configured.compilerPath = 'arm-none-eabi-gcc';
+  configured.compilerPath = compilerPath;
   configured.compileCommands = compileCommandsPath;
   configured.intelliSenseMode = 'gcc-arm';
   delete configured.configurationProvider;
@@ -30,7 +30,7 @@ function configureEntry(entry: CppConfiguration): CppConfiguration {
   return configured;
 }
 
-export function configureCppProperties(content: string | undefined): string {
+export function configureCppProperties(content: string | undefined, compilerPath = 'arm-none-eabi-gcc'): string {
   const properties: CppProperties = content
     ? JSON.parse(content) as CppProperties
     : { version: 4 };
@@ -41,13 +41,13 @@ export function configureCppProperties(content: string | undefined): string {
 
   const configurations = properties.configurations;
   if (configurations === undefined) {
-    properties.configurations = [configureEntry({ name: 'MCU' })];
+    properties.configurations = [configureEntry({ name: 'MCU' }, compilerPath)];
   } else if (Array.isArray(configurations)) {
     properties.configurations = configurations.map((configuration) => {
       if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) {
         throw new Error('C/C++ configuration entries must be JSON objects.');
       }
-      return configureEntry(configuration as CppConfiguration);
+      return configureEntry(configuration as CppConfiguration, compilerPath);
     });
   } else {
     throw new Error('C/C++ configurations must be a JSON array.');

@@ -30,7 +30,7 @@ jobs:
         run: npm test
 
       - name: Package VSIX
-        run: npx --yes @vscode/vsce package --no-dependencies --out "cmake-embedded-${GITHUB_REF_NAME#v}.vsix"
+        run: npx --yes @vscode/vsce package --out "cmake-embedded-${GITHUB_REF_NAME#v}.vsix"
 
       - name: Publish GitHub release
         env:

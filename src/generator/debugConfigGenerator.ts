@@ -1,5 +1,10 @@
 import type { FlashProbeProfile } from '../flash/probeProfiles';
 import type { FlashTargetProfile } from '../flash/targets/targetProfiles';
+import {
+  jlinkDeviceName,
+  pyocdTargetName,
+  type FlashBackendId
+} from '../flash/backendProfiles';
 
 const generatedConfigurationName = 'CMake-Embedded OpenOCD';
 
@@ -9,6 +14,8 @@ export interface CortexDebugConfigurationOptions {
   target: FlashTargetProfile;
   probe: FlashProbeProfile;
   searchDirs?: string[];
+  backend?: FlashBackendId;
+  device?: { part: string; core: string; packFile?: string };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -110,24 +117,37 @@ function parseJsonc(source: string): Record<string, unknown> {
 }
 
 function createConfiguration(options: CortexDebugConfigurationOptions): Record<string, unknown> {
+  const backend = options.backend ?? 'openocd';
   const configuration: Record<string, unknown> = {
     name: generatedConfigurationName,
     type: 'cortex-debug',
     request: 'launch',
     cwd: '${workspaceRoot}',
     executable: '${command:cmake.launchTargetPath}',
-    servertype: 'openocd',
-    configFiles: [options.probe.interfaceConfig, options.target.targetConfig],
     runToEntryPoint: 'main',
     showDevDebugOutput: 'none',
     toolchainPrefix: 'arm-none-eabi'
   };
-  const openocdPath = options.openocdPath.trim();
-  if (openocdPath && openocdPath !== 'openocd') {
-    configuration.serverpath = openocdPath;
-  }
-  if (options.target.transport !== 'swd') {
-    configuration.openOCDLaunchCommands = [`transport select ${options.target.transport}`];
+  if (backend === 'jlink') {
+    configuration.servertype = 'jlink';
+    configuration.device = jlinkDeviceName(options.device?.part, options.device?.core);
+    configuration.interface = 'swd';
+  } else if (backend === 'pyocd') {
+    configuration.servertype = 'pyocd';
+    configuration.target = pyocdTargetName(options.device?.part);
+    if (options.device?.packFile) {
+      configuration.serverArgs = ['--pack', options.device.packFile];
+    }
+  } else {
+    configuration.servertype = 'openocd';
+    configuration.configFiles = [options.probe.interfaceConfig, options.target.targetConfig];
+    const openocdPath = options.openocdPath.trim();
+    if (openocdPath && openocdPath !== 'openocd') {
+      configuration.serverpath = openocdPath;
+    }
+    if (options.target.transport !== 'swd') {
+      configuration.openOCDLaunchCommands = [`transport select ${options.target.transport}`];
+    }
   }
   if (options.armToolchainPath?.trim()) {
     configuration.armToolchainPath = options.armToolchainPath.trim();

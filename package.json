@@ -2,7 +2,7 @@
   "name": "cmake-embedded",
   "displayName": "CMake-Embedded",
   "description": "Generate ready-to-build CMake projects for desktop C/C++, MCU firmware, and Linux / SoC cross compilation.",
-  "version": "2.1.1",
+  "version": "2.1.3",
   "publisher": "gentle120",
   "repository": {
     "type": "git",
@@ -74,6 +74,22 @@
       {
         "command": "cmakeEmbedded.generateDebugConfiguration",
         "title": "CMake-Embedded: Generate Cortex-Debug Configuration"
+      },
+      {
+        "command": "cmakeEmbedded.scanEnvironment",
+        "title": "CMake-Embedded: Scan Toolchains"
+      },
+      {
+        "command": "cmakeEmbedded.importPack",
+        "title": "CMake-Embedded: Import CMSIS Pack"
+      },
+      {
+        "command": "cmakeEmbedded.buildProject",
+        "title": "CMake-Embedded: Build Project"
+      },
+      {
+        "command": "cmakeEmbedded.selectArmToolchain",
+        "title": "CMake-Embedded: Select ARM GNU GCC Toolchain"
       }
     ],
     "configuration": {
@@ -87,7 +103,18 @@
         "cmakeEmbedded.armToolchainPath": {
           "type": "string",
           "default": "",
-          "description": "Path to the ARM GNU Toolchain bin directory used by Cortex-Debug."
+          "markdownDescription": "ARM GNU **GCC toolchain bin directory** used for CMake builds and Cortex-Debug. The directory must contain `arm-none-eabi-gcc`, `arm-none-eabi-g++`, `arm-none-eabi-objcopy` and `arm-none-eabi-size`. Configure it in the MCU sidebar or use **CMake-Embedded: Select ARM GNU GCC Toolchain**. Leave empty to resolve tools on PATH.",
+          "order": 1
+        },
+        "cmakeEmbedded.jlinkPath": {
+          "type": "string",
+          "default": "JLink",
+          "description": "J-Link Commander executable (JLink / JLink.exe / JLinkExe). Absolute path or a name found on PATH."
+        },
+        "cmakeEmbedded.pyocdPath": {
+          "type": "string",
+          "default": "pyocd",
+          "description": "pyOCD executable used to flash CMSIS-Pack devices with ST-Link or DAPLink probes."
         }
       }
     }
@@ -102,5 +129,8 @@
     "@types/node": "^22.10.0",
     "@types/vscode": "^1.85.0",
     "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.11.2"
   }
 }

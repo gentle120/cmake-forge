@@ -41,6 +41,8 @@ import {
   writeGeneratedFiles,
   type GeneratedFile
 } from '../shared/generatedFiles';
+import type { FlashBackendId } from '../flash/backendProfiles';
+import type { FlashDeviceContext, FlashExecutablePaths } from '../generator/flashScriptGenerator';
 
 export interface ProjectWorkflowHost {
   workspaceRoot(): string | undefined;
@@ -58,10 +60,14 @@ export interface WorkflowResult {
 }
 
 export interface McuWorkflowOptions {
+  compilerPath?: string;
   flash?: {
     target: FlashTargetProfile;
     probe: FlashProbeProfile;
     openocdPath: string;
+    backend?: FlashBackendId;
+    device?: FlashDeviceContext;
+    executables?: FlashExecutablePaths;
   };
 }
 
@@ -130,7 +136,15 @@ function createMcuFiles(
   if (flash) {
     files.push({
       path: join(root, 'flash.py'),
-      content: generateFlashScript(projectName, flash.target, flash.probe, flash.openocdPath)
+      content: generateFlashScript(
+        projectName,
+        flash.target,
+        flash.probe,
+        flash.openocdPath,
+        flash.backend ?? 'openocd',
+        flash.device,
+        flash.executables
+      )
     });
   }
   return files;
@@ -232,7 +246,7 @@ export async function generateMcuWorkflow(
     : undefined;
   const cppPropertiesFile: GeneratedFile = {
     path: cppPropertiesPath,
-    content: configureCppProperties(cppPropertiesContent)
+    content: configureCppProperties(cppPropertiesContent, options.compilerPath)
   };
   await writeGeneratedFiles([...generatedFiles, configFile, cppPropertiesFile]);
   await host.updateSettings(getWorkspaceSettings());
@@ -457,7 +471,10 @@ export async function generateFlashWorkflow(
   host: ProjectWorkflowHost,
   target: FlashTargetProfile,
   probe: FlashProbeProfile,
-  openocdPath: string
+  openocdPath: string,
+  backend: FlashBackendId = 'openocd',
+  device?: FlashDeviceContext,
+  executables: FlashExecutablePaths = {}
 ): Promise<WorkflowResult> {
   const root = host.workspaceRoot();
   if (!root) {
@@ -481,14 +498,24 @@ export async function generateFlashWorkflow(
   }
   await writeFile(
     flashPath,
-    generateFlashScript(projectNameFromRoot(root), target, probe, openocdPath),
+    generateFlashScript(
+      projectNameFromRoot(root),
+      target,
+      probe,
+      openocdPath,
+      backend,
+      device,
+      executables
+    ),
     'utf8'
   );
   return {
     kind: 'flash',
     ok: true,
     files: ['flash.py'],
-    message: `已生成 ${target.label} 的 OpenOCD 烧录脚本。`
+    message: backend === 'openocd'
+      ? `已生成 ${target.label} 的 OpenOCD 烧录脚本。`
+      : `已生成 ${device?.part ?? target.label} 的 ${backend} 烧录脚本。`
   };
 }
 
@@ -515,7 +542,9 @@ export async function generateDebugWorkflow(
   target: FlashTargetProfile,
   probe: FlashProbeProfile,
   openocdPath: string,
-  armToolchainPath?: string
+  armToolchainPath?: string,
+  backend: FlashBackendId = 'openocd',
+  device?: FlashDeviceContext
 ): Promise<WorkflowResult> {
   const root = host.workspaceRoot();
   if (!root) {
@@ -535,7 +564,9 @@ export async function generateDebugWorkflow(
     armToolchainPath,
     target,
     probe,
-    searchDirs: await findOpenOcdSearchDirs(openocdPath)
+    backend,
+    device,
+    searchDirs: backend === 'openocd' ? await findOpenOcdSearchDirs(openocdPath) : []
   });
   await mkdir(join(root, '.vscode'), { recursive: true });
   await writeFile(launchPath, content, 'utf8');
@@ -543,6 +574,8 @@ export async function generateDebugWorkflow(
     kind: 'debug',
     ok: true,
     files: ['.vscode/launch.json'],
-    message: `已生成 ${target.label} 和 ${probe.label} 的 Cortex-Debug 配置。`
+    message: backend === 'openocd'
+      ? `已生成 ${target.label} 和 ${probe.label} 的 Cortex-Debug 配置。`
+      : `已生成 ${device?.part ?? target.label} 的 Cortex-Debug（${backend}）配置。`
   };
 }

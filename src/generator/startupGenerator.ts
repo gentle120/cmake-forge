@@ -1,34 +1,79 @@
 import type { DeviceProfile } from '../devices/deviceProfiles';
 
-const coreHandlers = [
+// ARMv6-M (M0/M0+): words 4-10 are reserved and there is no DebugMonitor.
+const armv6mCoreVectors = [
+  'NMI_Handler',
+  'HardFault_Handler',
+  '0',
+  '0',
+  '0',
+  '0',
+  '0',
+  '0',
+  '0',
+  'SVC_Handler',
+  '0',
+  '0',
+  'PendSV_Handler',
+  'SysTick_Handler'
+];
+
+// ARMv7-M (M3/M4/M7): four reserved words between UsageFault and SVC.
+const armv7mCoreVectors = [
   'NMI_Handler',
   'HardFault_Handler',
   'MemManage_Handler',
   'BusFault_Handler',
   'UsageFault_Handler',
+  '0',
+  '0',
+  '0',
+  '0',
   'SVC_Handler',
   'DebugMon_Handler',
+  '0',
   'PendSV_Handler',
   'SysTick_Handler'
 ];
 
+// ARMv8-M mainline (M33/M55): SecureFault replaces the first reserved word.
+const armv8mCoreVectors = [
+  'NMI_Handler',
+  'HardFault_Handler',
+  'MemManage_Handler',
+  'BusFault_Handler',
+  'UsageFault_Handler',
+  'SecureFault_Handler',
+  '0',
+  '0',
+  '0',
+  'SVC_Handler',
+  'DebugMon_Handler',
+  '0',
+  'PendSV_Handler',
+  'SysTick_Handler'
+];
+
+function coreVectorsFor(core: string): string[] {
+  if (core === 'cortex-m0' || core === 'cortex-m0plus') {
+    return armv6mCoreVectors;
+  }
+  if (core === 'cortex-m33' || core === 'cortex-m55') {
+    return armv8mCoreVectors;
+  }
+  return armv7mCoreVectors;
+}
+
 export function generateGnuStartup(profile: DeviceProfile): string {
+  const coreVectors = coreVectorsFor(profile.core);
   const vectors = [
     '_estack',
     'Reset_Handler',
-    ...coreHandlers.slice(0, 1),
-    ...coreHandlers.slice(1, 5),
-    '0',
-    '0',
-    '0',
-    '0',
-    ...coreHandlers.slice(5, 7),
-    '0',
-    ...coreHandlers.slice(7),
+    ...coreVectors,
     ...profile.interruptHandlers
   ];
   const vectorLines = vectors.map((handler) => `  .word ${handler}`).join('\n');
-  const aliases = [...coreHandlers, ...profile.interruptHandlers]
+  const aliases = [...coreVectors, ...profile.interruptHandlers]
     .filter((handler) => handler !== '0')
     .map((handler) => `.weak ${handler}\n.thumb_set ${handler}, Default_Handler`)
     .join('\n');

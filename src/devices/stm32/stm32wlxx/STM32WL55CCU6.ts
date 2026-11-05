@@ -1,0 +1,3 @@
+import { createStm32WlProfile } from './wlFactory';
+
+export const STM32WL55CCU6 = createStm32WlProfile('STM32WL55CCU6', 'STM32WL55CCU6.ld', { flashLength: 256 * 1024 });

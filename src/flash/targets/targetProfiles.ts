@@ -1,8 +1,9 @@
 import { stm32FlashTargets } from './stm32';
 import { gd32FlashTargets } from './gd32';
 import type { DeviceProfile } from '../../devices/deviceProfiles';
+import { getVendorMetadata } from '../../devices/vendorRegistry';
 
-export type FlashTargetVendor = 'STM32' | 'GD32';
+export type FlashTargetVendor = string;
 export type FlashTargetTransport = 'swd' | 'jtag';
 
 export interface FlashTargetProfile {
@@ -54,10 +55,9 @@ export function getFlashTargetProfileForDevice(profile: Pick<DeviceProfile, 'ven
   }
 
   const targetConfig = `target/${profile.debugTarget}.cfg`;
-  const target = allFlashTargets.find((candidate) =>
-    candidate.vendor === (profile.vendor === 'GD' ? 'GD32' : 'STM32')
-    && candidate.targetConfig === targetConfig
-  );
+  const matches = allFlashTargets.filter((candidate) => candidate.targetConfig === targetConfig);
+  const vendorLabel = getVendorMetadata(profile.vendor).label;
+  const target = matches.find((candidate) => candidate.vendor === vendorLabel) ?? matches[0];
   if (!target) {
     throw new Error(`Unsupported OpenOCD target mapping: ${profile.vendor}/${profile.debugTarget}`);
   }
