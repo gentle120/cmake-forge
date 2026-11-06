@@ -78,7 +78,13 @@ export function renderSidebarHtml(
     </section>
     <section class="workspace-card" aria-label="当前工作区">
       <span class="ui-icon" data-icon="folder" aria-hidden="true"></span>
-      <span id="workspace-name" class="workspace-name">正在读取工作区</span>
+      <div class="workspace-picker">
+        <label for="project-root">目标工程</label>
+        <select id="project-root" aria-label="目标工程">
+          <option value="">正在发现工程</option>
+        </select>
+        <small id="workspace-name" class="workspace-name">正在读取工作区</small>
+      </div>
     </section>
 
     <section id="mcu-panel" class="configuration-panel" aria-label="MCU 配置" hidden>

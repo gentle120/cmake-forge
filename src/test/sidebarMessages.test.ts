@@ -27,6 +27,15 @@ test('keeps the selection payload for provider-side sanitization', () => {
   });
 });
 
+test('accepts the selected project root and rejects non-string values', () => {
+  assert.deepEqual(parseIncomingMessage({ type: 'setProjectRoot', root: 'C:/work/app' }), {
+    type: 'setProjectRoot',
+    root: 'C:/work/app'
+  });
+  assert.equal(parseIncomingMessage({ type: 'setProjectRoot' }), undefined);
+  assert.equal(parseIncomingMessage({ type: 'setProjectRoot', root: 42 }), undefined);
+});
+
 test('accepts only string toolchain paths and allows clearing the configured directory', () => {
   assert.deepEqual(parseIncomingMessage({ type: 'setArmToolchainPath', path: 'C:/Arm/bin' }), {
     type: 'setArmToolchainPath', path: 'C:/Arm/bin'

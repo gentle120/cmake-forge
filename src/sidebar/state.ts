@@ -33,6 +33,7 @@ export interface SidebarFlashSelection {
 
 export interface SidebarSelection {
   mode: SidebarMode;
+  projectRoot: string;
   mcu: {
     vendor: DeviceVendor;
     series: DeviceSeries;
@@ -59,6 +60,9 @@ export interface SidebarOption {
 
 export interface SidebarBootstrapState {
   workspaceName: string;
+  projects: SidebarOption[];
+  projectRoot: string;
+  discoveringProjects: boolean;
   vendors: SidebarOption[];
   series: SidebarOption[];
   devices: SidebarOption[];
@@ -130,6 +134,7 @@ function validBackend(value: unknown): FlashBackendId {
 export function defaultSidebarSelection(): SidebarSelection {
   return {
     mode: defaultMode,
+    projectRoot: '',
     mcu: {
       vendor: defaultVendor,
       series: defaultSeries,
@@ -183,6 +188,9 @@ export function sanitizeSidebarSelection(
     mode: record?.mode === 'mcu' || record?.mode === 'linux' || record?.mode === 'native'
       ? record.mode
       : fallback.mode,
+    projectRoot: typeof record?.projectRoot === 'string'
+      ? record.projectRoot
+      : fallback.projectRoot,
     mcu: {
       vendor,
       series,
@@ -290,7 +298,10 @@ export function buildSidebarState(
     binDir?: string;
     source: string;
   }> = [],
-  armToolchain: ArmToolchainStatus = inspectArmToolchainPath('')
+  armToolchain: ArmToolchainStatus = inspectArmToolchainPath(''),
+  projects: SidebarOption[] = [],
+  projectRoot = '',
+  discoveringProjects = false
 ): SidebarBootstrapState {
   const profiles = listDeviceProfiles();
   const hits: LinuxToolchainHit[] = discoveredToolchains.map((hit) => ({
@@ -304,7 +315,10 @@ export function buildSidebarState(
   const mcuOptions = optionsForSelection(selection);
 
   return {
-    workspaceName,
+    workspaceName: selectedProjectLabel(workspaceName, projects, projectRoot),
+    projects,
+    projectRoot,
+    discoveringProjects,
     vendors: listDeviceVendors(profiles).map((vendor) => ({
       value: vendor,
       label: getVendorMetadata(vendor).label
@@ -336,4 +350,12 @@ export function buildSidebarState(
     armToolchain,
     selection
   };
+}
+
+function selectedProjectLabel(
+  workspaceName: string,
+  projects: SidebarOption[],
+  projectRoot: string
+): string {
+  return projects.find((project) => project.value === projectRoot)?.label || workspaceName;
 }

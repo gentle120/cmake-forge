@@ -34,6 +34,9 @@ interface SidebarSelection {
 
 interface SidebarState {
   workspaceName: string;
+  projects: Array<{ value: string; label: string; description?: string }>;
+  projectRoot: string;
+  discoveringProjects: boolean;
   vendors: Array<{ value: string; label: string }>;
   series: Array<{ value: string; label: string }>;
   devices: Array<{ value: string; label: string; description?: string; detail?: string }>;
@@ -48,6 +51,9 @@ interface SidebarState {
 function baseState(overrides: Partial<SidebarState> = {}): SidebarState {
   return {
     workspaceName: 'demo',
+    projects: [{ value: '', label: 'demo' }],
+    projectRoot: '',
+    discoveringProjects: false,
     vendors: [{ value: 'STM', label: 'ST' }],
     series: [{ value: 'F1x', label: 'STM32F1' }],
     devices: [{ value: 'STM32F103C8T6', label: 'STM32F103C8T6', description: 'STM32F1', detail: '64 KB Flash' }],
@@ -141,6 +147,27 @@ test('sidebar renderer wires every supported command', () => {
   }
   assert.doesNotMatch(scriptSource, /https?:\/\//);
   assert.doesNotMatch(scriptSource, /innerHTML/);
+});
+
+test('project selection sends the selected project root without starting a command', () => {
+  const harness = startSidebar(baseState({
+    projects: [
+      { value: 'firmware', label: 'demo/firmware' },
+      { value: 'desktop', label: 'demo/desktop' }
+    ],
+    projectRoot: 'firmware'
+  }));
+  const select = harness.element('project-root');
+
+  assert.equal(select.value, 'firmware');
+  assert.equal(harness.element('workspace-name').textContent, 'demo/firmware');
+  select.value = 'desktop';
+  select.dispatch('change');
+
+  assert.deepEqual(harness.posted.at(-1), {
+    type: 'setProjectRoot',
+    root: 'desktop'
+  });
 });
 
 test('every command button is unique and its command is dispatched by the renderer', () => {

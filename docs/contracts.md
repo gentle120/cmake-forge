@@ -16,6 +16,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - `registerDeviceProfiles()` 允许运行时追加档案；`unregisterDeviceProfilesByPack()` 按来源移除并恢复前一个来源或内置档案；`listDeviceProfiles()/getDeviceProfile()` 签名稳定，返回防御性拷贝。
 - 厂商必须先在 `vendorRegistry` 注册（id 唯一，`getVendorMetadata` 未知 id 抛错）。
 - 命令 ID：`cmakeEmbedded.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/scanEnvironment/importPack/removePack/buildProject/selectArmToolchain`。
+- 工作区可包含多个工程；扫描、生成、烧录、调试与构建都以当前选中的工程根目录为边界，不跨工程合并源文件。目标工程按工作区持久化；发现结果只有一个时自动选择，多个时保留有效选择或等待用户选择。
 - `buildProject` 使用已有 `debug` 或 `release` CMake 预设；配置失败或取消后不得开始编译步骤。构建日志包含 stdout、stderr 和最终不带换行的输出。
 - `cmakeEmbedded.armToolchainPath` 为 ARM GNU bin 目录，由侧栏、构建与生成的 Cortex-Debug/IntelliSense 配置共享；侧栏保存和浏览只接受含 GCC、G++、objcopy、size 的目录，GCC 可执行文件输入归一化为 bin 目录，留空使用 PATH。
 - 工具链设置写入已有的最具体作用域（workspace folder、workspace、global）；显式构建仅叠加子进程 PATH，不修改系统环境或在工程工具链文件中写入机器绝对路径。

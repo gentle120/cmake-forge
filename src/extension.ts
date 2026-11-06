@@ -55,6 +55,7 @@ import { selectLinuxToolchain } from './linux/selection';
 import { linuxConfigFileName } from './linux/types';
 import { describeNativeProject } from './native/projectStructure';
 import { scanProject, ScanCancelledError, type ProjectDescription } from './scanner/projectScanner';
+import { discoverWorkspaceProjects } from './scanner/workspaceProjects';
 import { SidebarProvider } from './sidebar/provider';
 import type { CommandResult } from './shared/commandResult';
 import {
@@ -99,9 +100,9 @@ async function updateWorkspaceSettings(settings: Record<string, string | boolean
   }
 }
 
-function createWorkflowHost(): ProjectWorkflowHost {
+function createWorkflowHost(fixedRoot?: string): ProjectWorkflowHost {
   return {
-    workspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+    workspaceRoot: () => fixedRoot ?? activeSidebar?.selection().projectRoot ?? undefined,
     scanWorkspace,
     confirmOverwrite: async (files) => {
       const action = await vscode.window.showWarningMessage(
@@ -174,6 +175,38 @@ async function selectDeviceProfile(): Promise<ReturnType<typeof getDeviceProfile
     { placeHolder: `选择 MCU 型号（${seriesSelection.label}）` }
   );
   return deviceSelection ? getDeviceProfile(deviceSelection.label) : undefined;
+}
+
+async function selectWorkspaceProject(): Promise<string | undefined> {
+  const roots = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
+  if (roots.length === 0) {
+    return undefined;
+  }
+  const selected = activeSidebar?.selection().projectRoot;
+  const projects = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: '正在发现工作区工程…' },
+    () => discoverWorkspaceProjects(roots)
+  );
+  if (projects.length === 0) {
+    vscode.window.showWarningMessage('工作区中没有发现可生成的工程。');
+    return undefined;
+  }
+  if (selected && projects.some((project) => project.root === selected)) {
+    return selected;
+  }
+  if (projects.length === 1) {
+    return projects[0].root;
+  }
+  const picked = await vscode.window.showQuickPick(
+    projects.map((project) => ({
+      label: project.label,
+      description: project.relativePath || '.',
+      detail: project.markers.join(', '),
+      root: project.root
+    })),
+    { placeHolder: '选择要生成 CMake 工程的目标工程' }
+  );
+  return picked?.root;
 }
 
 async function selectFlashProbe(): Promise<FlashProbeProfile | undefined> {
@@ -559,7 +592,7 @@ async function ensureCortexDebugInstalled(): Promise<boolean> {
 }
 
 async function generateDebugConfigurationOnly(): Promise<void> {
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const root = await selectWorkspaceProject();
   if (!root) {
     vscode.window.showErrorMessage('请先打开一个 MCU 工程目录。');
     return;
@@ -580,7 +613,7 @@ async function generateDebugConfigurationOnly(): Promise<void> {
     return;
   }
   reportWorkflowResult(await generateDebugWorkflow(
-    createWorkflowHost(),
+    createWorkflowHost(root),
     target,
     probe,
     getOpenOcdPath(),
@@ -590,7 +623,7 @@ async function generateDebugConfigurationOnly(): Promise<void> {
 }
 
 async function generateFlashScriptOnly(): Promise<void> {
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const root = await selectWorkspaceProject();
   if (!root) {
     vscode.window.showErrorMessage('请先打开一个 MCU 工程目录。');
     return;
@@ -608,7 +641,7 @@ async function generateFlashScriptOnly(): Promise<void> {
     return;
   }
   reportWorkflowResult(await generateFlashWorkflow(
-    createWorkflowHost(),
+    createWorkflowHost(root),
     target,
     probe,
     getOpenOcdPath(),
@@ -619,6 +652,10 @@ async function generateFlashScriptOnly(): Promise<void> {
 }
 
 async function generateProject(): Promise<void> {
+  const root = await selectWorkspaceProject();
+  if (!root) {
+    return;
+  }
   const profile = await selectDeviceProfile();
   if (!profile) {
     return;
@@ -657,14 +694,14 @@ async function generateProject(): Promise<void> {
     };
   }
   reportWorkflowResult(await generateMcuWorkflow(
-    createWorkflowHost(),
+    createWorkflowHost(root),
     profile,
     { flash, compilerPath: armGccExecutablePath(getArmToolchainPath() ?? '') }
   ));
 }
 
 async function generateLinuxProject(): Promise<void> {
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const root = await selectWorkspaceProject();
   if (!root) {
     vscode.window.showErrorMessage('请先打开一个工程目录。');
     return;
@@ -674,11 +711,11 @@ async function generateLinuxProject(): Promise<void> {
   if (!toolchain) {
     return;
   }
-  reportWorkflowResult(await generateLinuxWorkflow(createWorkflowHost(), toolchain));
+  reportWorkflowResult(await generateLinuxWorkflow(createWorkflowHost(root), toolchain));
 }
 
 async function generateNativeProject(): Promise<void> {
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const root = await selectWorkspaceProject();
   if (!root) {
     vscode.window.showErrorMessage('请先打开一个 C/C++ 工程目录。');
     return;
@@ -722,12 +759,12 @@ async function generateNativeProject(): Promise<void> {
       cxxStandard: standardSelection.cxxStandard
     }
   );
-  reportWorkflowResult(await generateNativeWorkflow(createWorkflowHost(), structure));
+  reportWorkflowResult(await generateNativeWorkflow(createWorkflowHost(root), structure));
 }
 
 export function activate(context: vscode.ExtensionContext): void {
   registerArmToolchainSettings(context);
-  registerBuildProject(context);
+  registerBuildProject(context, () => activeSidebar?.selection().projectRoot || undefined);
   const host = createWorkflowHost();
   packStorageRoot = context.globalStorageUri.fsPath;
   const sidebarProvider = new SidebarProvider(context, {
@@ -741,6 +778,7 @@ export function activate(context: vscode.ExtensionContext): void {
       return action === '覆盖';
     },
     discoverToolchains: () => discoverLinuxToolchains(),
+    discoverProjects: (roots) => discoverWorkspaceProjects(roots),
     packFileForPart: (part) => packFileByPart.get(part)
   });
   activeSidebar = sidebarProvider;

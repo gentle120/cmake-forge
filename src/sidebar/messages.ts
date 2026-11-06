@@ -1,6 +1,7 @@
 export type SidebarIncomingMessage =
   | { type: 'ready' }
   | { type: 'saveSelection'; selection: unknown }
+  | { type: 'setProjectRoot'; root: string }
   | { type: 'scanWorkspace' }
   | { type: 'scanEnvironment' }
   | { type: 'importPack' }
@@ -59,6 +60,11 @@ export function parseIncomingMessage(value: unknown): SidebarIncomingMessage | u
   if (record.type === 'setArmToolchainPath') {
     return typeof record.path === 'string'
       ? { type: 'setArmToolchainPath', path: record.path }
+      : undefined;
+  }
+  if (record.type === 'setProjectRoot') {
+    return typeof record.root === 'string'
+      ? { type: 'setProjectRoot', root: record.root }
       : undefined;
   }
   if (!commandTypes.has(record.type)) {

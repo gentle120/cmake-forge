@@ -14,7 +14,8 @@ This file is a compact relay ledger, not a history log. Stable facts belong in `
 
 ## Next Batch
 
-- None scheduled.
+- Objective: Pack 持久化原子化、在线索引缓存与请求限流。
+- Status: `ready`
 
 ## Maintenance Rules
 

@@ -49,9 +49,11 @@ test('registered build command drives real CMake through the VS Code output/prog
       }
     };
     const adapterPath = join(__dirname, '..', 'integration', 'buildProject.js');
-    const adapter = loadHostModule<{ registerBuildProject(context: object): void }>(adapterPath, vscode);
+    const adapter = loadHostModule<{
+      registerBuildProject(context: object, workspaceRoot: () => string | undefined): void;
+    }>(adapterPath, vscode);
     const context = { subscriptions: [] as Array<{ dispose(): void }> };
-    adapter.registerBuildProject(context);
+    adapter.registerBuildProject(context, () => root);
     assert.equal(context.subscriptions.length, 3);
     assert.ok(commands.has('cmakeEmbedded.buildProject'));
     await commands.get('cmakeEmbedded.buildProject')!();
@@ -62,4 +64,52 @@ test('registered build command drives real CMake through the VS Code output/prog
     await access(join(root, 'build', 'debug', 'built.txt'));
     context.subscriptions.forEach(disposable => disposable.dispose());
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('registered build command uses the project root supplied by the caller', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ce selected build '));
+  const other = await mkdtemp(join(tmpdir(), 'ce other workspace '));
+  try {
+    await writeFile(join(root, 'CMakeLists.txt'), 'cmake_minimum_required(VERSION 3.22)\nproject(selected NONE)\n');
+    await writeFile(join(root, 'CMakePresets.json'), JSON.stringify({
+      version: 3,
+      configurePresets: [{ name: 'debug', generator: 'Ninja', binaryDir: '${sourceDir}/build/debug' }],
+      buildPresets: [{ name: 'debug', configurePreset: 'debug' }]
+    }));
+    await writeFile(join(other, 'marker.txt'), 'other');
+    const lines: string[] = [];
+    const commands = new Map<string, () => Promise<void>>();
+    const vscode = {
+      ProgressLocation: { Notification: 15 },
+      workspace: {
+        isTrusted: true, workspaceFolders: [{ uri: { fsPath: other } }],
+        getConfiguration: () => ({ get: (_key: string, fallback: string) => fallback })
+      },
+      commands: { registerCommand: (id: string, callback: () => Promise<void>) => {
+        commands.set(id, callback); return { dispose() {} };
+      } },
+      window: {
+        createOutputChannel: () => ({
+          appendLine: (line: string) => lines.push(line), show() {}, dispose() {}
+        }),
+        showQuickPick: async () => ({ value: 'debug' }),
+        showErrorMessage: () => {},
+        showInformationMessage: () => {},
+        withProgress: async (_options: unknown, run: (progress: object, token: object) => Promise<unknown>) =>
+          run({}, { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) })
+      }
+    };
+    const adapterPath = join(__dirname, '..', 'integration', 'buildProject.js');
+    const adapter = loadHostModule<{
+      registerBuildProject(context: object, workspaceRoot: () => string | undefined): void;
+    }>(adapterPath, vscode);
+    const context = { subscriptions: [] as Array<{ dispose(): void }> };
+    adapter.registerBuildProject(context, () => root);
+    await commands.get('cmakeEmbedded.buildProject')!();
+    assert.ok(lines.some((line) => line.includes(`=== debug: ${root} ===`)));
+    context.subscriptions.forEach(disposable => disposable.dispose());
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(other, { recursive: true, force: true });
+  }
 });

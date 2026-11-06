@@ -30,6 +30,11 @@ import { discoverLinuxToolchains } from '../linux/discovery';
 import { createLinuxToolchain } from '../linux/toolchainGenerator';
 import { describeNativeProject } from '../native/projectStructure';
 import { scanProject } from '../scanner/projectScanner';
+import {
+  discoverWorkspaceProjects,
+  reconcileProjectRoot,
+  type WorkspaceProject
+} from '../scanner/workspaceProjects';
 import { renderSidebarHtml } from './html';
 import { parseIncomingMessage, type SidebarIncomingMessage } from './messages';
 import {
@@ -44,6 +49,7 @@ export interface SidebarProviderDependencies {
   workflow: ProjectWorkflowHost;
   confirmOverwrite(files: string[]): Promise<boolean>;
   discoverToolchains(): ReturnType<typeof discoverLinuxToolchains>;
+  discoverProjects(roots: string[]): Promise<WorkspaceProject[]>;
   /** Resolves the stored CMSIS pack path for an imported part, when available. */
   packFileForPart?(part: string): string | undefined;
 }
@@ -74,6 +80,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private disposed = false;
   private busy = false;
   private selectionValue: SidebarSelection;
+  private discoveredProjects: WorkspaceProject[] = [];
+  private discoveringProjects = true;
   private readonly viewDisposables: vscode.Disposable[] = [];
 
   constructor(
@@ -143,7 +151,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       workspaceName(),
       this.selectionValue,
       this.dependencies.discoverToolchains(),
-      inspectArmToolchainPath(this.armToolchainPath())
+      inspectArmToolchainPath(this.armToolchainPath()),
+      this.discoveredProjects.map((project) => ({
+        value: project.root,
+        label: project.label,
+        description: project.relativePath || '.',
+        detail: project.markers.join(', ')
+      })),
+      this.selectionValue.projectRoot,
+      this.discoveringProjects
     );
   }
 
@@ -179,6 +195,35 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     this.postState();
   }
 
+  private async discoverProjects(): Promise<void> {
+    const roots = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
+    this.discoveringProjects = true;
+    this.postState();
+    try {
+      this.discoveredProjects = roots.length > 0
+        ? await this.dependencies.discoverProjects(roots)
+        : [];
+      const projectRoot = reconcileProjectRoot(
+        this.discoveredProjects,
+        this.selectionValue.projectRoot
+      );
+      if (projectRoot !== this.selectionValue.projectRoot) {
+        this.selectionValue = sanitizeSidebarSelection({
+          ...this.selectionValue,
+          projectRoot
+        });
+        await this.context.workspaceState.update(selectionKey, this.selectionValue);
+      }
+    } finally {
+      this.discoveringProjects = false;
+      this.postState();
+    }
+  }
+
+  private projectRoot(): string | undefined {
+    return this.selectionValue.projectRoot || undefined;
+  }
+
   private async confirmOverwrite(files: string[]): Promise<boolean> {
     return this.dependencies.confirmOverwrite(files);
   }
@@ -186,6 +231,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private workflowHost(): ProjectWorkflowHost {
     return {
       ...this.dependencies.workflow,
+      workspaceRoot: () => this.projectRoot(),
       confirmOverwrite: (files) => this.confirmOverwrite(files)
     };
   }
@@ -263,6 +309,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       return;
     }
     if (message.type === 'ready') {
+      void this.discoverProjects();
       this.postState();
       if (this.selectionValue.debugEnabled) {
         this.post({
@@ -284,6 +331,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           message: `无法保存侧栏选择：${text}`
         });
       }
+      return;
+    }
+    if (message.type === 'setProjectRoot') {
+      if (!this.discoveredProjects.some((project) => project.root === message.root)) {
+        return;
+      }
+      this.selectionValue = sanitizeSidebarSelection({
+        ...this.selectionValue,
+        projectRoot: message.root
+      });
+      await this.context.workspaceState.update(selectionKey, this.selectionValue);
+      this.postState();
       return;
     }
     if (message.type === 'scanWorkspace') {
@@ -443,12 +502,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   }
 
   private async scan(): Promise<void> {
-    const root = this.dependencies.workflow.workspaceRoot();
+    const root = this.projectRoot();
     if (!root) {
       this.post({
         type: 'notification',
-        level: 'warning',
-        message: '请先打开一个工程目录。'
+        level: 'info',
+        message: this.discoveringProjects
+          ? '正在发现工程，请稍候。'
+          : '请先选择目标工程。'
       });
       return;
     }

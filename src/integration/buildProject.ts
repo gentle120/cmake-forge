@@ -3,11 +3,14 @@ import { createBuildProjectCommand } from '../generation/buildWorkflow';
 import { getArmToolchainPath } from './toolchainSettings';
 
 /** Registers the explicit CMake build command and owns its output/cancellation lifetime. */
-export function registerBuildProject(context: vscode.ExtensionContext): void {
+export function registerBuildProject(
+  context: vscode.ExtensionContext,
+  workspaceRoot: () => string | undefined
+): void {
   const output = vscode.window.createOutputChannel('CMake-Embedded Build');
   let controller: AbortController | undefined;
   const command = createBuildProjectCommand({
-    workspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+    workspaceRoot,
     isTrusted: () => vscode.workspace.isTrusted,
     choosePreset: async () => {
       const picked = await vscode.window.showQuickPick([

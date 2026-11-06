@@ -10,11 +10,12 @@ test('sidebar locks generation while building and forwards the actual failure re
   const finished = Promise.withResolvers<void>();
   const gate = Promise.withResolvers<{ ok: boolean; message: string }>();
   const messages: Array<{ type: string; result?: { ok: boolean; message: string } }> = [];
+  const stateWrites: unknown[] = [];
   let scanCalls = 0;
   let commandCalls = 0;
   const vscode = {
     workspace: {
-      workspaceFolders: [],
+      workspaceFolders: [{ uri: { fsPath: 'C:/workspace' } }],
       getConfiguration: () => ({ get: (_key: string, fallback: string) => fallback })
     },
     commands: { executeCommand: (id: string) => {
@@ -32,10 +33,20 @@ test('sidebar locks generation while building and forwards the actual failure re
   load((name: string) => name === 'vscode' ? vscode : req(name), moduleObject, moduleObject.exports);
   const uri = { path: '/extension', with(change: object) { return { ...this, ...change }; } };
   const provider = new moduleObject.exports.SidebarProvider({
-    workspaceState: { get: () => undefined, update: async () => {} }, extensionUri: uri
+    workspaceState: {
+      get: () => undefined,
+      update: async (_key: string, value: unknown) => { stateWrites.push(value); }
+    },
+    extensionUri: uri
   }, {
     workflow: { workspaceRoot: () => '.', scanWorkspace: async () => { scanCalls++; return undefined; } },
-    confirmOverwrite: async () => true, discoverToolchains: () => []
+    confirmOverwrite: async () => true, discoverToolchains: () => [],
+    discoverProjects: async () => [{
+      root: 'C:/workspace/app',
+      relativePath: 'app',
+      label: 'workspace/app',
+      markers: ['cmake' as const]
+    }]
   });
   let receive: ((value: object) => void) | undefined;
   provider.resolveWebviewView({
@@ -51,6 +62,7 @@ test('sidebar locks generation while building and forwards the actual failure re
     onDidDispose: () => ({ dispose() {} })
   });
   try {
+    await new Promise((resolve) => setTimeout(resolve, 50));
     receive!({ type: 'buildProject' }); await started.promise;
     assert.ok(messages.some(message => message.type === 'operationStarted'));
     receive!({ type: 'generateProject' });

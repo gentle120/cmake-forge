@@ -32,6 +32,8 @@ test('renders a CSP-safe sidebar shell with local assets', () => {
   assert.match(html, /id="mode-mcu"/);
   assert.match(html, /id="mode-linux"/);
   assert.match(html, /id="mode-native"/);
+  assert.match(html, /id="project-root"/);
+  assert.match(html, /aria-label="目标工程"/);
   assert.match(html, /id="generate-project"/);
   assert.match(html, /id="generation-status"/);
   assert.doesNotMatch(html, /https?:\/\//);

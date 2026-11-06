@@ -155,6 +155,25 @@ input:disabled {
   white-space: nowrap;
 }
 
+.workspace-picker {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3px;
+  min-width: 0;
+}
+
+.workspace-picker label {
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--ce-meta);
+  line-height: 1.3;
+}
+
+.workspace-picker select {
+  width: 100%;
+  min-width: 0;
+}
+
 .status-badge {
   display: inline-flex;
   flex: 0 1 auto;

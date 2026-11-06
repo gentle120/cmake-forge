@@ -133,3 +133,34 @@ test('accepts native mode and rejects unsupported native options', () => {
   assert.equal(invalid.native.cStandard, 11);
   assert.equal(invalid.native.cxxStandard, 17);
 });
+
+test('keeps the selected project root in persisted sidebar state', () => {
+  const selection = sanitizeSidebarSelection({
+    ...defaultSidebarSelection(),
+    projectRoot: 'C:/workspace/firmware'
+  });
+  assert.equal(selection.projectRoot, 'C:/workspace/firmware');
+  assert.equal(
+    sanitizeSidebarSelection({ ...defaultSidebarSelection(), projectRoot: 42 }).projectRoot,
+    ''
+  );
+});
+
+test('uses the selected project label and exposes project discovery state', () => {
+  const state = buildSidebarState(
+    'workspace',
+    defaultSidebarSelection(),
+    [],
+    inspectArmToolchainPath(''),
+    [
+      { value: 'C:/work/firmware', label: 'work/firmware' },
+      { value: 'C:/work/desktop', label: 'work/desktop' }
+    ],
+    'C:/work/desktop',
+    true
+  );
+  assert.equal(state.workspaceName, 'work/desktop');
+  assert.equal(state.projectRoot, 'C:/work/desktop');
+  assert.equal(state.discoveringProjects, true);
+  assert.deepEqual(state.projects.map((project) => project.label), ['work/firmware', 'work/desktop']);
+});

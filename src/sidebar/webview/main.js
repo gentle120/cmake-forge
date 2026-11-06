@@ -9,6 +9,7 @@
 
   const app = document.getElementById('app');
   const workspaceName = document.getElementById('workspace-name');
+  const projectRootSelect = document.getElementById('project-root');
   const statusBadge = document.getElementById('generation-status');
   const statusTextNode = statusBadge.querySelector('.status-text');
   const actionsEl = document.getElementById('actions');
@@ -431,8 +432,13 @@
 
   function render() {
     if (!state) return;
-    workspaceName.textContent = state.workspaceName || '当前工作区';
-    workspaceName.title = state.workspaceName || '';
+    applyOptions(projectRootSelect, state.projects, state.projectRoot);
+    projectRootSelect.disabled = busy || state.discoveringProjects;
+    const selectedProject = selectedOption(state.projects, state.projectRoot);
+    workspaceName.textContent = state.discoveringProjects
+      ? '正在发现工程…'
+      : (selectedProject?.label || state.workspaceName || '当前工作区');
+    workspaceName.title = selectedProject?.label || state.workspaceName || '';
     const mode = state.selection.mode;
     const isMcu = mode === 'mcu';
     modeMcu.setAttribute('aria-pressed', String(isMcu));
@@ -461,7 +467,7 @@
   function applyDisabled() {
     controls().forEach((control) => {
       if (control.dataset.alwaysEnabled === 'true') return;
-      control.disabled = busy;
+      control.disabled = busy || (control === projectRootSelect && Boolean(state?.discoveringProjects));
     });
   }
 
@@ -649,6 +655,11 @@
       ...state.selection,
       flash: { ...state.selection.flash, enabled: toggleFlash.checked }
     });
+  });
+
+  projectRootSelect.addEventListener('change', () => {
+    if (!state || busy || !projectRootSelect.value) return;
+    post({ type: 'setProjectRoot', root: projectRootSelect.value });
   });
 
   toggleDebug.addEventListener('change', () => {
