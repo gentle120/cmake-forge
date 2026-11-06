@@ -20,7 +20,13 @@ import {
   type ImportPackResult
 } from './devices/importedProfiles';
 import { defaultScanRoots, listKeilPacks, scanToolchains, type ToolchainHit } from './env/toolchainScanner';
-import { downloadPack, searchPacks, type FetchLike } from './packs/packIndex';
+import {
+  downloadPack,
+  searchPacks,
+  type FetchLike,
+  type PackSearchCacheEntry,
+  type VendorCacheEntry
+} from './packs/packIndex';
 import { existsSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import * as os from 'node:os';
@@ -281,6 +287,8 @@ function getOpenOcdPath(): string {
 let packStorageRoot = '';
 let activeSidebar: SidebarProvider | undefined;
 const packFileByPart = new Map<string, string>();
+const packSearchCache = new Map<string, PackSearchCacheEntry>();
+const packVendorCache = new Map<string, VendorCacheEntry>();
 
 async function syncPackFileIndex(): Promise<void> {
   packFileByPart.clear();
@@ -445,8 +453,21 @@ async function pickOnlinePack(): Promise<{ buffer: Buffer; fileName: string } | 
     return undefined;
   }
   const results = await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `正在搜索 keil.com Pack 索引「${keyword.trim()}」…` },
-    () => searchPacks(fetchWithTimeout, keyword)
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `正在搜索 keil.com Pack 索引「${keyword.trim()}」…`,
+      cancellable: true
+    },
+    (_progress, token) => {
+      const controller = new AbortController();
+      const cancellation = token.onCancellationRequested(() => controller.abort());
+      return searchPacks(fetchWithTimeout, keyword, {
+        cache: packSearchCache,
+        vendorCache: packVendorCache,
+        concurrency: 4,
+        signal: controller.signal
+      }).finally(() => cancellation.dispose());
+    }
   );
   if (results.length === 0) {
     vscode.window.showInformationMessage(`keil.com 在线索引中没有匹配「${keyword}」的 Pack。`);

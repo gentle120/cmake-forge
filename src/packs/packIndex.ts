@@ -13,6 +13,29 @@ export interface PackIndexPack {
   vendorName: string;
 }
 
+export interface PackSearchOptions {
+  /** Reuses parsed vendor pack indexes between searches. */
+  cache?: Map<string, PackSearchCacheEntry>;
+  /** Optional cache for the vendor index itself. */
+  vendorCache?: Map<string, VendorCacheEntry>;
+  /** Limits simultaneous vendor index requests. */
+  concurrency?: number;
+  signal?: AbortSignal;
+  /** Cache freshness in milliseconds. */
+  ttlMs?: number;
+  now?: () => number;
+}
+
+export interface PackSearchCacheEntry {
+  packs: PackIndexPack[];
+  expiresAt: number;
+}
+
+export interface VendorCacheEntry {
+  vendors: PackIndexEntry[];
+  expiresAt: number;
+}
+
 /**
  * Minimal subset of the DOM fetch Response consumed here. The extension host
  * wraps its own fetch with an AbortController timeout; this module never
@@ -87,10 +110,50 @@ export async function listPacksForVendor(fetcher: FetchLike, entry: PackIndexEnt
 }
 
 /** Case-insensitive substring search over vendor name, pack name, and description. */
-export async function searchPacks(fetcher: FetchLike, keyword: string): Promise<PackIndexPack[]> {
+export async function searchPacks(
+  fetcher: FetchLike,
+  keyword: string,
+  options: PackSearchOptions = {}
+): Promise<PackIndexPack[]> {
+  if (options.signal?.aborted) {
+    throw new Error('Pack search cancelled.');
+  }
   const needle = keyword.trim().toLowerCase();
-  const vendors = await listPackVendors(fetcher);
-  const results = await Promise.allSettled(vendors.map((entry) => listPacksForVendor(fetcher, entry)));
+  const cache = options.cache ?? new Map<string, PackSearchCacheEntry>();
+  const vendorCache = options.vendorCache ?? new Map<string, VendorCacheEntry>();
+  const now = options.now ?? Date.now;
+  const ttlMs = options.ttlMs ?? 5 * 60 * 1000;
+  const vendorCacheKey = '\0vendors';
+  const cachedVendors = vendorCache.get(vendorCacheKey);
+  const vendors = cachedVendors && cachedVendors.expiresAt > now()
+    ? cachedVendors.vendors
+    : await listPackVendors(fetcher);
+  if (!cachedVendors || cachedVendors.expiresAt <= now()) {
+    vendorCache.set(vendorCacheKey, {
+      vendors,
+      expiresAt: now() + ttlMs
+    });
+  }
+  const concurrency = Math.max(1, Math.floor(options.concurrency ?? 6));
+  const results: PromiseSettledResult<PackIndexPack[]>[] = new Array(vendors.length);
+  for (let index = 0; index < vendors.length; index += concurrency) {
+    if (options.signal?.aborted) {
+      throw new Error('Pack search cancelled.');
+    }
+    const batch = vendors.slice(index, index + concurrency);
+    const settled = await Promise.allSettled(batch.map(async (entry) => {
+      const cached = cache.get(entry.pdscUrl);
+      if (cached && cached.expiresAt > now()) {
+        return cached.packs;
+      }
+      const packs = await listPacksForVendor(fetcher, entry);
+      cache.set(entry.pdscUrl, { packs, expiresAt: now() + ttlMs });
+      return packs;
+    }));
+    settled.forEach((result, offset) => {
+      results[index + offset] = result;
+    });
+  }
   const matches: PackIndexPack[] = [];
   for (const result of results) {
     if (result.status !== 'fulfilled') {
@@ -107,7 +170,32 @@ export async function searchPacks(fetcher: FetchLike, keyword: string): Promise<
       }
     }
   }
-  return matches;
+  const latest = new Map<string, PackIndexPack>();
+  for (const pack of matches) {
+    const key = `${pack.vendorName}\0${pack.name}`;
+    const existing = latest.get(key);
+    if (!existing || compareVersions(pack.version, existing.version) > 0) {
+      latest.set(key, pack);
+    }
+  }
+  return [...latest.values()].sort((left, right) => (
+    left.vendorName.localeCompare(right.vendorName)
+    || left.name.localeCompare(right.name)
+    || compareVersions(left.version, right.version)
+  ));
+}
+
+function compareVersions(left: string, right: string): number {
+  const a = left.split(/[._-]/).map((part) => Number(part) || 0);
+  const b = right.split(/[._-]/).map((part) => Number(part) || 0);
+  const length = Math.max(a.length, b.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = (a[index] ?? 0) - (b[index] ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return 0;
 }
 
 export async function downloadPack(fetcher: FetchLike, packUrl: string): Promise<Buffer> {

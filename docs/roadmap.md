@@ -14,7 +14,7 @@ This file is a compact relay ledger, not a history log. Stable facts belong in `
 
 ## Next Batch
 
-- Objective: Pack 持久化原子化、在线索引缓存与请求限流。
+- Objective: 校正导入 MCU 的 FPU 编译参数与 J-Link/pyOCD 调试目标元数据，并增加大 Pack 注册表缓存验证。
 - Status: `ready`
 
 ## Maintenance Rules

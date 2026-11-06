@@ -164,3 +164,68 @@ test('downloadPack returns the raw pack bytes and rejects on non-2xx', async () 
 
   await assert.rejects(downloadPack(fetcher, 'https://packs.example.com/missing.pack'), /HTTP 404/);
 });
+
+test('reuses cached vendor indexes across searches and deduplicates newer pack versions', async () => {
+  const stubs = indexStubs();
+  stubs['https://packs.example.com/MS32.pdidx'] = {
+    ok: true,
+    status: 200,
+    textBody: ms32PdidxXml.replace(
+      '</package>',
+      '</package><package name="MS32F0xx_DFP" version="1.3.0"><url>https://packs.example.com/MS32/MS32F0xx_DFP.1.3.0.pack</url></package>'
+    )
+  };
+  const { fetcher } = createFetcher(stubs);
+  let vendorIndexRequests = 0;
+  const counted: FetchLike = async (url) => {
+    if (url.endsWith('.pdidx')) {
+      vendorIndexRequests += 1;
+    }
+    return fetcher(url);
+  };
+  const options = { cache: new Map(), vendorCache: new Map(), now: () => 1000 };
+
+  assert.equal((await searchPacks(counted, 'ms32', options)).length, 2);
+  const requestsAfterFirstSearch = vendorIndexRequests;
+  const second = await searchPacks(counted, 'ms32', options);
+
+  assert.equal(vendorIndexRequests > requestsAfterFirstSearch, true);
+  assert.deepEqual(second.map((pack) => pack.version).sort(), ['0.9.1', '1.3.0']);
+});
+
+test('limits concurrent vendor index requests', async () => {
+  let active = 0;
+  let peak = 0;
+  const fetcher: FetchLike = async (url) => {
+    if (url.endsWith('keil.pidx')) {
+      return { ok: true, status: 200, text: async () => packIndexXml, arrayBuffer: async () => new ArrayBuffer(0) };
+    }
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    active -= 1;
+    return { ok: true, status: 200, text: async () => ms32PdidxXml, arrayBuffer: async () => new ArrayBuffer(0) };
+  };
+
+  await searchPacks(fetcher, 'ms32', { concurrency: 2, cache: new Map() });
+  assert.ok(peak <= 2, `peak concurrency was ${peak}`);
+});
+
+test('stops starting vendor requests after cancellation', async () => {
+  const controller = new AbortController();
+  let requests = 0;
+  const fetcher: FetchLike = async (url) => {
+    if (url.endsWith('keil.pidx')) {
+      return { ok: true, status: 200, text: async () => packIndexXml, arrayBuffer: async () => new ArrayBuffer(0) };
+    }
+    requests += 1;
+    controller.abort();
+    return { ok: true, status: 200, text: async () => ms32PdidxXml, arrayBuffer: async () => new ArrayBuffer(0) };
+  };
+
+  await assert.rejects(
+    () => searchPacks(fetcher, 'ms32', { signal: controller.signal, concurrency: 1, cache: new Map() }),
+    /cancelled/
+  );
+  assert.equal(requests, 1);
+});

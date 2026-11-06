@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { parsePack, parsePackEntries, type PackDeviceCandidate } from '../packs/packParser';
 import { findAdjacentPackArchive, readDirectoryEntries } from '../packs/packFs';
@@ -47,23 +47,26 @@ interface PackStoreFile {
 const EMPTY_STORE: PackStoreFile = { version: 2, packs: [], vendors: [], profiles: [] };
 const SOURCE_ARCHIVE = 'archive' as const;
 const SOURCE_DIRECTORY = 'directory' as const;
+const storeQueues = new Map<string, Promise<unknown>>();
 
 export async function importPack(
   buffer: Buffer,
   fileName: string,
   storageRoot: string
 ): Promise<ImportPackResult> {
-  const { vendorName, devices } = parsePack(buffer);
-  return importParsedPack(
-    devices,
-    vendorName,
-    basename(fileName),
-    storageRoot,
-    SOURCE_ARCHIVE,
-    async (packDir, packFile) => {
-      await writeFile(join(packDir, packFile), buffer);
-    }
-  );
+  return queueStoreWrite(storageRoot, async () => {
+    const { vendorName, devices } = parsePack(buffer);
+    return importParsedPack(
+      devices,
+      vendorName,
+      basename(fileName),
+      storageRoot,
+      SOURCE_ARCHIVE,
+      async (packDir, packFile) => {
+        await writeFile(join(packDir, packFile), buffer);
+      }
+    );
+  });
 }
 
 /**
@@ -75,12 +78,28 @@ export async function importPackDirectory(
   pdscPath: string,
   storageRoot: string
 ): Promise<ImportPackResult> {
-  const entries = await readDirectoryEntries(root);
-  const { vendorName, devices } = parsePackEntries(entries);
-  const fileName = basename(pdscPath).replace(/\.pdsc$/i, '.pack');
-  return importParsedPack(devices, vendorName, fileName, storageRoot, SOURCE_DIRECTORY, async () => {
-    // Directory packs stay where the pack manager put them.
-  }, await findAdjacentPackArchive(root));
+  return queueStoreWrite(storageRoot, async () => {
+    const entries = await readDirectoryEntries(root);
+    const { vendorName, devices } = parsePackEntries(entries);
+    const fileName = basename(pdscPath).replace(/\.pdsc$/i, '.pack');
+    return importParsedPack(devices, vendorName, fileName, storageRoot, SOURCE_DIRECTORY, async () => {
+      // Directory packs stay where the pack manager put them.
+    }, await findAdjacentPackArchive(root));
+  });
+}
+
+function queueStoreWrite<T>(storageRoot: string, operation: () => Promise<T>): Promise<T> {
+  const key = resolve(storageRoot);
+  const previous = storeQueues.get(key) ?? Promise.resolve();
+  const current = previous
+    .catch(() => undefined)
+    .then(operation);
+  storeQueues.set(key, current);
+  return current.finally(() => {
+    if (storeQueues.get(key) === current) {
+      storeQueues.delete(key);
+    }
+  });
 }
 
 function runtimeArchivePath(storageRoot: string, packFilePath: string): string {
@@ -251,22 +270,24 @@ export async function listImportedPacks(storageRoot: string): Promise<ImportedPa
 }
 
 export async function removePack(storageRoot: string, packFile: string): Promise<void> {
-  const normalized = packFile.replace(/\\/g, '/');
-  const store = await readStore(storageRoot);
-  const pack = store.packs.find((record) => record.packFile === normalized);
-  if (!pack) {
-    return;
-  }
-  store.packs = store.packs.filter((record) => record.packFile !== normalized);
-  store.profiles = store.profiles.filter((stored) => stored.packFile !== normalized);
-  await writeStore(storageRoot, store);
-  unregisterDeviceProfilesByPack(normalized);
-  if (sourceOf(pack) === SOURCE_ARCHIVE) {
-    const packPath = normalizedPackPath(normalized, storageRoot, pack.archiveFile);
-    if (resolve(packPath).startsWith(resolve(storageRoot) + sep)) {
-      await rm(packPath, { force: true });
+  return queueStoreWrite(storageRoot, async () => {
+    const normalized = packFile.replace(/\\/g, '/');
+    const store = await readStore(storageRoot);
+    const pack = store.packs.find((record) => record.packFile === normalized);
+    if (!pack) {
+      return;
     }
-  }
+    store.packs = store.packs.filter((record) => record.packFile !== normalized);
+    store.profiles = store.profiles.filter((stored) => stored.packFile !== normalized);
+    await writeStore(storageRoot, store);
+    unregisterDeviceProfilesByPack(normalized);
+    if (sourceOf(pack) === SOURCE_ARCHIVE) {
+      const packPath = normalizedPackPath(normalized, storageRoot, pack.archiveFile);
+      if (resolve(packPath).startsWith(resolve(storageRoot) + sep)) {
+        await rm(packPath, { force: true });
+      }
+    }
+  });
 }
 
 function packDeviceToProfile(device: PackDeviceCandidate, vendorId: string, vendorName: string): DeviceProfile {
@@ -356,9 +377,24 @@ async function ensureVendor(
 }
 
 async function readStore(storageRoot: string): Promise<PackStoreFile> {
+  const storePath = join(storageRoot, 'packs.json');
+  let raw: string;
   try {
-    const raw = await readFile(join(storageRoot, 'packs.json'), 'utf8');
-    const parsed = JSON.parse(raw) as Partial<PackStoreFile>;
+    raw = await readFile(storePath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { ...EMPTY_STORE, packs: [], vendors: [], profiles: [] };
+    }
+    throw error;
+  }
+
+  let parsed: Partial<PackStoreFile>;
+  try {
+    parsed = JSON.parse(raw) as Partial<PackStoreFile>;
+  } catch {
+    throw new Error(`Invalid packs.json: expected valid JSON at ${storePath}`);
+  }
+  {
     const selectedPacks: ImportedPackRecord[] = [];
     for (const record of Array.isArray(parsed.packs) ? parsed.packs : []) {
       let source = sourceOf(record);
@@ -384,13 +420,32 @@ async function readStore(storageRoot: string): Promise<PackStoreFile> {
       vendors: Array.isArray(parsed.vendors) ? parsed.vendors : [],
       profiles: Array.isArray(parsed.profiles) ? parsed.profiles : []
     };
-  } catch {
-    return { ...EMPTY_STORE, packs: [], vendors: [], profiles: [] };
   }
 }
 
 async function writeStore(storageRoot: string, store: PackStoreFile): Promise<void> {
-  await writeFile(join(storageRoot, 'packs.json'), `${JSON.stringify(store, null, 2)}\n`, 'utf8');
+  const target = join(storageRoot, 'packs.json');
+  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+  const content = `${JSON.stringify(store, null, 2)}\n`;
+  await writeFile(temporary, content, 'utf8');
+  try {
+    JSON.parse(await readFile(temporary, 'utf8'));
+    try {
+      await rename(temporary, target);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // POSIX replaces atomically; Windows reports EEXIST/EPERM and needs no target left behind.
+      if (code === 'EEXIST' || code === 'EPERM') {
+        await rm(target, { force: true });
+      } else {
+        throw error;
+      }
+      await rename(temporary, target);
+    }
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
 }
 
 function sanitizeIdentifier(value: string): string {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -334,5 +334,55 @@ test('imports an extracted pack directory in place with the vendor display name'
     }
     await rm(root, { recursive: true, force: true });
     await rm(packRoot, { recursive: true, force: true });
+  }
+});
+
+test('serializes concurrent pack imports so neither record is lost', async () => {
+  const fixture = await readFile(fixturePath);
+  await withStorageRoot(async (root) => {
+    await Promise.all([
+      importPack(fixture, 'first.pack', root),
+      importPack(fixture, 'second.pack', root)
+    ]);
+
+    assert.deepEqual(
+      (await listImportedPacks(root)).map((pack) => pack.packFile).sort(),
+      ['packs/MS_Semi/first.pack', 'packs/MS_Semi/second.pack']
+    );
+  });
+});
+
+test('replaces pack metadata atomically without leaving temporary files', async () => {
+  const fixture = await readFile(fixturePath);
+  await withStorageRoot(async (root) => {
+    await importPack(fixture, 'atomic.pack', root);
+    const before = await readFile(join(root, 'packs.json'), 'utf8');
+
+    await importPack(fixture, 'atomic.pack', root);
+
+    const after = await readFile(join(root, 'packs.json'), 'utf8');
+    assert.notEqual(after, before);
+    assert.deepEqual(
+      (await listImportedPacks(root)).map((pack) => pack.packFile),
+      ['packs/MS_Semi/atomic.pack']
+    );
+    assert.equal(
+      (await readdir(root)).some((name) => name.endsWith('.tmp')),
+      false
+    );
+  });
+});
+
+test('does not silently discard a corrupt pack store', async () => {
+  const fixture = await readFile(fixturePath);
+  const root = await mkdtemp(join(tmpdir(), 'cmake-embedded-corrupt-pack-'));
+  try {
+    const corrupt = '{"packs":[';
+    await writeFile(join(root, 'packs.json'), corrupt, 'utf8');
+
+    await assert.rejects(() => importPack(fixture, 'valid.pack', root), /packs\.json.*valid JSON/i);
+    assert.equal(await readFile(join(root, 'packs.json'), 'utf8'), corrupt);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
