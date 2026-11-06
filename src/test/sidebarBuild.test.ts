@@ -158,6 +158,135 @@ test('sidebar cancels project discovery before the busy guard and ends discovery
   }
 });
 
+test('cancelling overlapping scans aborts the source scan before project discovery', async () => {
+  const root = 'C:/workspace';
+  const selection = {
+    mode: 'mcu',
+    projectRoot: root,
+    mcu: { vendor: 'STM', series: 'F1x', part: 'STM32F103C8T6' },
+    linux: { toolchainFamily: 'loongson' },
+    native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
+    debugEnabled: false,
+    flash: {
+      enabled: false,
+      targetId: 'stm32f1xx',
+      probeId: 'stlink',
+      openocdPath: 'openocd',
+      backend: 'openocd'
+    }
+  };
+  const messages: Array<{
+    type: string;
+    message?: string;
+    result?: { ok: boolean; cancelled?: boolean; message: string; files: string[] };
+    state?: { discoveringProjects: boolean };
+  }> = [];
+  const discoveryStarted = Promise.withResolvers<void>();
+  const scanStarted = Promise.withResolvers<void>();
+  const scanAborted = Promise.withResolvers<void>();
+  const discoveryAborted = Promise.withResolvers<void>();
+  const scanFinished = Promise.withResolvers<void>();
+  const vscode = {
+    workspace: {
+      workspaceFolders: [{ name: 'workspace', uri: { fsPath: root } }],
+      getConfiguration: () => ({ get: (_key: string, fallback: unknown) => fallback })
+    },
+    commands: { executeCommand: async () => undefined }
+  };
+  const api = loadHostModule<{ SidebarProvider: new (context: object, dependencies: object) => {
+    resolveWebviewView(view: object): void;
+    dispose(): void;
+  } }>(join(__dirname, '..', 'sidebar', 'provider.js'), vscode);
+  const provider = new api.SidebarProvider({
+    workspaceState: {
+      get: () => selection,
+      update: async () => {}
+    },
+    extensionUri: { path: '/extension', with(change: object) { return { ...this, ...change }; } }
+  }, {
+    workflow: {},
+    confirmOverwrite: async () => true,
+    discoverToolchains: () => [],
+    discoverProjects: (_roots: string[], options?: { signal?: AbortSignal }) => {
+      const signal = options?.signal;
+      if (!signal) throw new Error('missing discovery signal');
+      discoveryStarted.resolve();
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          discoveryAborted.resolve();
+          reject(new WorkspaceProjectsCancelledError());
+        }, { once: true });
+      });
+    },
+    scanProject: (_root: string, options?: { signal?: AbortSignal }) => {
+      const signal = options?.signal;
+      if (!signal) throw new Error('missing scan signal');
+      scanStarted.resolve();
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          scanAborted.resolve();
+          reject(new ScanCancelledError());
+        }, { once: true });
+      });
+    }
+  });
+  let receive: ((value: object) => void) | undefined;
+  provider.resolveWebviewView({
+    webview: {
+      cspSource: 'test',
+      asWebviewUri: () => 'test',
+      postMessage: (message: typeof messages[number]) => {
+        messages.push(message);
+        if (message.type === 'operationFinished') scanFinished.resolve();
+        return Promise.resolve(true);
+      },
+      onDidReceiveMessage: (listener: typeof receive) => {
+        receive = listener;
+        return { dispose() {} };
+      }
+    },
+    onDidDispose: () => ({ dispose() {} })
+  });
+  try {
+    receive!({ type: 'ready' });
+    await discoveryStarted.promise;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    receive!({ type: 'scanWorkspace' });
+    await scanStarted.promise;
+
+    receive!({ type: 'cancelWorkspaceScan' });
+    await Promise.race([
+      scanAborted.promise,
+      new Promise((_resolve, reject) => setTimeout(
+        () => reject(new Error('source scan was not aborted')),
+        100
+      ))
+    ]);
+    await scanFinished.promise;
+    const result = [...messages].reverse()
+      .find((message) => message.type === 'operationFinished')?.result;
+    assert.equal(result?.cancelled, true);
+    assert.equal(result?.message, '已取消扫描工作区。');
+    assert.equal(
+      [...messages].reverse().find((message) => message.type === 'state')?.state?.discoveringProjects,
+      true
+    );
+
+    receive!({ type: 'cancelWorkspaceScan' });
+    await discoveryAborted.promise;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(messages.some((message) => (
+      message.type === 'notification' && message.message === '已取消发现工作区工程。'
+    )));
+    assert.equal(
+      [...messages].reverse().find((message) => message.type === 'state')?.state?.discoveringProjects,
+      false
+    );
+  } finally {
+    provider.dispose();
+  }
+});
+
 test('sidebar cancels a running source scan and reports a neutral cancellation', async () => {
   const root = 'C:/workspace';
   const selection = {

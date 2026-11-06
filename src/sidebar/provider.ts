@@ -600,10 +600,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   }
 
   private cancelWorkspaceScan(): void {
-    if (this.projectDiscoveryController) {
-      this.projectDiscoveryController.abort();
+    if (this.workspaceScanController) {
+      this.workspaceScanController.abort();
       return;
     }
-    this.workspaceScanController?.abort();
+    if (this.projectDiscoveryController) {
+      this.projectDiscoveryController.abort();
+    }
   }
 }
