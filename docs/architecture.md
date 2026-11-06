@@ -15,7 +15,7 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 | Component | Responsibility | May depend on | Must not own |
 | --- | --- | --- | --- |
 | `src/devices/` | 芯片档案注册表（DeviceProfile）、厂商元数据、校验、Pack 导入持久化 | vendorRegistry、generator 契约 | UI、烧录细节 |
-| `src/packs/` | zip 读取、PDSC/SVD 解析、已安装 Pack 身份解析、在线索引 | 无 vscode 依赖 | 档案注册（交给 devices） |
+| `src/packs/` | zip 读取、PDSC/SVD 解析、已安装 Pack 身份解析、厂商选项装配、在线索引 | 无 vscode 依赖 | 档案注册（交给 devices） |
 | `src/env/` | Keil Pack 目录发现、独立工具链扫描算法（Pack/兼容测试使用） | node fs（注入式） | 设置写入、身份解析（交给 packs） |
 | `src/generator/` | 纯函数字符串生成器（CMake/toolchain/linker/startup/flash/debug） | DeviceProfile、Flash*Profile 契约 | 文件系统、UI |
 | `src/generation/` | 生成工作流编排 | generator、scanner、integration、shared | 芯片数据、烧录执行、编译执行 |

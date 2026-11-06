@@ -53,11 +53,54 @@ test('resolves an extracted Pack identity from its PDSC, not the Keil folder nam
     assert.deepEqual(await resolveInstalledPackIdentity(entry), {
       packFile: versionDirectory.replace(/\\/g, '/'),
       source: 'directory',
-      vendorId: 'Sinomcu_985',
+      vendorId: 'Sinomcu',
       vendorName: 'Sinomcu',
       name: 'MS32F0xx_DFP',
-      version: '1.1.1'
+      version: '1.1.1',
+      hasDevices: false
     });
+  });
+});
+
+test('merges suffixed Dvendor variants and reports importable devices', async () => {
+  await withTempDirectory(async (root) => {
+    const versionDirectory = join(root, 'ARM', 'Cortex_DFP', '1.1.0');
+    await mkdir(join(versionDirectory, 'SVD'), { recursive: true });
+    await writeFile(
+      join(versionDirectory, 'ARM.Cortex_DFP.pdsc'),
+      `<?xml version="1.0" encoding="utf-8"?>
+<package><vendor>Arm</vendor><name>Cortex_DFP</name><release version="1.1.0"/>
+<devices><family Dvendor="ARM:82" Dfamily="Cortex M0">
+  <device Dname="ARMCM0">
+    <processor Dcore="Cortex-M0"/>
+    <memory id="ROM" start="0x00000000" size="0x40000"/>
+    <memory id="RAM" start="0x20000000" size="0x20000"/>
+  </device>
+</family></devices></package>`,
+      'utf8'
+    );
+    await writeFile(
+      join(versionDirectory, 'SVD', 'ARMCM0.svd'),
+      `<?xml version="1.0" encoding="utf-8"?>
+<device><peripherals><peripheral>
+  <name>NVIC</name>
+  <interrupt><name>WWDG</name><value>0</value></interrupt>
+</peripheral></peripherals></device>`,
+      'utf8'
+    );
+    const entry: KeilPackEntry = {
+      packFile: versionDirectory.replace(/\\/g, '/'),
+      vendor: 'ARM',
+      name: 'Cortex_DFP',
+      version: '1.1.0',
+      source: 'directory'
+    };
+
+    // 'ARM:82' and a plain 'ARM' PDSC must resolve to one vendor identity.
+    const identity = await resolveInstalledPackIdentity(entry);
+    assert.equal(identity?.vendorId, 'ARM');
+    assert.equal(identity?.vendorName, 'ARM');
+    assert.equal(identity?.hasDevices, true);
   });
 });
 
@@ -83,7 +126,8 @@ test('resolves an installed archive identity from its PDSC instead of the archiv
       vendorId: 'STMicroelectronics',
       vendorName: 'STMicroelectronics',
       name: 'STM32F1xx_DFP',
-      version: '2.4.1'
+      version: '2.4.1',
+      hasDevices: false
     });
   });
 });

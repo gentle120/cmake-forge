@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
-import { parsePack } from '../packs/packParser';
+import { hasImportablePackDevice, parsePack } from '../packs/packParser';
 
 const fixturePath = join(__dirname, '..', '..', 'src', 'test', 'fixtures', 'ms32f031.pack');
 
@@ -184,6 +184,112 @@ test('marks a device without SVD or startup file as failed', () => {
 
   assert.equal(pack.devices[0].interruptHandlers, undefined);
   assert.equal(pack.devices[0].error, 'no interrupt source');
+});
+
+const cortexSvd = `<?xml version="1.0" encoding="utf-8"?>
+<device>
+  <peripherals>
+    <peripheral>
+      <name>NVIC</name>
+      <interrupt>
+        <name>WWDG</name>
+        <value>0</value>
+      </interrupt>
+    </peripheral>
+  </peripherals>
+</device>
+`;
+
+test('resolves a device-level processor node as the core source', () => {
+  // Cortex_DFP layout: <processor Dcore> sits inside <device>, full core name.
+  const pdsc = wrapPdsc(`      <device Dname="ARMCM0">
+        <processor Dcore="Cortex-M0" Dfpu="NO_FPU"/>
+        <memory id="ROM" start="0x00000000" size="0x40000"/>
+        <memory id="RAM" start="0x20000000" size="0x20000"/>
+        <debug svd="ARMCM0.svd"/>
+      </device>
+      <device Dname="ARMCA5">
+        <processor Dcore="Cortex-A5"/>
+        <memory id="ROM" start="0x00000000" size="0x40000"/>
+        <debug svd="ARMCM0.svd"/>
+      </device>`);
+  const pack = parsePack(
+    buildZip([{ name: 'ARM.Cortex_DFP.pdsc', data: pdsc }, { name: 'ARMCM0.svd', data: cortexSvd }])
+  );
+
+  assert.deepEqual(pack.devices.map((device) => [device.part, device.core, device.error]), [
+    ['ARMCM0', 'cortex-m0', undefined],
+    ['ARMCA5', '', 'unsupported Dcore']
+  ]);
+});
+
+test('accepts plus-spelled full-name Dcore values', () => {
+  const pdsc = wrapPdsc(`      <device Dname="ARMCM0P">
+        <processor Dcore="Cortex-M0+"/>
+        <memory id="ROM" start="0x00000000" size="0x40000"/>
+        <memory id="RAM" start="0x20000000" size="0x20000"/>
+        <debug svd="ARMCM0.svd"/>
+      </device>`);
+  const pack = parsePack(
+    buildZip([{ name: 'ARM.Cortex_DFP.pdsc', data: pdsc }, { name: 'ARMCM0.svd', data: cortexSvd }])
+  );
+
+  assert.equal(pack.devices[0].core, 'cortex-m0plus');
+  assert.equal(pack.devices[0].error, undefined);
+});
+
+test('reports an importable device only when core, memory, and an interrupt source exist', () => {
+  const componentPdsc = `<?xml version="1.0" encoding="utf-8"?>
+<package><vendor>ARM</vendor><name>CMSIS</name><release version="6.3.0"/></package>`;
+  const devicePdsc = wrapPdsc(`      <device Dname="ARMCM0">
+        <processor Dcore="Cortex-M0"/>
+        <memory id="ROM" start="0x00000000" size="0x40000"/>
+        <memory id="RAM" start="0x20000000" size="0x20000"/>
+      </device>`);
+  const attributePdsc = wrapPdsc(`      <device Dname="MS32F031A6A0ZW" Dcore="CM0">
+        <memory id="ROM" start="0x08000000" size="0x8000"/>
+        <memory id="RAM" start="0x20000000" size="0x2000"/>
+      </device>`);
+  const unsupportedPdsc = wrapPdsc(`      <device Dname="ARMCA5">
+        <processor Dcore="Cortex-A5"/>
+        <memory id="ROM" start="0x00000000" size="0x40000"/>
+      </device>`);
+  const memorylessPdsc = wrapPdsc(`      <device Dname="ARMCM0">
+        <processor Dcore="Cortex-M0"/>
+      </device>`);
+  // Generic core SVD without interrupt declarations, as shipped by Cortex_DFP.
+  const bareSvd = `<?xml version="1.0" encoding="utf-8"?>
+<device>
+  <peripherals>
+    <peripheral><name>NVIC</name></peripheral>
+  </peripherals>
+</device>
+`;
+  const irqSvd = cortexSvd;
+  const entries = (...names: string[]): Array<{ name: string; data: Buffer }> => {
+    const sources: Record<string, string> = {
+      'component.pdsc': componentPdsc,
+      'device.pdsc': devicePdsc,
+      'attribute.pdsc': attributePdsc,
+      'unsupported.pdsc': unsupportedPdsc,
+      'memoryless.pdsc': memorylessPdsc,
+      'bare.svd': bareSvd,
+      'irq.svd': irqSvd,
+      'broken.pdsc': '<package><devices>'
+    };
+    return names.map((name) => ({ name, data: Buffer.from(sources[name]) }));
+  };
+
+  assert.equal(hasImportablePackDevice(entries('component.pdsc')), false);
+  // Cores and memory resolve, but no interrupt source exists in the pack.
+  assert.equal(hasImportablePackDevice(entries('device.pdsc')), false);
+  assert.equal(hasImportablePackDevice(entries('device.pdsc', 'bare.svd')), false);
+  assert.equal(hasImportablePackDevice(entries('device.pdsc', 'irq.svd')), true);
+  assert.equal(hasImportablePackDevice(entries('attribute.pdsc', 'irq.svd')), true);
+  assert.equal(hasImportablePackDevice(entries('unsupported.pdsc', 'irq.svd')), false);
+  assert.equal(hasImportablePackDevice(entries('memoryless.pdsc', 'irq.svd')), false);
+  assert.equal(hasImportablePackDevice(entries('broken.pdsc')), false);
+  assert.equal(hasImportablePackDevice([]), false);
 });
 
 test('marks devices with an unsupported Dcore as failed', () => {

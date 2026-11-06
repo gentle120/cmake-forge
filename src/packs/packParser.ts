@@ -143,6 +143,68 @@ export function parsePackIdentity(entries: Array<{ name: string; data: Buffer }>
   };
 }
 
+/** Selects the entries the device parsers consume: PDSC, SVD and startup sources. */
+export function isPackDeviceSourceEntry(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower.endsWith('.pdsc')
+    || lower.endsWith('.svd')
+    || /(^|\/)startup[^/]*\.s$/.test(lower);
+}
+
+/**
+ * Reports whether the pack contains at least one device the importer would
+ * register: a resolvable ARM core, positive flash and RAM regions, and a
+ * non-empty interrupt table. Only PDSC, SVD and startup entries are read, so
+ * component packs answer false without loading the rest of the archive.
+ * Unreadable PDSCs also answer false so callers can skip the pack.
+ */
+export function hasImportablePackDevice(entries: Array<{ name: string; data: Buffer }>): boolean {
+  const pdscEntry = entries.find((entry) => entry.name.toLowerCase().endsWith('.pdsc'));
+  if (!pdscEntry) {
+    return false;
+  }
+  let document: XmlNode;
+  try {
+    document = xmlParser.parse(pdscEntry.data.toString('utf8')) as XmlNode;
+  } catch {
+    return false;
+  }
+  const families = asNodeArray(asNode(asNode(document.package).devices).family);
+  for (const family of families) {
+    const familyProcessor = processorAttributes(family);
+    for (const device of asNodeArray(family.device)) {
+      if (isImportableDevice(entries, device, familyProcessor)) {
+        return true;
+      }
+    }
+    for (const subFamily of asNodeArray(family.subFamily)) {
+      const subFamilyProcessor = { ...familyProcessor, ...processorAttributes(subFamily) };
+      for (const device of asNodeArray(subFamily.device)) {
+        if (isImportableDevice(entries, device, subFamilyProcessor)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function isImportableDevice(
+  entries: Array<{ name: string; data: Buffer }>,
+  device: XmlNode,
+  inheritedProcessor: ProcessorAttributes
+): boolean {
+  const part = textOf(device['@_Dname']);
+  if (!part || !resolveDeviceCore(device, inheritedProcessor)) {
+    return false;
+  }
+  const memory = collectMemoryRegions(device);
+  if (memory.flash.length <= 0 || memory.ram.length <= 0) {
+    return false;
+  }
+  return (resolveInterruptHandlers(entries, device, part)?.length ?? 0) > 0;
+}
+
 /** Parses a .pack (ZIP) archive. */
 export function parsePack(buffer: Buffer): ParsedPack {
   return parsePackEntries(readZipEntries(buffer));
@@ -193,6 +255,26 @@ export function parsePackEntries(entries: Array<{ name: string; data: Buffer }>)
   return { vendorName, devices };
 }
 
+/**
+ * Resolves the supported core of a device node. Priority: the Dcore
+ * attribute, then a device-level <processor> child (Cortex_DFP-style packs),
+ * then the inherited family/subFamily processor. Full-name values such as
+ * 'Cortex-M0+' are normalized to the supported core table; '' means the core
+ * is unsupported or undeclared.
+ */
+function resolveDeviceCore(device: XmlNode, inherited: ProcessorAttributes): string {
+  const dcore = textOf(device['@_Dcore'])
+    ?? processorAttributes(device).dcore
+    ?? inherited.dcore
+    ?? '';
+  if (!dcore) {
+    return '';
+  }
+  return CORE_BY_DCORE[dcore.toUpperCase()]
+    ?? CORE_BY_DCORE[dcore.toLowerCase().replace(/\+/g, 'plus')]
+    ?? '';
+}
+
 function collectDeviceCandidates(
   entries: Array<{ name: string; data: Buffer }>,
   device: XmlNode,
@@ -208,11 +290,13 @@ function collectDeviceCandidates(
     .map((variant) => variant.trim())
     .filter((variant) => variant.length > 0);
 
-  const dcore = textOf(device['@_Dcore']) ?? inheritedProcessor.dcore ?? '';
-  const core =
-    CORE_BY_DCORE[dcore.toUpperCase()]
-    ?? CORE_BY_DCORE[dcore.toLowerCase()];
-  const dfpu = (textOf(device['@_Dfpu']) ?? inheritedProcessor.dfpu ?? '').toUpperCase();
+  const core = resolveDeviceCore(device, inheritedProcessor);
+  const dfpu = (
+    textOf(device['@_Dfpu'])
+    ?? processorAttributes(device).dfpu
+    ?? inheritedProcessor.dfpu
+    ?? ''
+  ).toUpperCase();
   const fpu = dfpu.length === 0 || dfpu === 'NO_FPU' ? '' : textOf(device['@_Dfpu']) ?? dfpu;
 
   const names = [baseName, ...variantNames].filter((name) => name.length > 0);

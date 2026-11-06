@@ -32,8 +32,8 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 ## Compatibility
 
 - `architecture` 字段仅 `'arm'`；非 ARM Dcore 的 Pack 设备跳过并报告，不生成半成品档案。
-- PDSC `<processor Dcore>` 在 family/subFamily/device 任一层均有效，device 层缺失时继承上层；`CM0` 缩写与 `Cortex-M0` 全名等价。
-- `Dvendor` 的数字后缀（如 `Sinomcu:985`）不进入厂商显示名；vendor id 由完整值 sanitize 得出。
+- PDSC `<processor Dcore>` 在 family/subFamily/device 任一层均有效，device 层缺失时继承上层；`CM0` 缩写与 `Cortex-M0`、`Cortex-M0+` 等全名拼写等价（`+` 归一为 `plus`）。
+- `Dvendor` 的数字注册号后缀（如 `Sinomcu:985`、`ARM:82`）既不进入厂商显示名也不进入厂商 id；同一厂商的后缀变体解析为同一身份。
 - 烧录后端 `openocd|jlink|pyocd` 与探针兼容矩阵见 `src/flash/backendProfiles.ts`；pyocd 后端不支持 J-Link 探针（硬件限制）。
 - pyOCD 的 pack 参数必须是真实存在的 `.pack` 文件；导入设备没有归档时省略 `--pack`，不得生成指向虚拟路径的配置。
 - 在线 Pack 搜索可复用 TTL 缓存，限制并发索引请求，并在取消后停止发起后续请求；每个可下载版本都保留为独立条目，不折叠为最新版本。
@@ -41,6 +41,9 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - Pack 目录条目按身份区分：`builtin`（每厂商一个虚拟 Pack，单一 `builtin` 版本）、`installed`、`imported`、`downloadable`；同一 packId+version 只展示一个条目，已安装/已导入优先于可下载。
 - 已安装 Pack 的身份取自 PDSC（`Dvendor`、包名、`release version`）；Keil 安装目录名或归档文件名不是最终身份，PDSC 无法解析的条目被跳过。
 - 目录选项的 `packFile` 是安装位置，不是导入档案的所有权键；导入档案的所有权键固定为 `packs/<vendor>/<file>.pack` 形式的扩展存储相对路径。切换 Pack 或版本时所有权键随之切换，目录中已加载的 `imported` 条目优先于持久化键，目录未加载时沿用持久化键。
+- 侧栏厂商列表只含能提供可用 MCU 设备的来源：内置档案厂商、PDSC 解析出至少一个可导入设备的已安装 Pack、`parts` 非空的已导入记录；在线索引不是厂商来源，其厂商在导入成功后出现。
+- 显式切换厂商时自动激活该厂商最新的可用版本（`imported`/`installed`，同版本 `imported` 优先）；`downloadable` 版本不自动下载，启动时的目录刷新不自动激活。
+- 仅切换侧栏模式（mcu/linux/native）的保存按消息保留模式；MCU 字段重算不改写模式。
 - 侧栏调试器列表仅提供当前烧录后端支持的探针；切换后端时不保留不兼容探针。
 
 ## Performance And Resources
@@ -62,4 +65,5 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 | 三后端 flash.py/launch.json | `src/test/flashScriptGenerator.test.ts`、`src/test/debugConfigGenerator.test.ts` | 本机 J-Link/pyOCD 真机烧录（用户侧） |
 | 生成工程可编译 | `src/test/cmakeBuild.test.ts` | `cmake --preset debug && cmake --build --preset debug` |
 | Keil Pack 发现与 PDSC 身份 | `src/test/toolchainScanner.test.ts`、`src/test/installedPacks.test.ts` | 扩展宿主「导入 Pack」选择 Keil 已安装 Pack |
-| Pack 目录五级选择与失败恢复 | `src/test/sidebarBuild.test.ts`、`src/test/sidebarAssets.test.ts` | 扩展宿主侧栏实际选择流 |
+| 厂商列表设备过滤与 `Dvendor` 归并 | `src/test/vendorOptions.test.ts`、`src/test/installedPacks.test.ts` | 侧栏厂商下拉（本机 Keil 安装目录） |
+| Pack 目录五级选择、厂商切换自动激活与失败恢复 | `src/test/sidebarBuild.test.ts`、`src/test/sidebarAssets.test.ts` | 扩展宿主侧栏实际选择流 |

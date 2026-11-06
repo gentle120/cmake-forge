@@ -180,8 +180,8 @@ async function importParsedPack(
   archiveFile?: string,
   metadata?: PackIdentityMetadata
 ): Promise<ImportPackResult> {
-  const vendorId = packVendorId(vendorName);
   const vendorLabel = packVendorDisplayName(vendorName);
+  const vendorId = packVendorId(vendorLabel);
   const identity = packIdentity(packFile, vendorId, vendorLabel, metadata);
   const packFilePath = ['packs', vendorId, packFile].join('/');
 

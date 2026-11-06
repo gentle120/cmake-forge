@@ -359,7 +359,6 @@ export function nextMcuSelection(
 
   return {
     ...selection,
-    mode: 'mcu',
     mcu: {
       vendor,
       packId,

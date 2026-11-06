@@ -9,6 +9,7 @@ import {
 import type { DevicePackOption } from '../devices/deviceSelection';
 import {
   buildDevicePackOptions,
+  comparePackVersions,
   listDeviceProfilesForSeries,
   listDeviceSeries
 } from '../devices/deviceSelection';
@@ -238,15 +239,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private async saveSelection(value: unknown): Promise<void> {
     const previous = this.selectionValue;
     const requested = sanitizeSidebarSelection(value, previous, this.packOptions);
-    this.selectionValue = requested.mcu.vendor === previous.mcu.vendor
+    const mcu = requested.mcu;
+    const mcuChanged =
+      mcu.vendor !== previous.mcu.vendor
+      || mcu.packId !== previous.mcu.packId
+      || mcu.version !== previous.mcu.version
+      || mcu.sourcePack !== previous.mcu.sourcePack
+      || mcu.series !== previous.mcu.series
+      || mcu.part !== previous.mcu.part;
+    // Only an actual MCU-field change runs the MCU recomputation; a mode-only
+    // change must survive as sent, and nextMcuSelection never rewrites the mode.
+    this.selectionValue = mcuChanged && mcu.vendor === previous.mcu.vendor
       ? sanitizeSidebarSelection(
-          nextMcuSelection(previous, {
-            vendor: requested.mcu.vendor,
-            packId: requested.mcu.packId,
-            version: requested.mcu.version,
-            sourcePack: requested.mcu.sourcePack,
-            series: requested.mcu.series,
-            part: requested.mcu.part
+          nextMcuSelection({ ...previous, mode: requested.mode }, {
+            vendor: mcu.vendor,
+            packId: mcu.packId,
+            version: mcu.version,
+            sourcePack: mcu.sourcePack,
+            series: mcu.series,
+            part: mcu.part
           }, this.packOptions),
           previous,
           this.packOptions
@@ -261,11 +272,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     }
     this.postState();
     if (vendorChanged) {
-      await this.refreshPackCatalog(this.selectionValue.mcu.vendor);
+      await this.refreshPackCatalog(this.selectionValue.mcu.vendor, true);
     }
   }
 
-  private async refreshPackCatalog(vendor: string): Promise<void> {
+  private async refreshPackCatalog(vendor: string, autoActivate = false): Promise<void> {
     const request = ++this.packCatalogRequest;
     this.packOptions = [];
     this.post({
@@ -315,6 +326,23 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       ) ?? this.packOptions[0];
       if (!selected && fallback) {
         this.pendingPackId = fallback.packId;
+        // An explicit vendor change activates the newest already-available
+        // Pack version so series and parts work without a manual import.
+        // Downloadable entries wait for an explicit selection; startup
+        // refreshes never activate on their own.
+        const autoCandidate = autoActivate && this.dependencies.activatePack
+          ? [...this.packOptions]
+            .filter((option) => option.origin === 'imported' || option.origin === 'installed')
+            .sort((left, right) =>
+              comparePackVersions(right.version, left.version)
+              || (left.origin === 'imported' ? -1 : right.origin === 'imported' ? 1 : 0)
+            )[0]
+          : undefined;
+        if (autoCandidate) {
+          this.pendingPackId = autoCandidate.packId;
+          await this.activatePack(autoCandidate.packId, autoCandidate.version);
+          return;
+        }
         if (fallback.origin === 'builtin' && (
           this.selectionValue.mcu.vendor !== vendor
           || !listDeviceProfilesForPack(`builtin:${vendor}`).some((profile) =>

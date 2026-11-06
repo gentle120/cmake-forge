@@ -37,6 +37,7 @@ import {
   resolveInstalledPackIdentity,
   type InstalledPackIdentity
 } from './packs/installedPacks';
+import { buildPackVendorOptions } from './packs/vendorOptions';
 import {
   downloadPack,
   listPackVendors,
@@ -344,33 +345,36 @@ async function installedPackIdentities(): Promise<InstalledPackIdentity[]> {
   return listInstalledPackIdentities(listKeilPacks(scanRoots().packRoots, scanFileSystem));
 }
 
+/**
+ * Vendor options for the sidebar: built-in profile vendors plus installed and
+ * imported Packs that actually contain importable MCU devices. The online
+ * index is not a vendor source — its publishers only become vendors after a
+ * successful import, which keeps component packs from polluting the list.
+ */
 async function discoverPackVendorOptions(): Promise<{
   vendors: Array<{ value: string; label: string }>;
   notice?: string;
 }> {
-  const vendors = new Map<string, string>();
-  for (const vendor of listDeviceVendors(listDeviceProfiles())) {
-    vendors.set(vendor, getVendorMetadata(vendor).label);
+  const vendors = buildPackVendorOptions({
+    builtin: listDeviceVendors(listDeviceProfiles()).map((vendor) => ({
+      id: vendor,
+      label: getVendorMetadata(vendor).label
+    })),
+    imported: (await listImportedPacks(packStorageRoot)).map((pack) => ({
+      vendorId: pack.vendorId,
+      vendorName: pack.vendorName,
+      hasDevices: pack.parts.length > 0
+    })),
+    installed: (await installedPackIdentities()).map((pack) => ({
+      vendorId: pack.vendorId,
+      vendorName: pack.vendorName,
+      hasDevices: pack.hasDevices
+    }))
+  });
+  for (const vendor of vendors) {
+    ensureCatalogVendor(vendor.value, vendor.label);
   }
-  for (const pack of await installedPackIdentities()) {
-    ensureCatalogVendor(pack.vendorId, pack.vendorName);
-    vendors.set(pack.vendorId, pack.vendorName);
-  }
-
-  let notice: string | undefined;
-  try {
-    for (const entry of await onlinePackVendors()) {
-      const id = packVendorIdFromName(entry.vendorName);
-      ensureCatalogVendor(id, entry.vendorName);
-      vendors.set(id, entry.vendorName);
-    }
-  } catch (error) {
-    notice = `在线 Pack 索引暂不可用：${error instanceof Error ? error.message : String(error)}`;
-  }
-  return {
-    vendors: [...vendors].map(([value, label]) => ({ value, label })),
-    notice
-  };
+  return { vendors };
 }
 
 async function loadDevicePackCatalog(vendorId: string): Promise<{
@@ -378,9 +382,11 @@ async function loadDevicePackCatalog(vendorId: string): Promise<{
   notice?: string;
 }> {
   const imported = await listImportedPacks(packStorageRoot);
-  const importedInVendor = imported.filter((pack) => pack.vendorId === vendorId);
+  const importedInVendor = imported.filter((pack) =>
+    pack.vendorId === vendorId && pack.parts.length > 0
+  );
   const installed = (await installedPackIdentities())
-    .filter((pack) => pack.vendorId === vendorId)
+    .filter((pack) => pack.vendorId === vendorId && pack.hasDevices)
     .filter((pack) => !importedInVendor.some((record) =>
       record.packId === `${pack.vendorId}:${pack.name}` && record.version === pack.version
     ))
@@ -389,7 +395,8 @@ async function loadDevicePackCatalog(vendorId: string): Promise<{
       name: pack.name,
       version: pack.version,
       packFile: pack.packFile,
-      source: pack.source
+      source: pack.source,
+      hasDevices: pack.hasDevices
     }));
   let online: Awaited<ReturnType<typeof listPacksForVendor>> = [];
   let notice: string | undefined;

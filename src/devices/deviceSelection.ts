@@ -35,6 +35,7 @@ export interface DevicePackCatalogInput {
   /**
    * Installed Packs whose identity was resolved from the PDSC. `packFile` is the
    * installation reference; it is never the imported-profile ownership key.
+   * `hasDevices` reports whether the PDSC yields at least one importable device.
    */
   installed: Array<{
     vendorId: string;
@@ -42,6 +43,7 @@ export interface DevicePackCatalogInput {
     version: string;
     packFile: string;
     source: 'file' | 'directory';
+    hasDevices: boolean;
   }>;
   online: Array<{
     name: string;
@@ -106,7 +108,7 @@ export function buildDevicePackOptions(input: DevicePackCatalogInput): DevicePac
   }
 
   for (const pack of input.imported) {
-    if (pack.vendorId !== input.vendorId) {
+    if (pack.vendorId !== input.vendorId || pack.parts.length === 0) {
       continue;
     }
     add({
@@ -120,7 +122,7 @@ export function buildDevicePackOptions(input: DevicePackCatalogInput): DevicePac
   }
 
   for (const pack of input.installed) {
-    if (pack.vendorId !== input.vendorId) {
+    if (pack.vendorId !== input.vendorId || !pack.hasDevices) {
       continue;
     }
     const packId = `${pack.vendorId}:${pack.name}`;
@@ -163,7 +165,8 @@ export function buildDevicePackOptions(input: DevicePackCatalogInput): DevicePac
   });
 }
 
-function comparePackVersions(left: string, right: string): number {
+/** Numeric-aware Pack version ordering for catalog display and defaults. */
+export function comparePackVersions(left: string, right: string): number {
   const a = left.split(/[._-]/).map((part) => Number(part) || 0);
   const b = right.split(/[._-]/).map((part) => Number(part) || 0);
   const length = Math.max(a.length, b.length);

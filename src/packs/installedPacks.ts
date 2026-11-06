@@ -3,8 +3,12 @@ import { join } from 'node:path';
 import type { KeilPackEntry } from '../env/toolchainScanner';
 import { readDirectoryEntries } from './packFs';
 import { packNameFromFileName, packVendorDisplayName, packVendorId } from './packIdentity';
-import { parsePackIdentity } from './packParser';
-import { readZipEntries } from './zipReader';
+import {
+  hasImportablePackDevice,
+  isPackDeviceSourceEntry,
+  parsePackIdentity
+} from './packParser';
+import { readZipEntries, type ZipEntry } from './zipReader';
 
 /**
  * A Pack found in a Keil/CMSIS installation root, identified by its PDSC.
@@ -16,29 +20,23 @@ import { readZipEntries } from './zipReader';
 export interface InstalledPackIdentity {
   packFile: string;
   source: 'file' | 'directory';
-  /** Registry-safe vendor id derived from the PDSC vendor. */
+  /** Registry-safe vendor id derived from the PDSC vendor sans registry number. */
   vendorId: string;
   /** PDSC vendor without the numeric suffix ('Sinomcu:985' -> 'Sinomcu'). */
   vendorName: string;
   name: string;
   version: string;
+  /** True when the PDSC yields at least one device the importer would register. */
+  hasDevices: boolean;
 }
 
-/** Only the .pdsc is needed to identify an installed archive. */
-function isPdscEntry(name: string): boolean {
-  return name.toLowerCase().endsWith('.pdsc');
-}
-
-async function readArchiveIdentity(packFile: string): Promise<ReturnType<typeof parsePackIdentity>> {
+async function readArchiveSources(packFile: string): Promise<ZipEntry[]> {
   const buffer = await readFile(packFile);
-  return parsePackIdentity(readZipEntries(buffer, isPdscEntry));
+  return readZipEntries(buffer, isPackDeviceSourceEntry);
 }
 
-async function readDirectoryIdentity(
-  directory: string
-): Promise<ReturnType<typeof parsePackIdentity>> {
-  const entries = await readDirectoryEntries(directory, isPdscEntry);
-  return parsePackIdentity(entries);
+async function readDirectorySources(directory: string): Promise<ZipEntry[]> {
+  return readDirectoryEntries(directory, isPackDeviceSourceEntry);
 }
 
 /**
@@ -49,11 +47,13 @@ async function readDirectoryIdentity(
 export async function resolveInstalledPackIdentity(
   entry: KeilPackEntry
 ): Promise<InstalledPackIdentity | undefined> {
+  let entries: ZipEntry[];
   let identity: ReturnType<typeof parsePackIdentity>;
   try {
-    identity = entry.source === 'directory'
-      ? await readDirectoryIdentity(entry.packFile)
-      : await readArchiveIdentity(entry.packFile);
+    entries = entry.source === 'directory'
+      ? await readDirectorySources(entry.packFile)
+      : await readArchiveSources(entry.packFile);
+    identity = parsePackIdentity(entries);
   } catch {
     return undefined;
   }
@@ -64,10 +64,13 @@ export async function resolveInstalledPackIdentity(
   return {
     packFile: entry.packFile,
     source: entry.source,
-    vendorId: packVendorId(identity.vendorName),
+    // The numeric Dvendor suffix is a registry artifact of the same vendor;
+    // stripping it keeps packs like 'ARM' and 'ARM:82' on one vendor identity.
+    vendorId: packVendorId(vendorName),
     vendorName,
     name,
-    version
+    version,
+    hasDevices: hasImportablePackDevice(entries)
   };
 }
 
@@ -81,7 +84,10 @@ export async function listInstalledPackIdentities(
 
 /** Finds the .pdsc file of an extracted Pack directory. */
 export async function findPackPdsc(directory: string): Promise<string | undefined> {
-  const entries = await readDirectoryEntries(directory, isPdscEntry);
+  const entries = await readDirectoryEntries(
+    directory,
+    (name) => name.toLowerCase().endsWith('.pdsc')
+  );
   return entries[0]?.name;
 }
 

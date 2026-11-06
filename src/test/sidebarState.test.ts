@@ -136,6 +136,14 @@ test('changing vendor selects its first series and part', () => {
   assert.equal(updated.mcu.part, 'GD32F103C8T6');
 });
 
+test('changing MCU fields keeps the sidebar mode of the input selection', () => {
+  const selection = { ...defaultSidebarSelection(), mode: 'linux' as const };
+  const updated = nextMcuSelection(selection, { vendor: 'GD' });
+
+  assert.equal(updated.mode, 'linux');
+  assert.equal(updated.mcu.vendor, 'GD');
+});
+
 test('changing series selects its first part', () => {
   const updated = nextMcuSelection(defaultSidebarSelection(), { series: 'F4x' });
 

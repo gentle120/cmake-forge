@@ -76,6 +76,7 @@ function startProvider(
 function latestState(messages: Array<Record<string, unknown>>) {
   return [...messages].reverse().find((message) => message.type === 'state')?.state as {
     selection: {
+      mode: string;
       mcu: {
         vendor: string;
         packId: string;
@@ -349,6 +350,210 @@ test('sidebar activates an installed Pack through its storage key, not the Keil 
   } finally {
     provider.dispose();
     unregisterDeviceProfilesByPack(sourcePack);
+  }
+});
+
+test('sidebar keeps the requested mode when the selection only changes mode', async () => {
+  const writes: unknown[] = [];
+  const provider = startProvider(undefined, {
+    loadPackCatalog: async () => ({
+      options: [{
+        packId: 'builtin:STM',
+        vendorId: 'STM',
+        name: '内置芯片支持',
+        version: 'builtin',
+        origin: 'builtin'
+      }]
+    })
+  }, writes);
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const base = latestState(provider.messages)?.selection;
+    assert.ok(base, 'expected an initial sidebar state');
+    for (const mode of ['linux', 'native', 'mcu'] as const) {
+      provider.receive({ type: 'saveSelection', selection: { ...base, mode } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(latestState(provider.messages)?.selection.mode, mode);
+      assert.equal(
+        (writes.at(-1) as { mode?: string } | undefined)?.mode,
+        mode
+      );
+    }
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('selecting a vendor auto-activates its best installed Pack version', async () => {
+  const writes: unknown[] = [];
+  const sourcePack = 'packs/GD/GD32F1xx_DFP.pack';
+  registerDeviceProfiles([{
+    ...getDeviceProfile('STM32F103C8T6'),
+    part: 'GD32F103C8T6',
+    vendor: 'GD'
+  }], sourcePack);
+  const activations: Array<[string, string, string]> = [];
+  const provider = startProvider(undefined, {
+    loadPackCatalog: async (vendor: string) => vendor === 'GD'
+      ? {
+          options: [{
+            packId: 'GD:GD32F1xx_DFP',
+            vendorId: 'GD',
+            name: 'GD32F1xx_DFP',
+            version: '2.4.1',
+            origin: 'installed',
+            packFile: 'C:/Keil/GD/GD32F1xx_DFP/2.4.1',
+            source: 'directory',
+            hasDevices: true
+          }, {
+            packId: 'GD:GD32F1xx_DFP',
+            vendorId: 'GD',
+            name: 'GD32F1xx_DFP',
+            version: '3.0.0',
+            origin: 'downloadable',
+            packUrl: 'https://packs.example/GD32F1xx_DFP.3.0.0.pack'
+          }]
+        }
+      : {
+          options: [{
+            packId: 'builtin:STM',
+            vendorId: 'STM',
+            name: '内置芯片支持',
+            version: 'builtin',
+            origin: 'builtin'
+          }]
+        },
+    activatePack: async (vendor: string, packId: string, version: string) => {
+      activations.push([vendor, packId, version]);
+      return { vendorId: 'GD', packId, version, sourcePack, message: '已载入 GD32F1xx_DFP。' };
+    }
+  }, writes);
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const base = latestState(provider.messages)?.selection;
+    assert.ok(base, 'expected an initial sidebar state');
+    provider.receive({
+      type: 'saveSelection',
+      selection: { ...base, mcu: { ...base.mcu, vendor: 'GD' } }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    // The installed version is imported automatically; the downloadable one waits.
+    assert.deepEqual(activations, [['GD', 'GD:GD32F1xx_DFP', '2.4.1']]);
+    const state = latestState(provider.messages);
+    assert.equal(state?.selection.mcu.vendor, 'GD');
+    assert.equal(state?.selection.mcu.packId, 'GD:GD32F1xx_DFP');
+    assert.equal(state?.selection.mcu.version, '2.4.1');
+    assert.equal(state?.selection.mcu.sourcePack, sourcePack);
+    assert.equal(state?.selection.mcu.part, 'GD32F103C8T6');
+    assert.equal(state?.pendingPackId, 'GD:GD32F1xx_DFP');
+    assert.equal(
+      (writes.at(-1) as { mcu?: { packId?: string } } | undefined)?.mcu?.packId,
+      'GD:GD32F1xx_DFP'
+    );
+  } finally {
+    provider.dispose();
+    unregisterDeviceProfilesByPack(sourcePack);
+  }
+});
+
+test('a vendor with only downloadable Packs is not auto-activated', async () => {
+  const activations: Array<[string, string, string]> = [];
+  const provider = startProvider(undefined, {
+    loadPackCatalog: async (vendor: string) => vendor === 'GD'
+      ? {
+          options: [{
+            packId: 'GD:GD32F1xx_DFP',
+            vendorId: 'GD',
+            name: 'GD32F1xx_DFP',
+            version: '3.0.0',
+            origin: 'downloadable',
+            packUrl: 'https://packs.example/GD32F1xx_DFP.3.0.0.pack'
+          }]
+        }
+      : {
+          options: [{
+            packId: 'builtin:STM',
+            vendorId: 'STM',
+            name: '内置芯片支持',
+            version: 'builtin',
+            origin: 'builtin'
+          }]
+        },
+    activatePack: async (vendor: string, packId: string, version: string) => {
+      activations.push([vendor, packId, version]);
+      throw new Error('must not auto-activate a downloadable Pack');
+    }
+  });
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const base = latestState(provider.messages)?.selection;
+    assert.ok(base);
+    provider.receive({
+      type: 'saveSelection',
+      selection: { ...base, mcu: { ...base.mcu, vendor: 'GD' } }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(activations.length, 0);
+    const state = latestState(provider.messages);
+    assert.equal(state?.selection.mcu.vendor, 'GD');
+    assert.equal(state?.pendingPackId, 'GD:GD32F1xx_DFP');
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('startup catalog refresh does not auto-activate an installed Pack', async () => {
+  const selection = {
+    mode: 'mcu',
+    projectRoot: '',
+    mcu: {
+      vendor: 'GD',
+      packId: 'builtin:GD',
+      version: 'builtin',
+      series: 'F1x',
+      part: 'GD32F103C8T6'
+    },
+    linux: { toolchainFamily: 'loongson' },
+    native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
+    debugEnabled: false,
+    flash: {
+      enabled: false,
+      targetId: 'stm32f1xx',
+      probeId: 'stlink',
+      openocdPath: 'openocd',
+      backend: 'openocd'
+    }
+  };
+  const activations: Array<[string, string, string]> = [];
+  const provider = startProvider(selection, {
+    loadPackCatalog: async () => ({
+      options: [{
+        packId: 'GD:GD32F1xx_DFP',
+        vendorId: 'GD',
+        name: 'GD32F1xx_DFP',
+        version: '2.4.1',
+        origin: 'installed',
+        packFile: 'C:/Keil/GD/GD32F1xx_DFP/2.4.1',
+        source: 'directory',
+        hasDevices: true
+      }]
+    }),
+    activatePack: async (vendor: string, packId: string, version: string) => {
+      activations.push([vendor, packId, version]);
+      throw new Error('startup must not auto-activate');
+    }
+  });
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(activations.length, 0);
+    assert.equal(latestState(provider.messages)?.selection.mcu.packId, 'builtin:GD');
+    assert.equal(latestState(provider.messages)?.pendingPackId, 'GD:GD32F1xx_DFP');
+  } finally {
+    provider.dispose();
   }
 });
 

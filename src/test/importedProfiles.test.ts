@@ -437,7 +437,7 @@ test('imports an extracted pack directory in place with the vendor display name'
     const packs = await listImportedPacks(root);
     assert.equal(packs.length, 1);
     assert.equal(packs[0].vendorName, 'Sinomcu');
-    assert.equal(packs[0].packFile, 'packs/Sinomcu_985/Sinomcu.MS32F0xx_DFP.pack');
+    assert.equal(packs[0].packFile, 'packs/Sinomcu/Sinomcu.MS32F0xx_DFP.pack');
     assert.equal(packs[0].source, 'directory');
     assert.equal(
       packs[0].archiveFile,
@@ -449,7 +449,7 @@ test('imports an extracted pack directory in place with the vendor display name'
     assert.equal(loaded[0].core, 'cortex-m0');
 
     // Directory packs are referenced in place: nothing is copied into the storage root.
-    assert.equal(existsSync(join(root, 'packs', 'Sinomcu_985', 'Sinomcu.MS32F0xx_DFP.pack')), false);
+    assert.equal(existsSync(join(root, 'packs', 'Sinomcu', 'Sinomcu.MS32F0xx_DFP.pack')), false);
 
     await removePack(root, packs[0].packFile);
     assert.deepEqual(await listImportedPacks(root), []);

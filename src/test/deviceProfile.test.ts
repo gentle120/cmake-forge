@@ -379,6 +379,7 @@ test('pack choices preserve origin and every selectable version', () => {
         version: string;
         packFile: string;
         source: 'file' | 'directory';
+        hasDevices: boolean;
       }>;
       online: Array<{
         name: string;
@@ -406,7 +407,8 @@ test('pack choices preserve origin and every selectable version', () => {
       name: 'STM32F1xx_DFP',
       version: '1.1.0',
       packFile: 'C:/Arm/Packs/ST/STM32F1xx_DFP/1.1.0/ST.STM32F1xx_DFP.1.1.0.pack',
-      source: 'file'
+      source: 'file',
+      hasDevices: true
     }],
     online: [{
       name: 'STM32F1xx_DFP',
@@ -427,6 +429,45 @@ test('pack choices preserve origin and every selectable version', () => {
     ]
   );
   assert.equal(options[1].packFile, 'packs/STM/STM32F1xx_DFP.1.0.0.pack');
+});
+
+test('a device-less installed Pack is not offered in the catalog', () => {
+  const options = deviceSelection.buildDevicePackOptions({
+    vendorId: 'ARM',
+    hasBuiltin: false,
+    imported: [],
+    installed: [{
+      vendorId: 'ARM',
+      name: 'CMSIS',
+      version: '6.3.0',
+      packFile: 'C:/Arm/Packs/ARM/CMSIS/6.3.0',
+      source: 'directory',
+      hasDevices: false
+    }],
+    online: []
+  });
+
+  assert.deepEqual(options, []);
+});
+
+test('an imported record without usable parts is not offered in the catalog', () => {
+  const options = deviceSelection.buildDevicePackOptions({
+    vendorId: 'Sinomcu',
+    hasBuiltin: false,
+    imported: [{
+      packId: 'Sinomcu:MS32F0xx_DFP',
+      vendorId: 'Sinomcu',
+      name: 'MS32F0xx_DFP',
+      version: '1.1.1',
+      packFile: 'packs/Sinomcu/MS32F0xx_DFP.pack',
+      vendorName: 'Sinomcu',
+      parts: []
+    }],
+    installed: [],
+    online: []
+  });
+
+  assert.deepEqual(options, []);
 });
 
 test('same-named Packs from different vendors keep distinct catalog identities', () => {
@@ -467,23 +508,24 @@ test('same-named Packs from different vendors keep distinct catalog identities',
 
 test('an installed Pack is grouped under its own PDSC vendor, not the selected folder vendor', () => {
   const installed = {
-    vendorId: 'Sinomcu_985',
+    vendorId: 'Sinomcu',
     name: 'MS32F0xx_DFP',
     version: '1.1.1',
     packFile: 'C:/Arm/Packs/Keil/MS32F0xx_DFP/1.1.1',
-    source: 'directory' as const
+    source: 'directory' as const,
+    hasDevices: true
   };
 
   const matching = deviceSelection.buildDevicePackOptions({
-    vendorId: 'Sinomcu_985',
+    vendorId: 'Sinomcu',
     hasBuiltin: false,
     imported: [],
     installed: [installed],
     online: []
   });
   assert.deepEqual(matching.map((option) => [option.packId, option.vendorId, option.origin]), [[
-    'Sinomcu_985:MS32F0xx_DFP',
-    'Sinomcu_985',
+    'Sinomcu:MS32F0xx_DFP',
+    'Sinomcu',
     'installed'
   ]]);
 
@@ -507,7 +549,8 @@ test('an installed version is not duplicated by a downloadable entry of the same
       name: 'STM32F1xx_DFP',
       version: '1.1.0',
       packFile: 'C:/Arm/Packs/ST/STM32F1xx_DFP/1.1.0',
-      source: 'directory'
+      source: 'directory',
+      hasDevices: true
     }],
     online: [{
       name: 'STM32F1xx_DFP',
