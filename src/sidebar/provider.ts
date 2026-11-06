@@ -95,6 +95,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private discoveringProjects = true;
   private projectDiscoveryController?: AbortController;
   private workspaceScanController?: AbortController;
+  private workspaceScanPromise?: Promise<void>;
   private readonly viewDisposables: vscode.Disposable[] = [];
 
   constructor(
@@ -553,11 +554,76 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     this.workspaceScanController = controller;
     this.busy = true;
     this.post({ type: 'operationStarted', operation: '正在扫描工作区' });
+    const operation = this.runWorkspaceScan(root, controller);
+    this.workspaceScanPromise = operation;
+    try {
+      await operation;
+    } finally {
+      if (this.workspaceScanController === controller) {
+        this.workspaceScanController = undefined;
+        this.workspaceScanPromise = undefined;
+        this.busy = false;
+        this.postStateAfterCancellation();
+      }
+    }
+  }
+
+  private cancelWorkspaceScan(): void {
+    if (this.workspaceScanController) {
+      const controller = this.workspaceScanController;
+      const operation = this.workspaceScanPromise;
+      controller.abort();
+      this.workspaceScanController = undefined;
+      this.workspaceScanPromise = undefined;
+      this.busy = false;
+      this.post({
+        type: 'operationFinished',
+        result: {
+          ok: false,
+          cancelled: true,
+          message: '已取消扫描工作区。',
+          files: []
+        }
+      });
+      this.postStateAfterCancellation();
+      void operation?.catch(() => undefined);
+      return;
+    }
+    if (this.projectDiscoveryController) {
+      this.projectDiscoveryController.abort();
+    }
+  }
+
+  private postStateAfterCancellation(): void {
+    queueMicrotask(() => this.postState());
+  }
+
+  private async runWorkspaceScan(root: string, controller: AbortController): Promise<void> {
     try {
       const project = await (this.dependencies.scanProject ?? scanHost.scanProject)(
         root,
         { signal: controller.signal }
       );
+      if (controller.signal.aborted) {
+        return;
+      }
+      if (project.sources.length === 0) {
+        this.post({
+          type: 'workspaceScan',
+          sources: 0,
+          includeDirs: 0,
+          defines: 0
+        });
+        this.post({
+          type: 'operationFinished',
+          result: {
+            ok: false,
+            message: '工作区中没有找到 C/C++ 或汇编源文件。',
+            files: []
+          }
+        });
+        return;
+      }
       this.post({
         type: 'workspaceScan',
         sources: project.sources.length,
@@ -573,16 +639,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         }
       });
     } catch (error) {
-      if (error instanceof ScanCancelledError) {
-        this.post({
-          type: 'operationFinished',
-          result: {
-            ok: false,
-            cancelled: true,
-            message: '已取消扫描工作区。',
-            files: []
-          }
-        });
+      if (error instanceof ScanCancelledError || controller.signal.aborted) {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
@@ -590,22 +647,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         type: 'operationFinished',
         result: { ok: false, message, files: [] }
       });
-    } finally {
-      if (this.workspaceScanController === controller) {
-        this.workspaceScanController = undefined;
-        this.busy = false;
-        this.postState();
-      }
-    }
-  }
-
-  private cancelWorkspaceScan(): void {
-    if (this.workspaceScanController) {
-      this.workspaceScanController.abort();
-      return;
-    }
-    if (this.projectDiscoveryController) {
-      this.projectDiscoveryController.abort();
     }
   }
 }

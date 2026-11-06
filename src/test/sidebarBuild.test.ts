@@ -158,6 +158,187 @@ test('sidebar cancels project discovery before the busy guard and ends discovery
   }
 });
 
+test('sidebar treats an empty workspace root as a selectable target', async () => {
+  const root = 'C:/empty-workspace';
+  const selection = {
+    mode: 'mcu',
+    projectRoot: '',
+    mcu: { vendor: 'STM', series: 'F1x', part: 'STM32F103C8T6' },
+    linux: { toolchainFamily: 'loongson' },
+    native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
+    debugEnabled: false,
+    flash: {
+      enabled: false,
+      targetId: 'stm32f1xx',
+      probeId: 'stlink',
+      openocdPath: 'openocd',
+      backend: 'openocd'
+    }
+  };
+  const messages: Array<{
+    type: string;
+    result?: { ok: boolean; message: string; files: string[] };
+    state?: {
+      projects: Array<{ value: string }>;
+      projectRoot: string;
+      discoveringProjects: boolean;
+    };
+  }> = [];
+  let scannedRoot = '';
+  const vscode = {
+    workspace: {
+      workspaceFolders: [{ name: 'empty-workspace', uri: { fsPath: root } }],
+      getConfiguration: () => ({ get: (_key: string, fallback: unknown) => fallback })
+    },
+    commands: { executeCommand: async () => undefined }
+  };
+  const api = loadHostModule<{ SidebarProvider: new (context: object, dependencies: object) => {
+    resolveWebviewView(view: object): void;
+    dispose(): void;
+  } }>(join(__dirname, '..', 'sidebar', 'provider.js'), vscode);
+  const provider = new api.SidebarProvider({
+    workspaceState: { get: () => selection, update: async () => {} },
+    extensionUri: { path: '/extension', with(change: object) { return { ...this, ...change }; } }
+  }, {
+    workflow: {},
+    confirmOverwrite: async () => true,
+    discoverToolchains: () => [],
+    discoverProjects: async () => [{
+      root,
+      relativePath: '',
+      label: 'empty-workspace',
+      markers: ['empty']
+    }],
+    scanProject: async (projectRoot: string) => {
+      scannedRoot = projectRoot;
+      return { sources: [], includeDirs: [], defines: [] };
+    }
+  });
+  let receive: ((value: object) => void) | undefined;
+  provider.resolveWebviewView({
+    webview: {
+      cspSource: 'test',
+      asWebviewUri: () => 'test',
+      postMessage: (message: typeof messages[number]) => {
+        messages.push(message);
+        return Promise.resolve(true);
+      },
+      onDidReceiveMessage: (listener: typeof receive) => {
+        receive = listener;
+        return { dispose() {} };
+      }
+    },
+    onDidDispose: () => ({ dispose() {} })
+  });
+  try {
+    receive!({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const discovered = [...messages].reverse().find((message) => message.type === 'state')?.state;
+    assert.equal(discovered?.projectRoot, root);
+    assert.deepEqual(discovered?.projects.map((project) => project.value), [root]);
+    assert.equal(discovered?.discoveringProjects, false);
+
+    receive!({ type: 'scanWorkspace' });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const result = [...messages].reverse()
+      .find((message) => message.type === 'operationFinished')?.result;
+    assert.equal(scannedRoot, root);
+    assert.equal(result?.ok, false);
+    assert.equal(result?.message, '工作区中没有找到 C/C++ 或汇编源文件。');
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('sidebar reports source scan cancellation before the filesystem scan unwinds', async () => {
+  const root = 'C:/workspace';
+  const selection = {
+    mode: 'mcu',
+    projectRoot: root,
+    mcu: { vendor: 'STM', series: 'F1x', part: 'STM32F103C8T6' },
+    linux: { toolchainFamily: 'loongson' },
+    native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
+    debugEnabled: false,
+    flash: {
+      enabled: false,
+      targetId: 'stm32f1xx',
+      probeId: 'stlink',
+      openocdPath: 'openocd',
+      backend: 'openocd'
+    }
+  };
+  const messages: Array<{
+    type: string;
+    result?: { ok: boolean; cancelled?: boolean; message: string; files: string[] };
+  }> = [];
+  const scanStarted = Promise.withResolvers<void>();
+  let scanCalls = 0;
+  const vscode = {
+    workspace: {
+      workspaceFolders: [{ name: 'workspace', uri: { fsPath: root } }],
+      getConfiguration: () => ({ get: (_key: string, fallback: unknown) => fallback })
+    },
+    commands: { executeCommand: async () => undefined }
+  };
+  const api = loadHostModule<{ SidebarProvider: new (context: object, dependencies: object) => {
+    resolveWebviewView(view: object): void;
+    dispose(): void;
+  } }>(join(__dirname, '..', 'sidebar', 'provider.js'), vscode);
+  const provider = new api.SidebarProvider({
+    workspaceState: { get: () => selection, update: async () => {} },
+    extensionUri: { path: '/extension', with(change: object) { return { ...this, ...change }; } }
+  }, {
+    workflow: {},
+    confirmOverwrite: async () => true,
+    discoverToolchains: () => [],
+    discoverProjects: async () => [{
+      root,
+      relativePath: '',
+      label: 'workspace',
+      markers: ['source']
+    }],
+    scanProject: () => {
+      scanCalls++;
+      scanStarted.resolve();
+      return new Promise(() => {});
+    }
+  });
+  let receive: ((value: object) => void) | undefined;
+  provider.resolveWebviewView({
+    webview: {
+      cspSource: 'test',
+      asWebviewUri: () => 'test',
+      postMessage: (message: typeof messages[number]) => {
+        messages.push(message);
+        return Promise.resolve(true);
+      },
+      onDidReceiveMessage: (listener: typeof receive) => {
+        receive = listener;
+        return { dispose() {} };
+      }
+    },
+    onDidDispose: () => ({ dispose() {} })
+  });
+  try {
+    receive!({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    receive!({ type: 'scanWorkspace' });
+    await scanStarted.promise;
+    receive!({ type: 'cancelWorkspaceScan' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const result = [...messages].reverse()
+      .find((message) => message.type === 'operationFinished')?.result;
+    assert.equal(result?.cancelled, true);
+    assert.equal(result?.message, '已取消扫描工作区。');
+
+    receive!({ type: 'scanWorkspace' });
+    await scanStarted.promise;
+    assert.equal(scanCalls, 2, 'cancellation must release the busy state immediately');
+  } finally {
+    provider.dispose();
+  }
+});
+
 test('cancelling overlapping scans aborts the source scan before project discovery', async () => {
   const root = 'C:/workspace';
   const selection = {

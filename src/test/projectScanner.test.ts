@@ -81,6 +81,29 @@ test('aborts a scan when the signal is already aborted', async () => {
   await assert.rejects(() => scanProject(root, { signal: controller.signal }), ScanCancelledError);
 });
 
+test('stops before reading a directory when progress reporting aborts the scan', async () => {
+  const controller = new AbortController();
+  const missingRoot = join(tmpdir(), 'cmake-embedded-missing-root', String(Date.now()));
+
+  await assert.rejects(
+    () => scanProject(missingRoot, {
+      signal: controller.signal,
+      onDirectory: () => controller.abort()
+    }),
+    ScanCancelledError
+  );
+});
+
+test('scans an empty workspace as zero sources, include directories, and defines', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mcu-cmake-empty-'));
+
+  assert.deepEqual(await scanProject(root), {
+    sources: [],
+    includeDirs: [],
+    defines: []
+  });
+});
+
 test('reports every visited directory for progress reporting', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mcu-cmake-'));
   await mkdir(join(root, 'src'), { recursive: true });

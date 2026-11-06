@@ -6,6 +6,7 @@ export type WorkspaceProjectMarker =
   | 'keil'
   | 'iar'
   | 'platformio'
+  | 'empty'
   | 'source';
 
 export interface WorkspaceProject {
@@ -85,12 +86,16 @@ async function directoryEntries(
   }
   try {
     return (await readdir(directory, { withFileTypes: true }))
+      .sort((left, right) => left.name.localeCompare(right.name))
       .map((entry) => ({
         name: entry.name,
         isDirectory: entry.isDirectory(),
         isFile: entry.isFile()
       }));
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) {
+      throw new WorkspaceProjectsCancelledError();
+    }
     return [];
   }
 }
@@ -151,6 +156,9 @@ async function discoverRoot(
   };
 
   await walk(root);
+  if (found.size === 0 && sourceDirectories.size === 0) {
+    found.set(root, new Set(['empty']));
+  }
   for (const sourceDirectory of sourceDirectories) {
     const relativeSource = workspaceRelative(root, sourceDirectory);
     const candidateRoot = relativeSource

@@ -71,12 +71,24 @@ test('falls back to a root with sources when no project marker exists', async ()
   });
 });
 
-test('does not discover a root that only contains generated build output', async () => {
+test('keeps a root that only contains generated output selectable as an empty workspace', async () => {
   await withWorkspace(async (root) => {
     await mkdir(join(root, 'build'), { recursive: true });
     await writeFile(join(root, 'build', 'generated.c'), '');
 
-    assert.deepEqual(await discoverWorkspaceProjects([root]), []);
+    const projects = await discoverWorkspaceProjects([root]);
+
+    assert.deepEqual(projects.map((project) => project.root), [root]);
+    assert.deepEqual(projects[0].markers, ['empty']);
+  });
+});
+
+test('keeps an empty workspace root selectable so its empty source result can be scanned', async () => {
+  await withWorkspace(async (root) => {
+    const projects = await discoverWorkspaceProjects([root]);
+
+    assert.deepEqual(projects.map((project) => project.root), [root]);
+    assert.deepEqual(projects[0].markers, ['empty']);
   });
 });
 

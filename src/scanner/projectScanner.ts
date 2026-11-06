@@ -81,6 +81,29 @@ function findIncludeGuard(content: string): string | undefined {
   return match[1];
 }
 
+interface DirentEntry {
+  name: string;
+  isDirectory(): boolean;
+  isFile(): boolean;
+}
+
+function throwIfScanCancelled(options: ScanOptions): void {
+  if (options.signal?.aborted) {
+    throw new ScanCancelledError();
+  }
+}
+
+async function readDirectoryEntries(
+  directory: string,
+  options: ScanOptions
+): Promise<DirentEntry[]> {
+  throwIfScanCancelled(options);
+  const entries = await readdir(directory, { withFileTypes: true });
+  throwIfScanCancelled(options);
+  return (entries as DirentEntry[])
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
 async function walk(
   root: string,
   directory: string,
@@ -89,18 +112,13 @@ async function walk(
   defines: Set<string>,
   options: ScanOptions
 ): Promise<void> {
-  if (options.signal?.aborted) {
-    throw new ScanCancelledError();
-  }
+  throwIfScanCancelled(options);
   options.onDirectory?.(directory);
-
-  const entries = (await readdir(directory, { withFileTypes: true }))
-    .sort((left, right) => left.name.localeCompare(right.name));
+  throwIfScanCancelled(options);
+  const entries = await readDirectoryEntries(directory, options);
 
   for (const entry of entries) {
-    if (options.signal?.aborted) {
-      throw new ScanCancelledError();
-    }
+    throwIfScanCancelled(options);
     if (entry.isDirectory()) {
       if (!ignoredDirectories.has(entry.name) && !entry.name.startsWith('cmake-build-')) {
         await walk(root, join(directory, entry.name), sources, includeDirs, defines, options);
@@ -117,7 +135,15 @@ async function walk(
       continue;
     }
 
-    const content = await readFile(filePath, 'utf8');
+    let content: string;
+    try {
+      content = await readFile(filePath, { encoding: 'utf8', signal: options.signal });
+    } catch (error) {
+      if (options.signal?.aborted) {
+        throw new ScanCancelledError();
+      }
+      throw error;
+    }
     const includeGuard = headerExtensions.has(extension) ? findIncludeGuard(content) : undefined;
     const definePattern = /^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\b/gm;
     for (const match of content.matchAll(definePattern)) {
