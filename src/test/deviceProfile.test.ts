@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import * as deviceProfiles from '../devices/deviceProfiles';
 import {
   getDeviceProfile,
   listDeviceProfiles,
@@ -7,6 +8,7 @@ import {
   unregisterDeviceProfiles,
   unregisterDeviceProfilesByPack
 } from '../devices/deviceProfiles';
+import * as deviceSelection from '../devices/deviceSelection';
 import { validateDeviceProfile } from '../devices/profileValidation';
 import {
   listDeviceProfilesForSeries,
@@ -317,4 +319,204 @@ test('keeps the newest pack source and falls back when it is unregistered', () =
 
   unregisterDeviceProfilesByPack('first.pack');
   assert.equal(getDeviceProfile('STM32F103C8T6').ram.length, original.ram.length);
+});
+
+test('resolves a profile from the selected Pack instead of the global latest override', () => {
+  const packApi = deviceProfiles as unknown as {
+    getDeviceProfileForPack(part: string, sourcePack: string): ReturnType<typeof getDeviceProfile>;
+    listDeviceProfilesForPack(sourcePack: string): ReturnType<typeof listDeviceProfiles>;
+  };
+  const original = getDeviceProfile('STM32F103C8T6');
+  const older = {
+    ...original,
+    ram: { ...original.ram, length: 16 * 1024 }
+  };
+  const newer = {
+    ...original,
+    ram: { ...original.ram, length: 32 * 1024 }
+  };
+  registerDeviceProfiles([older], 'packs/STMicro/STM32F1.1.0.pack');
+  registerDeviceProfiles([newer], 'packs/STMicro/STM32F1.2.0.pack');
+
+  try {
+    assert.equal(getDeviceProfile('STM32F103C8T6').ram.length, 32 * 1024);
+    assert.equal(
+      packApi.getDeviceProfileForPack('STM32F103C8T6', 'packs/STMicro/STM32F1.1.0.pack').ram.length,
+      16 * 1024
+    );
+    assert.equal(
+      packApi.listDeviceProfilesForPack('packs/STMicro/STM32F1.1.0.pack')[0].part,
+      'STM32F103C8T6'
+    );
+    assert.equal(
+      packApi.getDeviceProfileForPack('STM32F103C8T6', 'builtin:STM').ram.length,
+      original.ram.length
+    );
+    assert.equal(packApi.listDeviceProfilesForPack('builtin:STM').length > 0, true);
+  } finally {
+    unregisterDeviceProfilesByPack('packs/STMicro/STM32F1.2.0.pack');
+    unregisterDeviceProfilesByPack('packs/STMicro/STM32F1.1.0.pack');
+  }
+});
+
+test('pack choices preserve origin and every selectable version', () => {
+  const catalogApi = deviceSelection as unknown as {
+    buildDevicePackOptions(input: {
+      vendorId: string;
+      hasBuiltin: boolean;
+      imported: Array<{
+        packId: string;
+        vendorId: string;
+        name: string;
+        version: string;
+        packFile: string;
+        vendorName: string;
+        parts: string[];
+      }>;
+      installed: Array<{
+        vendorId: string;
+        name: string;
+        version: string;
+        packFile: string;
+        source: 'file' | 'directory';
+      }>;
+      online: Array<{
+        name: string;
+        version: string;
+        description: string;
+        packUrl: string;
+        vendorName: string;
+      }>;
+    }): Array<{ packId: string; version: string; origin: string; packFile?: string }>;
+  };
+  const options = catalogApi.buildDevicePackOptions({
+    vendorId: 'STM',
+    hasBuiltin: true,
+    imported: [{
+      packId: 'STM:STM32F1xx_DFP',
+      vendorId: 'STM',
+      name: 'STM32F1xx_DFP',
+      version: '1.0.0',
+      packFile: 'packs/STM/STM32F1xx_DFP.1.0.0.pack',
+      vendorName: 'STMicroelectronics',
+      parts: ['STM32F103C8T6']
+    }],
+    installed: [{
+      vendorId: 'STM',
+      name: 'STM32F1xx_DFP',
+      version: '1.1.0',
+      packFile: 'C:/Arm/Packs/ST/STM32F1xx_DFP/1.1.0/ST.STM32F1xx_DFP.1.1.0.pack',
+      source: 'file'
+    }],
+    online: [{
+      name: 'STM32F1xx_DFP',
+      version: '1.2.0',
+      description: 'STM32 F1 device family',
+      packUrl: 'https://packs.example/STM32F1xx_DFP.1.2.0.pack',
+      vendorName: 'STMicroelectronics'
+    }]
+  });
+
+  assert.deepEqual(
+    options.map(({ packId, version, origin }) => [packId, version, origin]),
+    [
+      ['builtin:STM', 'builtin', 'builtin'],
+      ['STM:STM32F1xx_DFP', '1.0.0', 'imported'],
+      ['STM:STM32F1xx_DFP', '1.1.0', 'installed'],
+      ['STM:STM32F1xx_DFP', '1.2.0', 'downloadable']
+    ]
+  );
+  assert.equal(options[1].packFile, 'packs/STM/STM32F1xx_DFP.1.0.0.pack');
+});
+
+test('same-named Packs from different vendors keep distinct catalog identities', () => {
+  const options = deviceSelection.buildDevicePackOptions({
+    vendorId: 'VendorA',
+    hasBuiltin: false,
+    imported: [{
+      packId: 'VendorA:Shared_DFP',
+      vendorId: 'VendorA',
+      name: 'Shared_DFP',
+      version: '1.0.0',
+      packFile: 'packs/VendorA/Shared_DFP.1.0.0.pack',
+      vendorName: 'Vendor A',
+      parts: ['A100']
+    }, {
+      packId: 'VendorB:Shared_DFP',
+      vendorId: 'VendorB',
+      name: 'Shared_DFP',
+      version: '1.0.0',
+      packFile: 'packs/VendorB/Shared_DFP.1.0.0.pack',
+      vendorName: 'Vendor B',
+      parts: ['B100']
+    }],
+    installed: [],
+    online: []
+  });
+
+  assert.deepEqual(options.map((option) => [
+    option.packId,
+    option.vendorId,
+    option.packFile
+  ]), [[
+    'VendorA:Shared_DFP',
+    'VendorA',
+    'packs/VendorA/Shared_DFP.1.0.0.pack'
+  ]]);
+});
+
+test('an installed Pack is grouped under its own PDSC vendor, not the selected folder vendor', () => {
+  const installed = {
+    vendorId: 'Sinomcu_985',
+    name: 'MS32F0xx_DFP',
+    version: '1.1.1',
+    packFile: 'C:/Arm/Packs/Keil/MS32F0xx_DFP/1.1.1',
+    source: 'directory' as const
+  };
+
+  const matching = deviceSelection.buildDevicePackOptions({
+    vendorId: 'Sinomcu_985',
+    hasBuiltin: false,
+    imported: [],
+    installed: [installed],
+    online: []
+  });
+  assert.deepEqual(matching.map((option) => [option.packId, option.vendorId, option.origin]), [[
+    'Sinomcu_985:MS32F0xx_DFP',
+    'Sinomcu_985',
+    'installed'
+  ]]);
+
+  const otherVendor = deviceSelection.buildDevicePackOptions({
+    vendorId: 'STM',
+    hasBuiltin: false,
+    imported: [],
+    installed: [installed],
+    online: []
+  });
+  assert.deepEqual(otherVendor, []);
+});
+
+test('an installed version is not duplicated by a downloadable entry of the same version', () => {
+  const options = deviceSelection.buildDevicePackOptions({
+    vendorId: 'STM',
+    hasBuiltin: false,
+    imported: [],
+    installed: [{
+      vendorId: 'STM',
+      name: 'STM32F1xx_DFP',
+      version: '1.1.0',
+      packFile: 'C:/Arm/Packs/ST/STM32F1xx_DFP/1.1.0',
+      source: 'directory'
+    }],
+    online: [{
+      name: 'STM32F1xx_DFP',
+      version: '1.1.0',
+      description: 'same version',
+      packUrl: 'https://packs.example/STM32F1xx_DFP.1.1.0.pack',
+      vendorName: 'STMicroelectronics'
+    }]
+  });
+
+  assert.deepEqual(options.map((option) => [option.version, option.origin]), [['1.1.0', 'installed']]);
 });

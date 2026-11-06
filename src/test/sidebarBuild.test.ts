@@ -1,79 +1,433 @@
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import test from 'node:test';
+import {
+  getDeviceProfile,
+  registerDeviceProfiles,
+  unregisterDeviceProfilesByPack
+} from '../devices/deviceProfiles';
 import { ScanCancelledError } from '../scanner/projectScanner';
 import { WorkspaceProjectsCancelledError } from '../scanner/workspaceProjects';
 import { loadHostModule } from './support/hostModule';
 
-test('sidebar locks generation while building and forwards the actual failure result', async () => {
-  const started = Promise.withResolvers<void>();
-  const finished = Promise.withResolvers<void>();
-  const gate = Promise.withResolvers<{ ok: boolean; message: string }>();
-  const messages: Array<{ type: string; result?: { ok: boolean; message: string } }> = [];
-  const stateWrites: unknown[] = [];
-  let scanCalls = 0;
-  let commandCalls = 0;
+interface ProviderHarness {
+  messages: Array<Record<string, unknown>>;
+  receive(message: Record<string, unknown>): void;
+  dispose(): void;
+}
+
+function startProvider(
+  initialSelection: unknown,
+  dependencies: Record<string, unknown>,
+  writes: unknown[] = []
+): ProviderHarness {
   const vscode = {
     workspace: {
-      workspaceFolders: [{ uri: { fsPath: 'C:/workspace' } }],
-      getConfiguration: () => ({ get: (_key: string, fallback: string) => fallback })
+      workspaceFolders: [{ name: 'workspace', uri: { fsPath: 'C:/workspace' } }],
+      getConfiguration: () => ({ get: (_key: string, fallback: unknown) => fallback })
     },
-    commands: { executeCommand: (id: string) => {
-      commandCalls++;
-      assert.equal(id, 'cmakeEmbedded.buildProject');
-      started.resolve(); return gate.promise;
-    } }
+    commands: { executeCommand: async () => undefined }
   };
-  const filename = join(__dirname, '..', 'sidebar', 'provider.js');
-  const api = loadHostModule<{ SidebarProvider: new (context: object, dependencies: object) => {
-    resolveWebviewView(view: object): void; dispose(): void;
-  } }>(filename, vscode);
-  const uri = { path: '/extension', with(change: object) { return { ...this, ...change }; } };
+  const api = loadHostModule<{
+    SidebarProvider: new (context: object, dependencies: object) => {
+      resolveWebviewView(view: object): void;
+      dispose(): void;
+    };
+  }>(join(__dirname, '..', 'sidebar', 'provider.js'), vscode);
   const provider = new api.SidebarProvider({
     workspaceState: {
-      get: () => undefined,
-      update: async (_key: string, value: unknown) => { stateWrites.push(value); }
+      get: () => initialSelection,
+      update: async (_key: string, value: unknown) => { writes.push(value); }
     },
-    extensionUri: uri
+    extensionUri: { path: '/extension', with(change: object) { return { ...this, ...change }; } }
   }, {
-    workflow: { workspaceRoot: () => '.', scanWorkspace: async () => { scanCalls++; return undefined; } },
-    confirmOverwrite: async () => true, discoverToolchains: () => [],
-    discoverProjects: async () => [{
-      root: 'C:/workspace/app',
-      relativePath: 'app',
-      label: 'workspace/app',
-      markers: ['cmake' as const]
-    }]
+    workflow: {},
+    confirmOverwrite: async () => true,
+    discoverToolchains: () => [],
+    discoverProjects: async () => [],
+    ...dependencies
   });
-  let receive: ((value: object) => void) | undefined;
+  const messages: Array<Record<string, unknown>> = [];
+  let receive: ((value: Record<string, unknown>) => void) | undefined;
   provider.resolveWebviewView({
     webview: {
-      cspSource: 'test', asWebviewUri: () => 'test',
-      postMessage: (message: typeof messages[number]) => {
+      cspSource: 'test',
+      asWebviewUri: () => 'test',
+      postMessage: (message: Record<string, unknown>) => {
         messages.push(message);
-        if (message.type === 'operationFinished') { finished.resolve(); }
         return Promise.resolve(true);
       },
-      onDidReceiveMessage: (listener: typeof receive) => { receive = listener; return { dispose() {} }; }
+      onDidReceiveMessage: (listener: typeof receive) => {
+        receive = listener;
+        return { dispose() {} };
+      }
     },
     onDidDispose: () => ({ dispose() {} })
   });
+  return {
+    messages,
+    receive(message) {
+      receive!(message);
+    },
+    dispose: () => provider.dispose()
+  };
+}
+
+function latestState(messages: Array<Record<string, unknown>>) {
+  return [...messages].reverse().find((message) => message.type === 'state')?.state as {
+    selection: {
+      mcu: {
+        vendor: string;
+        packId: string;
+        version: string;
+        sourcePack?: string;
+        series: string;
+        part: string;
+      };
+    };
+    pendingPackId: string;
+    packs: Array<{ value: string; description?: string }>;
+    versions: Array<{ value: string; description?: string }>;
+  } | undefined;
+}
+
+test('sidebar loads Pack catalog for the newly selected vendor and ignores a stale catalog response', async () => {
+  const catalogCalls: string[] = [];
+  const gdCatalog = Promise.withResolvers<{
+    options: Array<Record<string, unknown>>;
+    notice?: string;
+  }>();
+  const stmCatalog = Promise.withResolvers<{
+    options: Array<Record<string, unknown>>;
+    notice?: string;
+  }>();
+  const provider = startProvider(undefined, {
+    loadPackCatalog: (vendor: string) => {
+      catalogCalls.push(vendor);
+      return vendor === 'GD' ? gdCatalog.promise : Promise.resolve({
+        options: [{
+          packId: 'builtin:STM',
+          vendorId: 'STM',
+          name: '内置芯片支持',
+          version: 'builtin',
+          origin: 'builtin'
+        }],
+        notice: 'STM index unavailable'
+      });
+    },
+    discoverPackVendors: async () => ({
+      vendors: [{ value: 'STM', label: 'ST' }, { value: 'GD', label: 'GigaDevice' }]
+    })
+  });
   try {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    receive!({ type: 'buildProject' }); await started.promise;
-    assert.ok(messages.some(message => message.type === 'operationStarted'));
-    receive!({ type: 'generateProject' });
-    receive!({ type: 'setArmToolchainPath', path: 'C:/Other ARM/bin' });
-    receive!({ type: 'browseArmToolchain' });
-    assert.equal(scanCalls, 0);
-    assert.equal(commandCalls, 1);
-    gate.resolve({ ok: false, message: 'configure failed' }); await finished.promise;
-    const result = messages.find(message => message.type === 'operationFinished')!.result!;
-    assert.equal(result.ok, false);
-    assert.equal(result.message, 'configure failed');
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    provider.receive({
+      type: 'saveSelection',
+      selection: {
+        mode: 'mcu',
+        mcu: { vendor: 'GD', packId: 'builtin:GD', version: 'builtin', series: 'F1x', part: 'GD32F103C8T6' }
+      }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(catalogCalls.includes('GD'), true);
+
+    stmCatalog.resolve({
+      options: [{
+        packId: 'builtin:STM',
+        vendorId: 'STM',
+        name: '内置芯片支持',
+        version: 'builtin',
+        origin: 'builtin'
+      }],
+      notice: 'STM index unavailable'
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(
+      provider.messages.some((message) => (
+        message.type === 'packCatalogLoading' && message.vendor === 'GD'
+      )),
+      true
+    );
+
+    gdCatalog.resolve({
+      options: [{
+        packId: 'builtin:GD',
+        vendorId: 'GD',
+        name: '内置芯片支持',
+        version: 'builtin',
+        origin: 'builtin'
+      }, {
+        packId: 'GD:GD32F1_DFP',
+        vendorId: 'GD',
+        name: 'GD32F1_DFP',
+        version: '1.10.0',
+        origin: 'downloadable',
+        packUrl: 'https://packs.example/GD32F1_DFP.1.10.0.pack'
+      }],
+      notice: ''
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(
+      provider.messages.some((message) => (
+        message.type === 'packCatalogState'
+        && message.vendor === 'GD'
+        && JSON.stringify(message.packs).includes('GD:GD32F1_DFP')
+      )),
+      true
+    );
+    assert.equal(
+      provider.messages.some((message) => (
+        message.type === 'packCatalogState'
+        && message.vendor === 'GD'
+        && JSON.stringify(message.packs).includes('builtin:STM')
+      )),
+      false
+    );
   } finally {
-    gate.resolve({ ok: false, message: 'stopped' });
     provider.dispose();
+  }
+});
+
+test('sidebar persists the exact downloaded Pack identity and selects its first usable device', async () => {
+  const writes: unknown[] = [];
+  const selection = {
+    mode: 'mcu',
+    projectRoot: '',
+    mcu: {
+      vendor: 'STM',
+      packId: 'builtin:STM',
+      version: 'builtin',
+      series: 'F1x',
+      part: 'STM32F103C8T6'
+    },
+    linux: { toolchainFamily: 'loongson' },
+    native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
+    debugEnabled: false,
+    flash: {
+      enabled: false,
+      targetId: 'stm32f1xx',
+      probeId: 'stlink',
+      openocdPath: 'openocd',
+      backend: 'openocd'
+    }
+  };
+  const catalogOption = {
+    packId: 'STM:STM32F1xx_DFP',
+    vendorId: 'STM',
+    name: 'STM32F1xx_DFP',
+    version: '1.10.0',
+    origin: 'downloadable',
+    packUrl: 'https://packs.example/STM32F1xx_DFP.1.10.0.pack'
+  };
+  const sourcePack = 'packs/STM/STM32F1xx_DFP.1.10.0.pack';
+  const builtin = getDeviceProfile('STM32F103C8T6');
+  registerDeviceProfiles([{
+    ...builtin,
+    family: 'STM32F1xx custom Pack',
+    ram: { ...builtin.ram, length: 24 * 1024 }
+  }], sourcePack);
+  const provider = startProvider(selection, {
+    loadPackCatalog: async () => ({
+      options: [{
+        packId: 'builtin:STM',
+        vendorId: 'STM',
+        name: '内置芯片支持',
+        version: 'builtin',
+        origin: 'builtin'
+      }, catalogOption]
+    }),
+    activatePack: async () => ({
+      vendorId: 'STM',
+      packId: 'STM:STM32F1xx_DFP',
+      version: '1.10.0',
+      sourcePack,
+      message: '已载入 STM32F1xx_DFP 1.10.0。'
+    })
+  }, writes);
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    provider.receive({
+      type: 'activatePack',
+      packId: 'STM:STM32F1xx_DFP',
+      version: '1.10.0'
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const state = latestState(provider.messages);
+    assert.equal(state?.selection.mcu.packId, 'STM:STM32F1xx_DFP');
+    assert.equal(state?.selection.mcu.version, '1.10.0');
+    assert.equal(state?.selection.mcu.sourcePack, sourcePack);
+    assert.equal(state?.selection.mcu.series, 'F1x');
+    assert.equal(state?.selection.mcu.part, 'STM32F103C8T6');
+    assert.equal(
+      (writes.at(-1) as { mcu?: { packId?: string; version?: string } } | undefined)?.mcu?.packId,
+      'STM:STM32F1xx_DFP'
+    );
+  } finally {
+    provider.dispose();
+    unregisterDeviceProfilesByPack(sourcePack);
+  }
+});
+
+test('sidebar activates an installed Pack through its storage key, not the Keil install path', async () => {
+  const writes: unknown[] = [];
+  const selection = {
+    mode: 'mcu',
+    projectRoot: '',
+    mcu: {
+      vendor: 'STM',
+      packId: 'builtin:STM',
+      version: 'builtin',
+      series: 'F1x',
+      part: 'STM32F103C8T6'
+    },
+    linux: { toolchainFamily: 'loongson' },
+    native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
+    debugEnabled: false,
+    flash: {
+      enabled: false,
+      targetId: 'stm32f1xx',
+      probeId: 'stlink',
+      openocdPath: 'openocd',
+      backend: 'openocd'
+    }
+  };
+  const sourcePack = 'packs/STM/STM32F1xx_DFP.2.4.1.pack';
+  const installPath = 'C:/Keil_v5/ARM/PACK/Keil/STM32F1xx_DFP/2.4.1';
+  const builtin = getDeviceProfile('STM32F103C8T6');
+  registerDeviceProfiles([{
+    ...builtin,
+    ram: { ...builtin.ram, length: 20 * 1024 }
+  }], sourcePack);
+  const provider = startProvider(selection, {
+    loadPackCatalog: async () => ({
+      options: [{
+        packId: 'builtin:STM',
+        vendorId: 'STM',
+        name: '内置芯片支持',
+        version: 'builtin',
+        origin: 'builtin'
+      }, {
+        packId: 'STM:STM32F1xx_DFP',
+        vendorId: 'STM',
+        name: 'STM32F1xx_DFP',
+        version: '2.4.1',
+        origin: 'installed',
+        packFile: installPath,
+        source: 'directory'
+      }],
+      notice: ''
+    }),
+    activatePack: async () => ({
+      vendorId: 'STM',
+      packId: 'STM:STM32F1xx_DFP',
+      version: '2.4.1',
+      sourcePack,
+      message: '已载入 STM32F1xx_DFP 2.4.1。'
+    })
+  }, writes);
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    provider.receive({
+      type: 'activatePack',
+      packId: 'STM:STM32F1xx_DFP',
+      version: '2.4.1'
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const state = latestState(provider.messages);
+    const result = [...provider.messages].reverse()
+      .find((message) => message.type === 'operationFinished')?.result as { ok?: boolean } | undefined;
+    assert.equal(result?.ok, true, 'installed Pack activation must succeed');
+    assert.equal(state?.selection.mcu.packId, 'STM:STM32F1xx_DFP');
+    assert.equal(state?.selection.mcu.version, '2.4.1');
+    assert.equal(state?.selection.mcu.sourcePack, sourcePack);
+    assert.equal(state?.selection.mcu.part, 'STM32F103C8T6');
+    assert.equal(state?.versions.length, 1);
+    assert.equal(state?.versions[0].value, '2.4.1');
+  } finally {
+    provider.dispose();
+    unregisterDeviceProfilesByPack(sourcePack);
+  }
+});
+
+test('sidebar keeps the previous valid Pack selection when download or parsing fails', async () => {
+  const writes: unknown[] = [];
+  const selection = {
+    mode: 'mcu',
+    projectRoot: '',
+    mcu: {
+      vendor: 'STM',
+      packId: 'STM:STM32F1xx_DFP',
+      version: '1.0.0',
+      sourcePack: 'packs/STM/STM32F1xx_DFP.1.0.0.pack',
+      series: 'F1x',
+      part: 'STM32F103C8T6'
+    },
+    linux: { toolchainFamily: 'loongson' },
+    native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
+    debugEnabled: false,
+    flash: {
+      enabled: false,
+      targetId: 'stm32f1xx',
+      probeId: 'stlink',
+      openocdPath: 'openocd',
+      backend: 'openocd'
+    }
+  };
+  const builtin = getDeviceProfile('STM32F103C8T6');
+  registerDeviceProfiles([{
+    ...builtin,
+    ram: { ...builtin.ram, length: 20 * 1024 }
+  }], 'packs/STM/STM32F1xx_DFP.1.0.0.pack');
+  const provider = startProvider(selection, {
+    loadPackCatalog: async () => ({
+      options: [{
+        packId: 'STM:STM32F1xx_DFP',
+        vendorId: 'STM',
+        name: 'STM32F1xx_DFP',
+        version: '1.0.0',
+        origin: 'installed',
+        packFile: 'C:/Arm/Packs/STM/1.0.0'
+      }, {
+        packId: 'STM:STM32F1xx_DFP',
+        vendorId: 'STM',
+        name: 'STM32F1xx_DFP',
+        version: '2.0.0',
+        origin: 'downloadable',
+        packUrl: 'https://packs.example/STM32F1xx_DFP.2.0.0.pack'
+      }]
+    }),
+    activatePack: async () => {
+      throw new Error('download failed');
+    }
+  }, writes);
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const before = latestState(provider.messages)?.selection.mcu;
+    provider.receive({
+      type: 'activatePack',
+      packId: 'STM:STM32F1xx_DFP',
+      version: '2.0.0'
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const after = latestState(provider.messages)?.selection.mcu;
+    assert.deepEqual(after, before);
+    assert.equal(after?.version, '1.0.0');
+    assert.equal(after?.part, 'STM32F103C8T6');
+    assert.equal(writes.length, 0);
+    const result = [...provider.messages].reverse()
+      .find((message) => message.type === 'operationFinished')?.result as {
+        ok?: boolean;
+        message?: string;
+      } | undefined;
+    assert.equal(result?.ok, false);
+    assert.match(result?.message ?? '', /download failed/);
+  } finally {
+    provider.dispose();
+    unregisterDeviceProfilesByPack('packs/STM/STM32F1xx_DFP.1.0.0.pack');
   }
 });
 

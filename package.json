@@ -82,14 +82,6 @@
       {
         "command": "cmakeEmbedded.removePack",
         "title": "CMake-Embedded: Remove Imported CMSIS Pack"
-      },
-      {
-        "command": "cmakeEmbedded.buildProject",
-        "title": "CMake-Embedded: Build Project"
-      },
-      {
-        "command": "cmakeEmbedded.selectArmToolchain",
-        "title": "CMake-Embedded: Select ARM GNU GCC Toolchain"
       }
     ],
     "configuration": {
@@ -99,12 +91,6 @@
           "type": "string",
           "default": "openocd",
           "description": "Path to the OpenOCD executable. Use openocd when it is available in PATH."
-        },
-        "cmakeEmbedded.armToolchainPath": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "ARM GNU **GCC toolchain bin directory** used for CMake builds and Cortex-Debug. The directory must contain `arm-none-eabi-gcc`, `arm-none-eabi-g++`, `arm-none-eabi-objcopy` and `arm-none-eabi-size`. Configure it in the MCU sidebar or use **CMake-Embedded: Select ARM GNU GCC Toolchain**. Leave empty to resolve tools on PATH.",
-          "order": 1
         },
         "cmakeEmbedded.jlinkPath": {
           "type": "string",

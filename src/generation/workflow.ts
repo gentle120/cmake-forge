@@ -60,7 +60,6 @@ export interface WorkflowResult {
 }
 
 export interface McuWorkflowOptions {
-  compilerPath?: string;
   flash?: {
     target: FlashTargetProfile;
     probe: FlashProbeProfile;
@@ -246,7 +245,7 @@ export async function generateMcuWorkflow(
     : undefined;
   const cppPropertiesFile: GeneratedFile = {
     path: cppPropertiesPath,
-    content: configureCppProperties(cppPropertiesContent, options.compilerPath)
+    content: configureCppProperties(cppPropertiesContent)
   };
   await writeGeneratedFiles([...generatedFiles, configFile, cppPropertiesFile]);
   await host.updateSettings(getWorkspaceSettings());
@@ -542,7 +541,6 @@ export async function generateDebugWorkflow(
   target: FlashTargetProfile,
   probe: FlashProbeProfile,
   openocdPath: string,
-  armToolchainPath?: string,
   backend: FlashBackendId = 'openocd',
   device?: FlashDeviceContext
 ): Promise<WorkflowResult> {
@@ -561,7 +559,6 @@ export async function generateDebugWorkflow(
     : undefined;
   const content = generateCortexDebugLaunchJson(existingContent, {
     openocdPath,
-    armToolchainPath,
     target,
     probe,
     backend,

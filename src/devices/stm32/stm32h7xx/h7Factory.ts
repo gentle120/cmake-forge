@@ -1,4 +1,5 @@
 import type { DeviceProfile } from '../../deviceProfiles';
+import { createStm32BuiltinProfile } from '../builtinProfileFactory';
 
 // External IRQ section transcribed from cmsis-device-h7
 // Source/Templates/gcc/startup_stm32h743xx.s (IRQ 0-149); '0' marks the slots
@@ -125,42 +126,10 @@ export const stm32h723InterruptHandlers = [
   'TIM23_IRQHandler', 'TIM24_IRQHandler'
 ];
 
-interface Stm32H7ProfileOptions {
-  flashLength?: number;
-  interruptHandlers?: string[];
-  additionalMemory?: DeviceProfile['additionalMemory'];
-}
-
-export function createStm32H7Profile(
-  part: string,
-  linkerFileName: string,
-  define: string,
-  options: Stm32H7ProfileOptions = {}
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'H7x',
-    family: 'STM32H7xx',
-    core: 'cortex-m7',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [define],
-    compilerFlags: ['-mcpu=cortex-m7', '-mthumb', '-mfpu=fpv5-d16', '-mfloat-abi=hard'],
-    flash: { origin: 0x08000000, length: options.flashLength ?? 2048 * 1024 },
-    // DTCM is the core-adjacent main RAM; the domain banks follow as
-    // additional regions named after the ST linker-script convention.
-    ram: { origin: 0x20000000, length: 128 * 1024 },
-    additionalMemory: options.additionalMemory ?? [
-      { name: 'RAM_D1', attributes: 'rw', origin: 0x24000000, length: 512 * 1024 },
-      { name: 'RAM_D2', attributes: 'rw', origin: 0x30000000, length: 288 * 1024 },
-      { name: 'RAM_D3', attributes: 'rw', origin: 0x38000000, length: 64 * 1024 },
-      { name: 'ITCM', attributes: 'rwx', origin: 0x00000000, length: 64 * 1024 }
-    ],
-    linkerFileName,
-    gnuStartupFileName: `startup_${define.toLowerCase()}.S`,
-    toolchainFileName: 'stm32h7-toolchain.cmake',
-    interruptHandlers: [...(options.interruptHandlers ?? stm32h743InterruptHandlers)],
-    debugTarget: 'stm32h7x'
-  };
+export function createStm32H7Profile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'H7x', {
+    stm32h743InterruptHandlers,
+    stm32h750InterruptHandlers,
+    stm32h723InterruptHandlers
+  });
 }

@@ -88,49 +88,16 @@ export function renderSidebarHtml(
     </section>
 
     <section id="mcu-panel" class="configuration-panel" aria-label="MCU 配置" hidden>
-      <section class="control-section toolchain-section" aria-labelledby="arm-toolchain-title">
-        <div class="section-header">
-          <span class="ui-icon" data-icon="tools" aria-hidden="true"></span>
-          <div class="section-heading">
-            <h2 id="arm-toolchain-title">ARM GNU GCC</h2>
-            <p>指定已安装的 ARM GNU 工具链，生成与调试共用该目录。</p>
-          </div>
-        </div>
-        <div class="path-field">
-          <label class="field-label" for="arm-gcc-path">工具链 bin 目录</label>
-          <div class="path-row">
-            <input id="arm-gcc-path" class="path-input" type="text" spellcheck="false" autocomplete="off"
-              autocapitalize="off" placeholder="留空使用 PATH">
-            <button id="browse-arm-toolchain" class="secondary-action compact" type="button" data-command="browseArmToolchain">
-              <span class="ui-icon" data-icon="folder" aria-hidden="true"></span><span>浏览…</span>
-            </button>
-          </div>
-          <p id="arm-gcc-hint" class="field-detail">留空使用 PATH；输入后按 Enter 或移出输入框保存。</p>
-        </div>
-        <div id="arm-gcc-status" class="toolchain-status" data-state="path" role="status" aria-live="polite">
-          <span class="ui-icon" data-icon="folder" aria-hidden="true"></span>
-          <div class="toolchain-copy">
-            <strong class="toolchain-title">使用 PATH</strong>
-            <span class="toolchain-message"></span>
-          </div>
-        </div>
-        <p id="arm-gcc-notice" class="toolchain-notice" role="alert" hidden></p>
-      </section>
-
       <section class="control-section target-section" aria-labelledby="target-title">
         <div class="section-header">
           <span class="ui-icon" data-icon="chip" aria-hidden="true"></span>
           <div class="section-heading">
             <h2 id="target-title">目标配置</h2>
-            <p>先导入可选 CMSIS Pack，再选择厂商、系列与型号。</p>
+            <p>选择芯片支持包及版本，再确定系列与型号。</p>
           </div>
         </div>
-        <div id="target-actions" class="section-actions">
-          <button id="import-pack" class="secondary-action" type="button" data-command="importPack">
-            <span class="ui-icon" data-icon="package" aria-hidden="true"></span><span>导入 Pack</span>
-          </button>
-        </div>
         <div id="target-host" class="target-host"></div>
+        <p id="pack-catalog-notice" class="field-detail" role="status" aria-live="polite" hidden></p>
       </section>
 
       <section class="control-section flash-section" aria-labelledby="flash-title">
@@ -201,11 +168,6 @@ export function renderSidebarHtml(
         </button>
       </div>
       <p id="workspace-summary" class="workspace-summary" aria-live="polite">尚未扫描工作区</p>
-      <div id="mode-actions" class="section-actions">
-        <button id="import-pack-any" class="secondary-action" type="button" data-command="importPack">
-          <span class="ui-icon" data-icon="package" aria-hidden="true"></span><span>导入 Pack</span>
-        </button>
-      </div>
     </section>
 
     <section id="result-region" class="result-region" hidden>
@@ -218,9 +180,6 @@ export function renderSidebarHtml(
     <footer id="actions" class="actions">
       <button id="generate-project" class="primary-action" type="button" data-command="generateProject">
         <span class="ui-icon" data-icon="play" aria-hidden="true"></span><span>生成工程</span>
-      </button>
-      <button id="build-project" class="secondary-action" type="button" data-command="buildProject">
-        <span class="ui-icon" data-icon="play" aria-hidden="true"></span><span>构建…</span>
       </button>
     </footer>
   </main>

@@ -1,4 +1,5 @@
 import type { DeviceProfile } from '../../deviceProfiles';
+import { createStm32BuiltinProfile } from '../builtinProfileFactory';
 
 // Vector tables transcribed from STMicroelectronics/cmsis-device-f3
 // Source/Templates/gcc/startup_stm32f303xc.s, startup_stm32f334x8.s and
@@ -76,37 +77,10 @@ export const stm32f373InterruptHandlers = [
   '0', 'FPU_IRQHandler'
 ];
 
-interface Stm32F3ProfileOptions {
-  define: string;
-  flashLength: number;
-  ramLength: number;
-  additionalMemory?: DeviceProfile['additionalMemory'];
-  gnuStartupFileName: string;
-  interruptHandlers: string[];
-}
-
-export function createStm32F3Profile(
-  part: string,
-  linkerFileName: string,
-  options: Stm32F3ProfileOptions
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'F3x',
-    family: 'STM32F3xx',
-    core: 'cortex-m4',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [options.define],
-    compilerFlags: ['-mcpu=cortex-m4', '-mthumb', '-mfpu=fpv4-sp-d16', '-mfloat-abi=hard'],
-    flash: { origin: 0x08000000, length: options.flashLength },
-    ram: { origin: 0x20000000, length: options.ramLength },
-    additionalMemory: options.additionalMemory,
-    linkerFileName,
-    gnuStartupFileName: options.gnuStartupFileName,
-    toolchainFileName: 'stm32f3-toolchain.cmake',
-    interruptHandlers: [...options.interruptHandlers],
-    debugTarget: 'stm32f3x'
-  };
+export function createStm32F3Profile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'F3x', {
+    stm32f303InterruptHandlers,
+    stm32f334InterruptHandlers,
+    stm32f373InterruptHandlers
+  });
 }

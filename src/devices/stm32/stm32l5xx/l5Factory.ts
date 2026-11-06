@@ -1,4 +1,5 @@
 import type { DeviceProfile } from '../../deviceProfiles';
+import { createStm32BuiltinProfile } from '../builtinProfileFactory';
 
 // External IRQ section transcribed from cmsis-device-l5
 // Source/Templates/gcc/startup_stm32l552xx.s (IRQ 0-108); '0' marks the slots
@@ -46,34 +47,9 @@ export const stm32l562InterruptHandlers = [
   'OTFDEC1_IRQHandler'
 ];
 
-interface Stm32L5ProfileOptions {
-  flashLength?: number;
-  interruptHandlers?: string[];
-}
-
-export function createStm32L5Profile(
-  part: string,
-  linkerFileName: string,
-  define: string,
-  options: Stm32L5ProfileOptions = {}
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'L5x',
-    family: 'STM32L5xx',
-    core: 'cortex-m33',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [define],
-    compilerFlags: ['-mcpu=cortex-m33', '-mthumb', '-mfpu=fpv5-sp-d16', '-mfloat-abi=hard'],
-    flash: { origin: 0x08000000, length: options.flashLength ?? 256 * 1024 },
-    // SRAM1 (192K) and SRAM2 (64K) form one contiguous 256K block (RM092).
-    ram: { origin: 0x20000000, length: 256 * 1024 },
-    linkerFileName,
-    gnuStartupFileName: `startup_${define.toLowerCase()}.S`,
-    toolchainFileName: 'stm32l5-toolchain.cmake',
-    interruptHandlers: [...(options.interruptHandlers ?? stm32l552InterruptHandlers)],
-    debugTarget: 'stm32l5x'
-  };
+export function createStm32L5Profile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'L5x', {
+    stm32l552InterruptHandlers,
+    stm32l562InterruptHandlers
+  });
 }

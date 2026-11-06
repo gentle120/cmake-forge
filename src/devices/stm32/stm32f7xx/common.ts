@@ -1,4 +1,5 @@
 import type { DeviceProfile } from '../../deviceProfiles';
+import { createStm32BuiltinProfile } from '../builtinProfileFactory';
 
 // Vector tables transcribed from STMicroelectronics/cmsis-device-f7
 // Source/Templates/gcc/startup_stm32f746xx.s and startup_stm32f767xx.s
@@ -45,39 +46,9 @@ export const stm32f767InterruptHandlers = [
   'CAN3_RX1_IRQHandler', 'CAN3_SCE_IRQHandler', 'JPEG_IRQHandler', 'MDIOS_IRQHandler'
 ];
 
-interface Stm32F7ProfileOptions {
-  define: string;
-  flashLength: number;
-  ramLength: number;
-  additionalMemory: DeviceProfile['additionalMemory'];
-  gnuStartupFileName: string;
-  interruptHandlers: string[];
-}
-
-export function createStm32F7Profile(
-  part: string,
-  linkerFileName: string,
-  options: Stm32F7ProfileOptions
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'F7x',
-    family: 'STM32F7xx',
-    core: 'cortex-m7',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [options.define],
-    compilerFlags: ['-mcpu=cortex-m7', '-mthumb', '-mfpu=fpv5-sp-d16', '-mfloat-abi=hard'],
-    flash: { origin: 0x08000000, length: options.flashLength },
-    // RAM is the DTCM: DMA cannot reach it by default, so the bus-matrix SRAM
-    // block stays a separate linker region.
-    ram: { origin: 0x20000000, length: options.ramLength },
-    additionalMemory: options.additionalMemory,
-    linkerFileName,
-    gnuStartupFileName: options.gnuStartupFileName,
-    toolchainFileName: 'stm32f7-toolchain.cmake',
-    interruptHandlers: [...options.interruptHandlers],
-    debugTarget: 'stm32f7x'
-  };
+export function createStm32F7Profile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'F7x', {
+    stm32f746InterruptHandlers,
+    stm32f767InterruptHandlers
+  });
 }

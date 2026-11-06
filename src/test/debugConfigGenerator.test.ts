@@ -56,15 +56,14 @@ test('preserves user Cortex-Debug configurations and replaces its generated entr
   ]);
 });
 
-test('adds the configured ARM GNU toolchain path for Cortex-Debug', () => {
+test('does not inject a machine-local ARM GNU toolchain path for Cortex-Debug', () => {
   const launch = JSON.parse(generateCortexDebugLaunchJson(undefined, {
     openocdPath: 'D:\\Tools\\OpenOCD\\bin\\openocd.exe',
-    armToolchainPath: 'D:/Desktop/tools/toolchain/arm_gnu_toolchain/bin',
     target: getFlashTargetProfile('stm32f4xx'),
     probe: getFlashProbeProfile('stlink')
   }));
 
   const config = launch.configurations[0];
-  assert.equal(config.armToolchainPath, 'D:/Desktop/tools/toolchain/arm_gnu_toolchain/bin');
+  assert.equal(config.armToolchainPath, undefined);
   assert.equal(config.toolchainPrefix, 'arm-none-eabi');
 });

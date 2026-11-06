@@ -161,16 +161,11 @@ test('generates the stm32f3 toolchain file with the fpv4 hard-float flags', () =
   assert.match(toolchain, /STM32F303CCT6\.ld/);
 });
 
-test('builds additional profiles through the shared factory', () => {
-  const custom = createStm32F3Profile('STM32F303K8T6', 'CUSTOM.ld', {
-    define: 'STM32F303x8',
-    flashLength: 64 * 1024,
-    ramLength: 16 * 1024,
-    gnuStartupFileName: 'startup_stm32f303x8.S',
-    interruptHandlers: stm32f303InterruptHandlers
-  });
+test('factory derives normalized profile data from the registered part', () => {
+  const profile = createStm32F3Profile('STM32F334C8T6');
 
-  assert.equal(custom.series, 'F3x');
-  assert.equal(custom.toolchainFileName, 'stm32f3-toolchain.cmake');
-  assert.equal(custom.additionalMemory, undefined);
+  assert.equal(profile.series, 'F3x');
+  assert.equal(profile.linkerFileName, 'STM32F334C8T6.ld');
+  assert.equal(profile.toolchainFileName, 'stm32f3-toolchain.cmake');
+  assert.equal(profile.additionalMemory?.[0].length, 4 * 1024);
 });

@@ -1,4 +1,5 @@
 import type { DeviceProfile } from '../../deviceProfiles';
+import { createStm32BuiltinProfile } from '../builtinProfileFactory';
 
 // Vector tables transcribed from STMicroelectronics/cmsis-device-f2
 // Source/Templates/gcc/startup_stm32f205xx.s, startup_stm32f207xx.s,
@@ -57,34 +58,11 @@ export const stm32f217InterruptHandlers = [
   'CRYP_IRQHandler', 'HASH_RNG_IRQHandler'
 ];
 
-interface Stm32F2ProfileOptions {
-  define?: string;
-  gnuStartupFileName?: string;
-  interruptHandlers?: string[];
-}
-
-export function createStm32F2Profile(
-  part: string,
-  linkerFileName: string,
-  options: Stm32F2ProfileOptions = {}
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'F2x',
-    family: 'STM32F2xx',
-    core: 'cortex-m3',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [options.define ?? 'STM32F205xx'],
-    compilerFlags: ['-mcpu=cortex-m3', '-mthumb'],
-    flash: { origin: 0x08000000, length: 1024 * 1024 },
-    ram: { origin: 0x20000000, length: 128 * 1024 },
-    additionalMemory: [{ name: 'CCM', attributes: 'rw', origin: 0x10000000, length: 64 * 1024 }],
-    linkerFileName,
-    gnuStartupFileName: options.gnuStartupFileName ?? 'startup_stm32f205xx.S',
-    toolchainFileName: 'stm32f2-toolchain.cmake',
-    interruptHandlers: [...(options.interruptHandlers ?? stm32f205InterruptHandlers)],
-    debugTarget: 'stm32f2x'
-  };
+export function createStm32F2Profile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'F2x', {
+    stm32f205InterruptHandlers,
+    stm32f207InterruptHandlers,
+    stm32f215InterruptHandlers,
+    stm32f217InterruptHandlers
+  });
 }

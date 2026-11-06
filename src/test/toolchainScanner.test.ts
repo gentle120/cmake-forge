@@ -58,37 +58,23 @@ test('builds win32 scan roots from the environment', () => {
   assert.deepEqual(roots.pathDirs, ['C:/tools/bin', 'C:/segger']);
 });
 
-test('includes detected drives and EIDE / standalone ARM GNU installations', () => {
+test('includes detected drives without exposing standalone ARM GNU path scanning', () => {
   const roots = defaultScanRoots('win32', {}, 'C:/Users/dev', ['C:/', 'D:/']);
   assert.deepEqual(roots.cltRoots, ['C:/ST', 'C:/', 'D:/ST', 'D:/']);
-  assert.ok(roots.armGccRoots?.includes('C:/Users/dev/.eide/tools/gcc_arm'));
-  assert.ok(roots.armGccRoots?.includes('C:/Program Files/Arm GNU Toolchain arm-none-eabi'));
+  assert.equal('armGccRoots' in roots, false);
 });
 
-test('finds EIDE and a CubeCLT installation outside the system drive', () => {
-  const fs = createFakeFs({ 'D:/': ['STM32CubeCLT_1.20.0'] }, [
-    'C:/Users/dev/.eide/tools/gcc_arm/bin/arm-none-eabi-gcc.exe',
-    'D:/STM32CubeCLT_1.20.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc.exe'
-  ]);
-  const hits = scanToolchains(scanRoots({
-    armGccRoots: ['C:/Users/dev/.eide/tools/gcc_arm'], cltRoots: ['D:/']
-  }), fs);
-  assert.deepEqual(hits.map(hit => hit.path), [
-    'C:/Users/dev/.eide/tools/gcc_arm/bin',
-    'D:/STM32CubeCLT_1.20.0/GNU-tools-for-STM32/bin'
-  ]);
-});
-
-test('uses numeric installation versions and deduplicates an ARM bin found on PATH', () => {
+test('uses numeric STM32CubeCLT installation versions for non-ARM tools', () => {
   const fs = createFakeFs({ 'D:/': ['STM32CubeCLT_1.9.0', 'STM32CubeCLT_1.20.0'] }, [
-    'D:/STM32CubeCLT_1.9.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc.exe',
-    'D:/STM32CubeCLT_1.20.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc.exe'
+    'D:/STM32CubeCLT_1.9.0/OpenOCD/bin/openocd.exe',
+    'D:/STM32CubeCLT_1.20.0/OpenOCD/bin/openocd.exe'
   ]);
-  const hits = scanToolchains(scanRoots({
-    cltRoots: ['D:/'], pathDirs: ['D:/STM32CubeCLT_1.20.0/GNU-tools-for-STM32/bin']
-  }), fs);
-  assert.equal(hits.length, 1);
-  assert.equal(hits[0].path, 'D:/STM32CubeCLT_1.20.0/GNU-tools-for-STM32/bin');
+  const hits = scanToolchains(scanRoots({ cltRoots: ['D:/'] }), fs);
+  assert.deepEqual(hits, [{
+    kind: 'openocd',
+    label: 'OpenOCD (STM32CubeCLT)',
+    path: 'D:/STM32CubeCLT_1.20.0/OpenOCD/bin/openocd.exe'
+  }]);
 });
 
 test('omits win32 environment entries that are not set', () => {
@@ -128,7 +114,6 @@ test('probes every STM32CubeCLT tool in the newest installation', () => {
     },
     [
       'C:/ST/STM32CubeCLT_1.13.1/OpenOCD/bin/openocd.exe',
-      'C:/ST/STM32CubeCLT_1.16.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc.exe',
       'C:/ST/STM32CubeCLT_1.16.0/OpenOCD/bin/openocd.exe',
       'C:/ST/STM32CubeCLT_1.16.0/STLink-gdb-server/bin/ST-LINK_gdbserver.exe',
       'C:/ST/STM32CubeCLT_1.16.0/STM32CubeProgrammer/bin/STM32_Programmer_CLI.exe'
@@ -136,11 +121,6 @@ test('probes every STM32CubeCLT tool in the newest installation', () => {
   );
 
   assert.deepEqual(scanToolchains(scanRoots({ cltRoots: ['C:/ST'] }), fs), [
-    {
-      kind: 'arm-gcc',
-      label: 'STM32CubeCLT ARM GCC',
-      path: 'C:/ST/STM32CubeCLT_1.16.0/GNU-tools-for-STM32/bin'
-    },
     {
       kind: 'openocd',
       label: 'OpenOCD (STM32CubeCLT)',
@@ -177,16 +157,16 @@ test('keeps STM32CubeCLT tools that exist and skips the missing ones', () => {
 test('uses a clt root that already is an installation directory', () => {
   const fs = createFakeFs(
     {},
-    ['C:/ST/STM32CubeCLT_1.15.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc']
+    ['C:/ST/STM32CubeCLT_1.15.0/OpenOCD/bin/openocd']
   );
 
   assert.deepEqual(
     scanToolchains(scanRoots({ cltRoots: ['C:/ST/STM32CubeCLT_1.15.0'] }), fs),
     [
       {
-        kind: 'arm-gcc',
-        label: 'STM32CubeCLT ARM GCC',
-        path: 'C:/ST/STM32CubeCLT_1.15.0/GNU-tools-for-STM32/bin'
+        kind: 'openocd',
+        label: 'OpenOCD (STM32CubeCLT)',
+        path: 'C:/ST/STM32CubeCLT_1.15.0/OpenOCD/bin/openocd'
       }
     ]
   );
@@ -215,7 +195,6 @@ test('finds the supported tools on PATH', () => {
   const fs = createFakeFs(
     {},
     [
-      'C:/tools/bin/arm-none-eabi-gcc.exe',
       'C:/tools/bin/openocd.exe',
       'C:/tools/bin/pyocd.exe',
       'C:/segger/JLinkExe'
@@ -225,7 +204,6 @@ test('finds the supported tools on PATH', () => {
   assert.deepEqual(
     scanToolchains(scanRoots({ pathDirs: ['C:/tools/bin', 'C:/segger', 'C:/empty'] }), fs),
     [
-      { kind: 'arm-gcc', label: 'arm-none-eabi-gcc (PATH)', path: 'C:/tools/bin' },
       { kind: 'openocd', label: 'OpenOCD (PATH)', path: 'C:/tools/bin/openocd.exe' },
       { kind: 'pyocd', label: 'pyOCD (PATH)', path: 'C:/tools/bin/pyocd.exe' },
       { kind: 'jlink', label: 'SEGGER J-Link (PATH)', path: 'C:/segger/JLinkExe' }
@@ -268,7 +246,6 @@ test('keeps the scan order Keil, STM32CubeCLT, SEGGER, PATH', () => {
       'C:/Program Files/SEGGER': ['JLink_V794e']
     },
     [
-      'C:/ST/STM32CubeCLT_1.16.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc.exe',
       'C:/Program Files/SEGGER/JLink_V794e/JLink.exe',
       'D:/pyocd/pyocd.exe'
     ]
@@ -284,7 +261,7 @@ test('keeps the scan order Keil, STM32CubeCLT, SEGGER, PATH', () => {
       }),
       fs
     ).map((hit) => hit.kind),
-    ['keil', 'arm-gcc', 'jlink', 'pyocd']
+    ['keil', 'jlink', 'pyocd']
   );
 });
 
@@ -376,4 +353,22 @@ test('lists extracted pack directories and prefers them over the .pack file', ()
       source: 'directory'
     }
   ]);
+});
+
+test('reports the installation folder for an extracted Pack so its PDSC can resolve the identity', () => {
+  const packRoot = 'C:/Keil_v5/ARM/PACK';
+  const fs = createFakeFs({
+    [packRoot]: ['Keil'],
+    [`${packRoot}/Keil`]: ['MS32F0xx_DFP'],
+    [`${packRoot}/Keil/MS32F0xx_DFP`]: ['1.1.1'],
+    [`${packRoot}/Keil/MS32F0xx_DFP/1.1.1`]: ['Sinomcu.MS32F0xx_DFP.pdsc']
+  }, [`${packRoot}/Keil/MS32F0xx_DFP/1.1.1/Sinomcu.MS32F0xx_DFP.pdsc`]);
+
+  assert.deepEqual(listKeilPacks([packRoot], fs), [{
+    packFile: `${packRoot}/Keil/MS32F0xx_DFP/1.1.1`,
+    vendor: 'Keil',
+    name: 'MS32F0xx_DFP',
+    version: '1.1.1',
+    source: 'directory'
+  }]);
 });

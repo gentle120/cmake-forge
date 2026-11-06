@@ -2,19 +2,26 @@ export type SidebarIncomingMessage =
   | { type: 'ready' }
   | { type: 'saveSelection'; selection: unknown }
   | { type: 'setProjectRoot'; root: string }
+  | { type: 'selectPack'; packId: string }
+  | { type: 'activatePack'; packId: string; version: string }
   | { type: 'scanWorkspace' }
   | { type: 'cancelWorkspaceScan' }
   | { type: 'importPack' }
   | { type: 'generateProject' }
   | { type: 'generateFlashScript' }
   | { type: 'generateDebugConfiguration' }
-  | { type: 'buildProject' }
-  | { type: 'browseArmToolchain' }
-  | { type: 'setArmToolchainPath'; path: string }
   | { type: 'openSettings' };
 
 export type SidebarOutgoingMessage =
   | { type: 'state'; state: unknown }
+  | { type: 'packCatalogState'; vendor: string; packs: unknown[]; versions: unknown[]; notice?: string }
+  | {
+      type: 'packCatalogLoading';
+      vendor: string;
+      packs: unknown[];
+      versions: unknown[];
+      notice?: string;
+    }
   | { type: 'operationStarted'; operation: string }
   | {
       type: 'operationFinished';
@@ -36,8 +43,6 @@ const commandTypes = new Set([
   'generateProject',
   'generateFlashScript',
   'generateDebugConfiguration',
-  'buildProject',
-  'browseArmToolchain',
   'openSettings'
 ]);
 
@@ -57,14 +62,19 @@ export function parseIncomingMessage(value: unknown): SidebarIncomingMessage | u
       ? undefined
       : { type: 'saveSelection', selection: record.selection };
   }
-  if (record.type === 'setArmToolchainPath') {
-    return typeof record.path === 'string'
-      ? { type: 'setArmToolchainPath', path: record.path }
-      : undefined;
-  }
   if (record.type === 'setProjectRoot') {
     return typeof record.root === 'string'
       ? { type: 'setProjectRoot', root: record.root }
+      : undefined;
+  }
+  if (record.type === 'selectPack') {
+    return typeof record.packId === 'string'
+      ? { type: 'selectPack', packId: record.packId }
+      : undefined;
+  }
+  if (record.type === 'activatePack') {
+    return typeof record.packId === 'string' && typeof record.version === 'string'
+      ? { type: 'activatePack', packId: record.packId, version: record.version }
       : undefined;
   }
   if (!commandTypes.has(record.type)) {

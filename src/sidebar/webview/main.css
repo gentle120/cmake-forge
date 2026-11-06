@@ -357,18 +357,6 @@ input:disabled {
   overflow-wrap: anywhere;
 }
 
-.section-actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
-  min-width: 0;
-}
-
-#toolchain-actions,
-#target-actions {
-  grid-template-columns: minmax(0, 1fr);
-}
-
 .target-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -398,8 +386,7 @@ input:disabled {
 }
 
 .field select,
-.field input,
-.path-input {
+.field input {
   width: 100%;
   min-width: 0;
   min-height: 32px;
@@ -411,8 +398,7 @@ input:disabled {
 }
 
 .field select:hover,
-.field input:hover,
-.path-input:hover {
+.field input:hover {
   border-color: var(--vscode-focusBorder);
 }
 
@@ -422,24 +408,6 @@ input:disabled {
   font-size: var(--ce-meta);
   line-height: 1.45;
   overflow-wrap: anywhere;
-}
-
-.path-field {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-}
-
-.path-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
-  min-width: 0;
-}
-
-.path-input {
-  font-family: var(--vscode-editor-font-family);
-  font-size: var(--ce-label);
 }
 
 .device-summary {
@@ -733,31 +701,6 @@ input:disabled {
   font-size: var(--ce-meta);
   line-height: 1.45;
   overflow-wrap: anywhere;
-}
-
-.toolchain-notice {
-  margin: 0;
-  padding: 6px 8px;
-  border-left: 2px solid var(--vscode-panel-border);
-  border-radius: 0 3px 3px 0;
-  color: var(--vscode-descriptionForeground);
-  font-size: var(--ce-meta);
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-
-.toolchain-notice[data-tone="success"] {
-  border-left-color: var(--vscode-testing-iconPassed);
-}
-
-.toolchain-notice[data-tone="error"] {
-  border-left-color: var(--vscode-errorForeground);
-  color: var(--vscode-errorForeground);
-}
-
-.toolchain-notice[data-tone="warning"],
-.toolchain-notice[data-tone="cancelled"] {
-  border-left-color: var(--vscode-editorWarning-foreground, var(--vscode-panel-border));
 }
 
 .operation-notice {
@@ -1058,10 +1001,6 @@ input:disabled {
 }
 
 @media (min-width: 300px) {
-  .path-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
   .actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1082,10 +1021,6 @@ input:disabled {
 
   .mode-switcher #mode-native {
     grid-column: auto;
-  }
-
-  .section-actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

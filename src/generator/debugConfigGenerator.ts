@@ -11,7 +11,6 @@ const generatedConfigurationName = 'CMake-Embedded OpenOCD';
 
 export interface CortexDebugConfigurationOptions {
   openocdPath: string;
-  armToolchainPath?: string;
   target: FlashTargetProfile;
   probe: FlashProbeProfile;
   searchDirs?: string[];
@@ -152,9 +151,6 @@ function createConfiguration(options: CortexDebugConfigurationOptions): Record<s
     if (options.target.transport !== 'swd') {
       configuration.openOCDLaunchCommands = [`transport select ${options.target.transport}`];
     }
-  }
-  if (options.armToolchainPath?.trim()) {
-    configuration.armToolchainPath = options.armToolchainPath.trim();
   }
   if (options.searchDirs && options.searchDirs.length > 0) {
     configuration.searchDir = [...options.searchDirs];

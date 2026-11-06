@@ -1,5 +1,5 @@
 /**
- * Host toolchain discovery for flash and build backends.
+ * Host tool discovery for flash and debug backends.
  *
  * The scanner is pure Node: every file-system access goes through an injected
  * reader so the whole search is testable and loadable without the VS Code API.
@@ -8,14 +8,12 @@
  *
  * Search areas (win32 first, POSIX best effort):
  *   1. Keil MDK installation directories (kind 'keil')
- *   2. ARM GNU standalone / EIDE installations
- *   3. STM32CubeCLT roots (arm-gcc, openocd, ST-LINK gdb server, CubeProgrammer)
- *   4. SEGGER J-Link installations
- *   5. PATH entries (arm-none-eabi-gcc, openocd, J-Link, pyocd)
+ *   2. STM32CubeCLT roots (openocd, ST-LINK gdb server, CubeProgrammer)
+ *   3. SEGGER J-Link installations
+ *   4. PATH entries (openocd, J-Link, pyocd)
  */
 
 export type ToolchainKind =
-  | 'arm-gcc'
   | 'openocd'
   | 'jlink'
   | 'pyocd'
@@ -32,8 +30,6 @@ export interface ToolchainHit {
 export interface ScanRoots {
   keilDirs: string[];
   packRoots: string[];
-  /** Toolchain installations, or parents containing versioned installations. */
-  armGccRoots?: string[];
   /** Parent directories that contain STM32CubeCLT_* version directories. */
   cltRoots: string[];
   /** Parent directories that contain JLink* version directories. */
@@ -106,18 +102,9 @@ interface CubeClTTool {
   label: string;
   subDirectory: string;
   executable: string;
-  /** The ARM GCC hit points at the bin directory for use as a toolchain path. */
-  reportBinDirectory?: boolean;
 }
 
 const cubeClTTools: CubeClTTool[] = [
-  {
-    kind: 'arm-gcc',
-    label: 'STM32CubeCLT ARM GCC',
-    subDirectory: 'GNU-tools-for-STM32/bin',
-    executable: 'arm-none-eabi-gcc',
-    reportBinDirectory: true
-  },
   {
     kind: 'openocd',
     label: 'OpenOCD (STM32CubeCLT)',
@@ -138,18 +125,6 @@ const cubeClTTools: CubeClTTool[] = [
   }
 ];
 
-function collectArmGccHits(fs: ScanFileSystem, roots: ScanRoots, hits: ToolchainHit[]): void {
-  for (const root of roots.armGccRoots ?? []) {
-    const installations = [root, ...safeReadDir(fs, root).map(entry => joinPath(root, entry))];
-    for (const installation of installations) {
-      const bin = joinPath(installation, 'bin');
-      if (probeExecutable(fs, joinPath(bin, 'arm-none-eabi-gcc'))) {
-        hits.push({ kind: 'arm-gcc', label: 'ARM GNU GCC', path: bin });
-      }
-    }
-  }
-}
-
 function collectCubeClTHits(fs: ScanFileSystem, roots: ScanRoots, hits: ToolchainHit[]): void {
   for (const cltRoot of roots.cltRoots) {
     const installation = resolveVersionedRoot(fs, cltRoot, cubeCltprefix);
@@ -163,7 +138,7 @@ function collectCubeClTHits(fs: ScanFileSystem, roots: ScanRoots, hits: Toolchai
         hits.push({
           kind: tool.kind,
           label: tool.label,
-          path: tool.reportBinDirectory ? binDirectory : executable
+          path: executable
         });
       }
     }
@@ -193,7 +168,6 @@ interface PathTool {
 }
 
 const pathTools: PathTool[] = [
-  { kind: 'arm-gcc', label: 'arm-none-eabi-gcc (PATH)', names: ['arm-none-eabi-gcc'] },
   { kind: 'openocd', label: 'OpenOCD (PATH)', names: ['openocd'] },
   { kind: 'jlink', label: 'SEGGER J-Link (PATH)', names: ['JLink', 'JLinkExe'] },
   { kind: 'pyocd', label: 'pyOCD (PATH)', names: ['pyocd'] }
@@ -208,7 +182,7 @@ function collectPathHits(fs: ScanFileSystem, roots: ScanRoots, hits: ToolchainHi
           hits.push({
             kind: tool.kind,
             label: tool.label,
-            path: tool.kind === 'arm-gcc' ? directory : executable
+            path: executable
           });
           break;
         }
@@ -219,7 +193,7 @@ function collectPathHits(fs: ScanFileSystem, roots: ScanRoots, hits: ToolchainHi
 
 /**
  * Runs the environment scan. Results keep the search-area order (Keil,
- * ARM GNU, STM32CubeCLT, SEGGER, PATH) and duplicate paths are reported once.
+ * STM32CubeCLT, SEGGER, PATH) and duplicate paths are reported once.
  */
 export function scanToolchains(roots: ScanRoots, fs: ScanFileSystem): ToolchainHit[] {
   const hits: ToolchainHit[] = [];
@@ -228,7 +202,6 @@ export function scanToolchains(roots: ScanRoots, fs: ScanFileSystem): ToolchainH
       hits.push({ kind: 'keil', label: 'Keil MDK', path: keilDir });
     }
   }
-  collectArmGccHits(fs, roots, hits);
   collectCubeClTHits(fs, roots, hits);
   collectSeggerHits(fs, roots, hits);
   collectPathHits(fs, roots, hits);
@@ -334,14 +307,6 @@ export function defaultScanRoots(
   return {
     keilDirs,
     packRoots,
-    armGccRoots: [
-      `${normalize(homeDir)}/.eide/tools/gcc_arm`,
-      ...(isWindows ? [programFiles, programFilesX86].flatMap(root => [
-        `${root}/Arm GNU Toolchain arm-none-eabi`,
-        `${root}/Arm GNU Toolchain`,
-        `${root}/GNU Tools ARM Embedded`
-      ]) : ['/opt/arm'])
-    ],
     cltRoots: isWindows ? drives.flatMap(drive => [`${drive}/ST`, `${drive}/`]) : ['/opt/st'],
     seggerRoots: [isWindows ? 'C:/Program Files/SEGGER' : '/opt/SEGGER'],
     pathDirs

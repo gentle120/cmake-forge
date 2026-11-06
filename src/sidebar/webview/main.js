@@ -3,8 +3,6 @@
   let state;
   let busy = false;
   let initiator = null;
-  let gccDirty = false;
-  let gccBrowseIntent = false;
   let activeOperation = '';
   let cancelRequested = false;
 
@@ -21,31 +19,12 @@
   const configuration = document.getElementById('configuration');
   const workspaceSummary = document.getElementById('workspace-summary');
   const cancelWorkspaceScanButton = document.getElementById('cancel-workspace-scan');
-  const modeActions = document.getElementById('mode-actions');
   const operationNotice = document.getElementById('operation-notice');
   const resultRegion = document.getElementById('result-region');
   const generatedFiles = document.getElementById('generated-files');
-  const buildButton = document.getElementById('build-project');
   const toggleFlash = document.getElementById('toggle-flash');
   const toggleDebug = document.getElementById('toggle-debug');
   const backendHint = document.getElementById('backend-hint');
-
-  const gccPath = document.getElementById('arm-gcc-path');
-  const gccBrowse = document.getElementById('browse-arm-toolchain');
-  const gccHint = document.getElementById('arm-gcc-hint');
-  const gccStatus = document.getElementById('arm-gcc-status');
-  const gccStatusIcon = gccStatus.querySelector('.ui-icon');
-  const gccStatusTitle = gccStatus.querySelector('.toolchain-title');
-  const gccStatusMessage = gccStatus.querySelector('.toolchain-message');
-  const gccNotice = document.getElementById('arm-gcc-notice');
-
-  const gccHintDefault = '留空使用 PATH；输入后按 Enter 或移出输入框保存。';
-  const gccHintDirty = '当前输入尚未保存：按 Enter 或移出输入框保存。';
-  const gccLabels = {
-    path: { icon: 'folder', title: '使用 PATH' },
-    ready: { icon: 'pass', title: '工具文件已找到' },
-    missing: { icon: 'warning', title: '目录不完整' }
-  };
 
   function post(message) {
     vscode.postMessage(message);
@@ -180,12 +159,40 @@
   // --- MCU section wiring (created once, then only synced) ---
 
   const targetHost = document.getElementById('target-host');
+  const packCatalogNotice = document.getElementById('pack-catalog-notice');
+  const packCatalogBusy = document.createElement('p');
+  packCatalogBusy.className = 'field-detail';
+  packCatalogBusy.setAttribute('role', 'status');
+  packCatalogBusy.setAttribute('aria-live', 'polite');
+  packCatalogBusy.textContent = '正在读取 Pack 目录…';
+  packCatalogBusy.hidden = true;
   const flashHost = document.getElementById('flash-host');
   const backendDetailsHost = document.getElementById('backend-details-host');
 
   const vendorField = createSelectField('厂商', (value) => {
     if (!state) return;
     saveSelection({ ...state.selection, mcu: { ...state.selection.mcu, vendor: value } });
+  });
+  const packField = createSelectField('芯片支持包 / Pack', (value) => {
+    if (!state) return;
+    post({ type: 'selectPack', packId: value });
+  });
+  const versionField = createSelectField('版本', (value) => {
+    if (!state) return;
+    const selectedVersion = (state.versions || []).find((option) =>
+      String(option.value) === String(value)
+    );
+    if (selectedVersion?.description === 'installed'
+      && state.selection.mcu.packId === state.pendingPackId
+      && state.selection.mcu.version === value) {
+      return;
+    }
+    if (!startOperation(versionField.select, '正在准备芯片支持包')) return;
+    post({
+      type: 'activatePack',
+      packId: state.pendingPackId || state.selection.mcu.packId,
+      version: value
+    });
   });
   const seriesField = createSelectField('系列', (value) => {
     if (!state) return;
@@ -200,7 +207,15 @@
   const deviceName = document.createElement('strong');
   const deviceMeta = document.createElement('span');
   deviceSummary.append(deviceName, deviceMeta);
-  targetHost.append(vendorField.wrapper, seriesField.wrapper, deviceField.wrapper, deviceSummary);
+  targetHost.append(
+    vendorField.wrapper,
+    packField.wrapper,
+    versionField.wrapper,
+    seriesField.wrapper,
+    deviceField.wrapper,
+    deviceSummary,
+    packCatalogBusy
+  );
 
   const backendField = createSelectField('烧录后端', (value) => {
     if (!state) return;
@@ -253,6 +268,8 @@
   function syncTargetSection() {
     const selection = state.selection.mcu;
     applyOptions(vendorField.select, state.vendors, selection.vendor);
+    applyOptions(packField.select, state.packs, state.pendingPackId || selection.packId);
+    applyOptions(versionField.select, state.versions, selection.version);
     applyOptions(seriesField.select, state.series, selection.series);
     applyOptions(deviceField.select, state.devices, selection.part);
     const device = selectedOption(state.devices, selection.part);
@@ -262,6 +279,9 @@
     deviceName.textContent = selection.part || '';
     deviceMeta.textContent = meta;
     deviceSummary.hidden = !device;
+    packCatalogNotice.textContent = state.packCatalogNotice || '';
+    packCatalogNotice.hidden = !packCatalogNotice.textContent;
+    packCatalogBusy.hidden = !state.packCatalogLoading;
   }
 
   function syncFlashSection() {
@@ -284,38 +304,6 @@
     const hint = [backend?.label, probe?.label].filter(Boolean).join(' · ');
     backendHint.textContent = hint;
     backendHint.hidden = !hint;
-  }
-
-  function syncArmToolchain() {
-    const toolchain = state.armToolchain || { binDir: '', state: 'path', message: '' };
-    const stored = toolchain.binDir || '';
-    // An unsaved draft and its caret survive every authoritative refresh; the
-    // field only adopts stored values once the draft is stored or abandoned.
-    if (pathsEqual(gccPath.value, stored) || !gccDirty) {
-      if (gccPath.value !== stored) {
-        gccPath.value = stored;
-      }
-    }
-    gccDirty = !pathsEqual(gccPath.value, stored);
-    const known = gccLabels[toolchain.state] ? toolchain.state : 'path';
-    gccStatus.dataset.state = known;
-    setIcon(gccStatusIcon, gccLabels[known].icon);
-    gccStatusTitle.textContent = gccLabels[known].title;
-    gccStatusMessage.textContent = toolchain.message || '';
-    gccHint.textContent = gccDirty ? gccHintDirty : gccHintDefault;
-  }
-
-  function normalizePathValue(value) {
-    return String(value ?? '')
-      .trim()
-      .replace(/^"(.*)"$/, '$1')
-      .replace(/\\/g, '/')
-      .replace(/\/+$/, '')
-      .replace(/\/arm-none-eabi-gcc(?:\.exe)?$/i, '');
-  }
-
-  function pathsEqual(left, right) {
-    return normalizePathValue(left) === normalizePathValue(right);
   }
 
   // --- Linux and desktop panels: built once per mode, then synced ---
@@ -449,10 +437,7 @@
     modeNative.setAttribute('aria-pressed', String(mode === 'native'));
     mcuPanel.hidden = !isMcu;
     configuration.hidden = isMcu;
-    modeActions.hidden = isMcu;
-    buildButton.hidden = !isMcu;
     if (isMcu) {
-      syncArmToolchain();
       syncTargetSection();
       syncFlashSection();
     } else if (mode === 'native') {
@@ -551,24 +536,12 @@
     const ok = value.ok === true;
     const cancelled = value.cancelled === true;
     const tone = ok ? 'success' : cancelled ? 'cancelled' : 'error';
-    const command = initiator?.dataset?.command || '';
-    // A successful browse replaces the draft; cancellation or rejection keeps
-    // the user's unsaved text.
-    if (ok && command === 'browseArmToolchain') {
-      gccDirty = false;
-    }
     setBusy(false);
     setStatusBadge(tone, ok ? '已完成' : cancelled ? '已取消' : '失败');
     const message = typeof value.message === 'string' ? value.message : '';
-    if (initiator && initiator.closest('.toolchain-section')) {
-      showNotice(operationNotice, '');
-      showNotice(gccNotice, message, tone);
-    } else {
-      showNotice(gccNotice, '');
-      showNotice(operationNotice, message, tone);
-    }
+    showNotice(operationNotice, message, tone);
     const files = Array.isArray(value.files) ? value.files : [];
-    if (resultCommands[command] || files.length > 0) {
+    if (files.length > 0) {
       showFiles(files);
     }
     render();
@@ -579,56 +552,16 @@
     if (busy) return false;
     initiator = target || null;
     cancelRequested = false;
-    showNotice(gccNotice, '');
     showNotice(operationNotice, '');
     setBusy(true, text);
     return true;
   }
 
-  function submitArmToolchainPath() {
-    if (!state || busy) return;
-    if (!startOperation(gccPath, '正在设置 ARM GNU 工具链')) return;
-    showNotice(gccNotice, '');
-    post({ type: 'setArmToolchainPath', path: gccPath.value });
-  }
-
-  gccPath.addEventListener('input', () => {
-    if (!state) return;
-    gccDirty = !pathsEqual(gccPath.value, state.armToolchain?.binDir ?? '');
-    gccHint.textContent = gccDirty ? gccHintDirty : gccHintDefault;
-  });
-
-  gccPath.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter' || event.isComposing) return;
-    event.preventDefault();
-    submitArmToolchainPath();
-  });
-
-  gccPath.addEventListener('focusout', (event) => {
-    // Browse must never submit the stale draft behind the host folder picker.
-    if (gccBrowseIntent) {
-      gccBrowseIntent = false;
-      return;
-    }
-    if (event.relatedTarget === gccBrowse || busy || !state) return;
-    if (!gccDirty) return;
-    submitArmToolchainPath();
-  });
-
   // One delegated dispatcher owns every static command button, so relocated or
   // reused markup cannot register a second listener for the same command.
-  const resultCommands = {
-    generateProject: true,
-    generateFlashScript: true,
-    generateDebugConfiguration: true,
-    buildProject: true
-  };
-
   const commandLabels = {
-    importPack: '正在导入 Pack',
     scanWorkspace: '正在扫描工作区',
     generateProject: '正在生成工程',
-    buildProject: '正在配置并编译',
     generateFlashScript: '正在生成 flash.py',
     generateDebugConfiguration: '正在生成调试配置'
   };
@@ -641,13 +574,6 @@
     if (!target) return;
     const command = target.dataset.command;
     if (!command || !state) return;
-    if (command === 'browseArmToolchain') {
-      gccBrowseIntent = false;
-      if (!startOperation(target, '正在设置 ARM GNU 工具链')) return;
-      showNotice(gccNotice, '');
-      post({ type: 'browseArmToolchain' });
-      return;
-    }
     if (command === 'cancelWorkspaceScan') {
       if (cancelRequested || cancelWorkspaceScanButton.hidden) return;
       cancelRequested = true;
@@ -661,14 +587,6 @@
     if (cancellableCommands.has(command)) syncCancelWorkspaceScan();
     showNotice(operationNotice, '');
     post({ type: command });
-  });
-
-  gccBrowse.addEventListener('pointerdown', () => {
-    gccBrowseIntent = true;
-  });
-
-  window.addEventListener('pointerup', () => {
-    gccBrowseIntent = false;
   });
 
   toggleFlash.addEventListener('change', () => {
@@ -713,6 +631,18 @@
     if (message.type === 'state') {
       state = message.state;
       render();
+      return;
+    }
+    if (message.type === 'packCatalogLoading' || message.type === 'packCatalogState') {
+      if (!state || message.vendor !== state.selection.mcu.vendor) return;
+      state.packs = Array.isArray(message.packs) ? message.packs : [];
+      state.versions = Array.isArray(message.versions) ? message.versions : [];
+      state.pendingPackId = state.pendingPackId || state.selection.mcu.packId;
+      state.packCatalogLoading = message.type === 'packCatalogLoading';
+      if (message.type === 'packCatalogState') {
+        state.packCatalogNotice = message.notice || '';
+      }
+      syncTargetSection();
       return;
     }
     if (message.type === 'operationStarted') {

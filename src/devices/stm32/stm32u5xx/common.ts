@@ -1,4 +1,5 @@
 import type { DeviceProfile } from '../../deviceProfiles';
+import { createStm32BuiltinProfile } from '../builtinProfileFactory';
 
 // Vector tables transcribed from STMicroelectronics/cmsis-device-u5
 // Source/Templates/gcc/startup_stm32u575xx.s and startup_stm32u585xx.s
@@ -90,36 +91,9 @@ export const stm32u585InterruptHandlers = [
   'CORDIC_IRQHandler', 'FMAC_IRQHandler', 'LSECSSD_IRQHandler'
 ];
 
-interface Stm32U5ProfileOptions {
-  define: string;
-  flashLength: number;
-  gnuStartupFileName: string;
-  interruptHandlers: string[];
-}
-
-export function createStm32U5Profile(
-  part: string,
-  linkerFileName: string,
-  options: Stm32U5ProfileOptions
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'U5x',
-    family: 'STM32U5xx',
-    core: 'cortex-m33',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [options.define],
-    compilerFlags: ['-mcpu=cortex-m33', '-mthumb', '-mfpu=fpv5-sp-d16', '-mfloat-abi=hard'],
-    // SRAM1 (192K @ 0x20000000) and SRAM2 (64K @ 0x20030000) are contiguous,
-    // so one 256K RAM region covers both.
-    flash: { origin: 0x08000000, length: options.flashLength },
-    ram: { origin: 0x20000000, length: 256 * 1024 },
-    linkerFileName,
-    gnuStartupFileName: options.gnuStartupFileName,
-    toolchainFileName: 'stm32u5-toolchain.cmake',
-    interruptHandlers: [...options.interruptHandlers],
-    debugTarget: 'stm32u5x'
-  };
+export function createStm32U5Profile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'U5x', {
+    stm32u575InterruptHandlers,
+    stm32u585InterruptHandlers
+  });
 }

@@ -20,8 +20,14 @@ const ZIP64_VERSION_NEEDED = 45;
  * (.pack/.zip are ZIP by convention). Entry data is taken from the local
  * header offset recorded in the central directory, so entries using a data
  * descriptor (bit 3) still resolve because sizes come from the central record.
+ *
+ * `select` limits decompression to the entries a caller needs; skipped entries
+ * are not read into memory, which keeps large Pack archives cheap to inspect.
  */
-export function readZipEntries(buffer: Buffer): ZipEntry[] {
+export function readZipEntries(
+  buffer: Buffer,
+  select?: (name: string) => boolean
+): ZipEntry[] {
   const eocdOffset = findEndOfCentralDirectory(buffer);
   const entryCount = buffer.readUInt16LE(eocdOffset + 10);
   const directoryOffset = buffer.readUInt32LE(eocdOffset + 16);
@@ -52,8 +58,13 @@ export function readZipEntries(buffer: Buffer): ZipEntry[] {
     if (versionNeeded >= ZIP64_VERSION_NEEDED || localHeaderOffset === 0xffffffff) {
       throw new Error(`Unsupported ZIP feature: Zip64 entry ${name}`);
     }
-
-    entries.push({ name, data: readEntryData(buffer, name, localHeaderOffset, method, compressedSize) });
+    const wanted = !select || select(name);
+    if (wanted) {
+      entries.push({
+        name,
+        data: readEntryData(buffer, name, localHeaderOffset, method, compressedSize)
+      });
+    }
     cursor += 46 + nameLength + extraLength + commentLength;
   }
   return entries;

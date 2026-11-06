@@ -23,7 +23,7 @@
 - 空目录仍可扫描，并提示没有 C/C++ 或汇编源文件；无工程标记但含源码的目录会自动作为目标工程。
 - 工作区发现或源文件扫描较慢时，可点击“取消扫描”中止当前扫描。
 - MCU 页面可同时生成 `flash.py` 和 Cortex-Debug 配置。
-- MCU 页面提供“构建”按钮，选择 Debug 或 Release 后依次执行 CMake 配置和编译。
+- 插件只生成 CMake 工程与配置，配置和编译由 CMake Tools 负责。
 - 桌面 C/C++ 页面可选择可执行文件、静态库或动态库以及语言标准。
 - 扫描工作区后可查看源文件、头文件目录和宏的数量。
 - 原有命令面板入口全部保留，可继续单独生成烧录脚本或调试配置。
@@ -32,39 +32,41 @@
 
 | 命令 | 方向 | 说明 |
 | --- | --- | --- |
-| `CMake-Embedded: Generate MCU Project` | MCU | 按命令面板流程选择厂商、系列和型号，再生成裸机工程 |
+| `CMake-Embedded: Generate MCU Project` | MCU | 按命令面板流程选择厂商、Pack 与型号，再生成裸机工程 |
 | `CMake-Embedded: Generate Linux Project` | Linux | 选择交叉工具链，再生成交叉编译工程 |
 | `CMake-Embedded: Generate C/C++ Project` | 桌面 | 选择目标类型和语言标准，生成普通 CMake 工程 |
 | `CMake-Embedded: Generate OpenOCD Flash Script` | MCU | 仅生成 `flash.py` |
 | `CMake-Embedded: Generate Cortex-Debug Configuration` | MCU | 仅生成 `.vscode/launch.json` 调试配置 |
 | `CMake-Embedded: Import CMSIS Pack` | MCU | 从本地归档、Keil 已安装目录或在线索引导入芯片 |
 | `CMake-Embedded: Remove Imported CMSIS Pack` | MCU | 删除已导入的 Pack 并立即刷新设备列表 |
-| `CMake-Embedded: Build Project` | 全部 | 使用 Debug/Release 预设配置并编译已有 CMake 工程 |
-| `CMake-Embedded: Select ARM GNU GCC Toolchain` | MCU | 浏览并保存 ARM GNU 工具链 bin 目录 |
 
 ## 配置与编译
 
-先生成工程，再点击 MCU 页面的“构建”，或运行 `CMake-Embedded: Build Project`。
-命令只在已信任的工作区执行，编译日志显示在输出面板 **CMake-Embedded Build**。
-配置失败不会继续编译；进度通知可以取消当前构建。构建操作不会执行烧录。
+插件只负责生成工程文件。配置、编译、烧录与调试分别交给 CMake Tools、Cortex-Debug
+和 `flash.py`，插件自身不执行编译器或烧录器进程。
+
+生成后使用 CMake Tools 选择生成的 `debug` 或 `release` 预设：
+
+```powershell
+cmake --preset debug      # 或 cmake --preset release
+cmake --build --preset debug
+```
 
 需要安装 CMake 和 Ninja，并让它们可从 `PATH` 查找；CMake 的路径也可以通过
-`cmake.cmakePath` 设置。MCU 工程还需要 **ARM GNU Toolchain**，其中包含
+`cmake.cmakePath` 设置。MCU 工程还需要 **Arm GNU Toolchain**，其中包含
 `arm-none-eabi-gcc`、`arm-none-eabi-g++`、`arm-none-eabi-objcopy` 和
-`arm-none-eabi-size`。在 MCU 页面的 **ARM GNU GCC** 区域填写 `bin` 目录，
-或点击“浏览…”选择目录；输入后按 Enter 或移出字段保存。
-设置与 `cmakeEmbedded.armToolchainPath` 同步，留空使用 PATH；已有工作区覆盖值
-会在同一作用域更新。状态只验证工具文件存在，不代表固件已编译或硬件已连接。
+`arm-none-eabi-size`。插件不保存工具链路径：生成的工具链文件只写这些
+**可移植的命令名**，请把工具链 `bin` 目录加入 `PATH`，或在 CMake Tools 中
+配置 kit。Keil 的 `armclang` 不能替代此 GNU 工具链。
 
-构建子进程会使用该目录，生成的 Cortex-Debug 与 C/C++ IntelliSense 配置也使用
-同一有效路径；不会修改系统环境或在生成的 CMake 工具链文件中写入机器绝对路径。
-Keil 的 `armclang` 不能替代此 GNU 工具链。
+生成的 Cortex-Debug 与 C/C++ IntelliSense 配置同样只使用 `arm-none-eabi`
+前缀和编译数据库，不写入任何机器绝对路径。
 
 Debug 和 Release 分别输出到 `build/debug` 和 `build/release`。
-MCU 工程正常构建后生成 `.elf`、`.hex`、`.bin` 和 `.map`；只有烧录脚本或调试配置，
+MCU 工程构建后生成 `.elf`、`.hex`、`.bin` 和 `.map`；只有烧录脚本或调试配置，
 没有 `CMakeLists.txt` 和 `CMakePresets.json` 时，需要先生成完整工程。
 
-Windows 下应避免过深的工程目录。若日志同时提示 `CMAKE_OBJECT_PATH_MAX` 和
+Windows 下应避免过深的工程目录。若 CMake 同时提示 `CMAKE_OBJECT_PATH_MAX` 和
 无法写入 `.su` 文件，说明 GNU 工具链输出路径超过了 Windows 路径限制；请缩短
 工程目录路径后重新配置，或改用支持长路径的工具链（例如 STM32CubeCLT）。
 重新安装同一工具链不能解决此类路径错误。
@@ -121,27 +123,31 @@ Windows 下应避免过深的工程目录。若日志同时提示 `CMAKE_OBJECT_
 - 使用 CMake 编译数据库配置 C/C++ 插件 IntelliSense
 - 可选生成独立于 CMake 的 OpenOCD `flash.py` 烧录脚本
 - 生成 Cortex-Debug 的 OpenOCD 调试配置
-- 构建成功后生成 `.elf`、`.hex` 和 `.bin` 文件
+- 生成可执行、静态库或动态库目标后，`.elf`、`.hex`、`.bin` 与 `.map` 由 CMake Tools 编译产出
 - 覆盖已有生成文件前进行确认
 
-烧录脚本支持 J-Link OB、J-Link、ST-Link 和 DapLink。CMake 构建芯片和
+烧录脚本支持 J-Link OB、J-Link、ST-Link 和 DapLink。生成的芯片和
 OpenOCD 烧录 target 独立选择，因此也可以给已有自定义 CMake 工程单独生成
 烧录脚本。GD32 F1/F4 target 使用兼容的 STM32 F1/F4 OpenOCD target。
 
-当前芯片数据库支持常用的 STM32/GD32 F1、F4 型号和 STM32L4 型号。
-侧栏和命令面板都会先按厂商选择，再按系列和具体型号选择。
+侧栏按 **厂商 → 芯片支持包（Pack）→ 版本 → 系列 → 型号** 五级选择。
+内置芯片以每个厂商一个虚拟 Pack 提供，完全离线可用；在线索引不可用时，
+内置与已安装 Pack 仍然可选，只是不显示可下载版本。
 
-除内置型号外，可通过 `Import CMSIS Pack` 导入本地 `.pack`、Keil 已安装的
-解压 Pack，或从 keil.com 在线索引下载。导入型号会立即出现在侧栏中；删除
-Pack 也会立即移除对应型号，无需重启扩展。pyOCD 需要真实的 `.pack` 文件：
-普通归档导入会保存归档副本；解压目录若旁边没有 `.pack` 文件，pyOCD 配置
-不会附带虚拟路径。
+选择已安装的 Pack 会就地解析并导入它的设备；选择可下载版本会下载、解析、
+导入并切换到该版本。下载或解析失败不会改变当前有效的选择。Keil 安装目录
+中的 Pack 身份以 PDSC 的厂商与包名为准，目录名不是最终身份。
+
+也可以继续用 `Import CMSIS Pack` 显式导入本地 `.pack` 或删除已导入的 Pack；
+删除后对应型号立即从侧栏移除，无需重启扩展。pyOCD 需要真实的 `.pack`
+文件：普通归档导入会保存归档副本；解压目录若旁边没有 `.pack` 文件，
+pyOCD 配置不会附带虚拟路径。
 
 ### 使用方法
 
 1. 使用 VS Code 打开 MCU 工程目录。
 2. 点击活动栏中的 **CMake-Embedded**，进入“生成配置”。
-3. 选择厂商、系列和型号，按需勾选烧录脚本或调试配置，然后点击“生成工程”。
+3. 依次选择厂商、Pack、版本、系列和型号，按需勾选烧录脚本或调试配置，然后点击“生成工程”。
 4. 使用生成的预设配置并构建工程：
 
    ```powershell
@@ -166,9 +172,8 @@ python flash.py --openocd D:\Tools\OpenOCD\bin\openocd.exe
 python flash.py --dry-run
 ```
 
-如果 Cortex-Debug 找不到 ARM GNU 工具链，可配置
-`CMake-Embedded: Arm Toolchain Path`（`cmakeEmbedded.armToolchainPath`），
-填写 `arm-none-eabi` 工具所在的 `bin` 目录。
+如果 Cortex-Debug 找不到 ARM GNU 工具链，请把工具链 `bin` 目录加入
+`PATH`；生成的调试配置只写 `arm-none-eabi` 前缀，不保存机器路径。
 
 勾选“生成 Cortex-Debug 配置”或点击同名命令后，插件会向
 `.vscode/launch.json` 添加标准 OpenOCD 调试配置。已有其他配置会保留。

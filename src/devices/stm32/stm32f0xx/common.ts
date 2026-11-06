@@ -1,4 +1,5 @@
 import type { DeviceProfile } from '../../deviceProfiles';
+import { createStm32BuiltinProfile } from '../builtinProfileFactory';
 
 export const stm32f030x8InterruptHandlers = [
   'WWDG_IRQHandler', '0', 'RTC_IRQHandler', 'FLASH_IRQHandler',
@@ -55,35 +56,12 @@ export const stm32f091xcInterruptHandlers = [
   'USART2_IRQHandler', 'USART3_8_IRQHandler', 'CEC_CAN_IRQHandler'
 ];
 
-interface Stm32F0ProfileOptions {
-  define?: string;
-  ramLength?: number;
-  gnuStartupFileName?: string;
-  interruptHandlers?: string[];
-}
-
-export function createStm32F0Profile(
-  part: string,
-  flashLength: number,
-  linkerFileName: string,
-  options: Stm32F0ProfileOptions = {}
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'F0x',
-    family: 'STM32F0xx',
-    core: 'cortex-m0',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [options.define ?? 'STM32F030x8'],
-    compilerFlags: ['-mcpu=cortex-m0', '-mthumb'],
-    flash: { origin: 0x08000000, length: flashLength },
-    ram: { origin: 0x20000000, length: options.ramLength ?? 8 * 1024 },
-    linkerFileName,
-    gnuStartupFileName: options.gnuStartupFileName ?? 'startup_stm32f030x8.S',
-    toolchainFileName: 'stm32f0-toolchain.cmake',
-    interruptHandlers: [...(options.interruptHandlers ?? stm32f030x8InterruptHandlers)],
-    debugTarget: 'stm32f0x'
-  };
+export function createStm32F0Profile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'F0x', {
+    stm32f030x8InterruptHandlers,
+    stm32f031x6InterruptHandlers,
+    stm32f051x8InterruptHandlers,
+    stm32f072xbInterruptHandlers,
+    stm32f091xcInterruptHandlers
+  });
 }

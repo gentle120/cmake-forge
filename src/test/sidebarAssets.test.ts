@@ -25,7 +25,7 @@ const extensionUri = {
 
 interface SidebarSelection {
   mode: 'mcu' | 'linux' | 'native';
-  mcu: { vendor: string; series: string; part: string };
+  mcu: { vendor: string; packId: string; version: string; series: string; part: string };
   linux: { toolchainFamily: string };
   native: { targetType: string; cStandard: number; cxxStandard: number };
   debugEnabled: boolean;
@@ -38,13 +38,16 @@ interface SidebarState {
   projectRoot: string;
   discoveringProjects: boolean;
   vendors: Array<{ value: string; label: string }>;
+  packs: Array<{ value: string; label: string; description?: string }>;
+  versions: Array<{ value: string; label: string; description?: string }>;
+  pendingPackId: string;
   series: Array<{ value: string; label: string }>;
   devices: Array<{ value: string; label: string; description?: string; detail?: string }>;
   flashTargets: Array<{ value: string; label: string }>;
   flashProbes: Array<{ value: string; label: string }>;
   flashBackends: Array<{ value: string; label: string }>;
   linuxToolchains: Array<{ value: string; label: string }>;
-  armToolchain: { binDir: string; state: 'path' | 'ready' | 'missing'; message: string };
+  packCatalogNotice: string;
   selection: SidebarSelection;
 }
 
@@ -55,16 +58,28 @@ function baseState(overrides: Partial<SidebarState> = {}): SidebarState {
     projectRoot: '',
     discoveringProjects: false,
     vendors: [{ value: 'STM', label: 'ST' }],
+    packs: [
+      { value: 'builtin:STM', label: '内置芯片支持', description: 'builtin' },
+      { value: 'STM:STM32F1xx_DFP', label: 'STM32F1xx_DFP', description: 'downloadable' }
+    ],
+    versions: [{ value: 'builtin', label: '内置', description: 'builtin' }],
+    pendingPackId: 'builtin:STM',
+    packCatalogNotice: '',
     series: [{ value: 'F1x', label: 'STM32F1' }],
     devices: [{ value: 'STM32F103C8T6', label: 'STM32F103C8T6', description: 'STM32F1', detail: '64 KB Flash' }],
     flashTargets: [{ value: 'stm32f1xx', label: 'STM32F1' }],
     flashProbes: [{ value: 'stlink', label: 'ST-Link' }],
     flashBackends: [{ value: 'openocd', label: 'OpenOCD' }, { value: 'jlink', label: 'J-Link' }],
     linuxToolchains: [{ value: 'loongson', label: 'Loongson' }],
-    armToolchain: { binDir: '', state: 'path', message: '使用 PATH' },
     selection: {
       mode: 'mcu',
-      mcu: { vendor: 'STM', series: 'F1x', part: 'STM32F103C8T6' },
+      mcu: {
+        vendor: 'STM',
+        packId: 'builtin:STM',
+        version: 'builtin',
+        series: 'F1x',
+        part: 'STM32F103C8T6'
+      },
       linux: { toolchainFamily: 'loongson' },
       native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
       debugEnabled: false,
@@ -132,15 +147,13 @@ test('sidebar renderer wires every supported command', () => {
   for (const command of [
     'ready',
     'saveSelection',
-    'setArmToolchainPath',
-    'browseArmToolchain',
-    'importPack',
+    'selectPack',
+    'activatePack',
     'scanWorkspace',
     'cancelWorkspaceScan',
     'generateProject',
     'generateFlashScript',
     'generateDebugConfiguration',
-    'buildProject',
     'openSettings'
   ]) {
     assert.match(scriptSource, new RegExp(command));
@@ -170,6 +183,44 @@ test('project selection sends the selected project root without starting a comma
   });
 });
 
+test('MCU selection follows vendor, Pack, version, series, and device order', () => {
+  const harness = startSidebar(baseState());
+  const selects = harness.element('target-host').querySelectorAll('select');
+  assert.equal(selects.length, 5);
+  const [vendor, pack, version, series, device] = selects;
+  assert.equal(vendor.value, 'STM');
+  assert.equal(pack.value, 'builtin:STM');
+  assert.equal(version.value, 'builtin');
+  assert.equal(series.value, 'F1x');
+  assert.equal(device.value, 'STM32F103C8T6');
+
+  pack.value = 'STM:STM32F1xx_DFP';
+  pack.dispatch('change');
+  assert.deepEqual(harness.posted.at(-1), {
+    type: 'selectPack',
+    packId: 'STM:STM32F1xx_DFP'
+  });
+  harness.send({
+    type: 'state',
+    state: baseState({
+      pendingPackId: 'STM:STM32F1xx_DFP',
+      versions: [
+        { value: '1.0.0', label: '1.0.0', description: 'installed' },
+        { value: '1.1.0', label: '1.1.0', description: 'downloadable' }
+      ]
+    })
+  });
+  const refreshedSelects = harness.element('target-host').querySelectorAll('select');
+  const versionSelect = refreshedSelects[2];
+  versionSelect.value = '1.1.0';
+  versionSelect.dispatch('change');
+  assert.deepEqual(harness.posted.at(-1), {
+    type: 'activatePack',
+    packId: 'STM:STM32F1xx_DFP',
+    version: '1.1.0'
+  });
+});
+
 test('every command button is unique and its command is dispatched by the renderer', () => {
   const markup = renderSidebarHtml(webviewUri, extensionUri, 'nonce');
   const ids = [...markup.matchAll(/id="([^"]+)"/g)].map((match) => match[1]);
@@ -181,120 +232,47 @@ test('every command button is unique and its command is dispatched by the render
   }
   assert.deepEqual(
     [...new Set(commands)].sort(),
-    ['browseArmToolchain', 'buildProject', 'cancelWorkspaceScan', 'generateDebugConfiguration',
-      'generateFlashScript', 'generateProject', 'importPack', 'scanWorkspace']
+    ['cancelWorkspaceScan', 'generateDebugConfiguration',
+      'generateFlashScript', 'generateProject', 'scanWorkspace']
   );
   // One delegated listener owns the static commands; no per-button wiring remains.
   const catalogListeners = [...scriptSource.matchAll(/app\.addEventListener\('click'/g)];
   assert.equal(catalogListeners.length, 1, 'command buttons must share one delegated listener');
 });
 
-test('GCC input commits once on Enter and once on changed blur', () => {
-  const harness = startSidebar(baseState());
-  const input = harness.element('arm-gcc-path');
-  input.value = 'C:/Program Files (x86)/Arm GNU/bin';
-
-  input.dispatch('keydown', { key: 'Enter' });
-  const submits = harness.posted.filter((message) => message.type === 'setArmToolchainPath');
-  assert.deepEqual(submits, [{ type: 'setArmToolchainPath', path: 'C:/Program Files (x86)/Arm GNU/bin' }]);
-
-  harness.send({ type: 'operationFinished', result: { ok: true, message: 'saved', files: [] } });
-  assert.equal(harness.posted.filter((message) => message.type === 'setArmToolchainPath').length, 1);
-
-  input.dispatch('focusout', { relatedTarget: undefined });
-  assert.equal(
-    harness.posted.filter((message) => message.type === 'setArmToolchainPath').length,
-    1,
-    'an unchanged field must not resubmit on blur'
-  );
-
-  input.value = 'D:/arm/bin';
-  input.dispatch('input');
-  input.dispatch('focusout', { relatedTarget: undefined });
-  assert.deepEqual(harness.posted.filter((message) => message.type === 'setArmToolchainPath').at(-1), {
-    type: 'setArmToolchainPath',
-    path: 'D:/arm/bin'
-  });
-});
-
-test('Browse never commits the stale draft behind the host folder picker', () => {
-  const harness = startSidebar(baseState());
-  const input = harness.element('arm-gcc-path');
-  const browse = harness.element('browse-arm-toolchain');
-  input.value = 'E:/draft-only';
-  input.dispatch('input');
-
-  browse.dispatch('pointerdown');
-  input.dispatch('focusout', { relatedTarget: browse });
-  browse.dispatch('click', { target: browse });
-  // The pointer gesture ends while the host chooser owns focus.
-  harness.element('app').ownerDocument.activeElement = undefined;
-
-  assert.equal(
-    harness.posted.filter((message) => message.type === 'setArmToolchainPath').length,
-    0,
-    'browse must not submit the stale draft'
-  );
-  assert.equal(harness.posted.filter((message) => message.type === 'browseArmToolchain').length, 1);
-});
-
-test('unsaved GCC draft survives refreshes, and a rejected save keeps the draft', () => {
-  const harness = startSidebar(baseState());
-  const input = harness.element('arm-gcc-path');
-  input.value = 'F:/typed/draft';
-  input.dispatch('input');
-  harness.document.activeElement = input;
-
-  harness.send({ type: 'state', state: baseState({
-    armToolchain: { binDir: 'C:/stored/bin', state: 'ready', message: '已找到 ARM GCC' }
-  }) });
-  assert.equal(input.value, 'F:/typed/draft', 'a focused draft must not be overwritten');
-  assert.equal(harness.element('arm-gcc-status').getAttribute('data-state'), 'ready');
-
-  input.dispatch('focusout', { relatedTarget: harness.element('workspace-title') });
-  harness.send({ type: 'operationFinished', result: { ok: false, message: '目录不完整', files: [] } });
-  harness.send({ type: 'state', state: baseState({
-    armToolchain: { binDir: 'C:/stored/bin', state: 'ready', message: '已找到 ARM GCC' }
-  }) });
-  assert.equal(input.value, 'F:/typed/draft', 'a rejected save must not replace or discard the draft');
-  assert.equal(harness.element('arm-gcc-notice').textContent, '目录不完整');
-
-});
-
-test('authoritative state fills the GCC field when there is no unsaved draft', () => {
-  const harness = startSidebar(baseState());
-  const input = harness.element('arm-gcc-path');
-  harness.send({ type: 'state', state: baseState({
-    armToolchain: { binDir: 'C:/stored/bin', state: 'ready', message: '已找到 ARM GCC' }
-  }) });
-  assert.equal(input.value, 'C:/stored/bin');
-  assert.equal(harness.element('arm-gcc-status').getAttribute('data-state'), 'ready');
-  assert.equal(harness.element('arm-gcc-status').querySelector('.toolchain-title')?.textContent,
-    '工具文件已找到');
-});
-
 test('busy state guards duplicate commands and reports cancellation neutrally', () => {
   const harness = startSidebar(baseState());
   const generate = harness.element('generate-project');
-  const build = harness.element('build-project');
-  const browse = harness.element('browse-arm-toolchain');
 
   generate.dispatch('click', { target: generate });
   generate.dispatch('click', { target: generate });
-  build.dispatch('click', { target: build });
   assert.equal(harness.posted.filter((message) => message.type === 'generateProject').length, 1);
-  assert.equal(harness.posted.filter((message) => message.type === 'buildProject').length, 0);
   assert.equal(harness.element('app').getAttribute('aria-busy'), 'true');
-  assert.equal(browse.disabled, true);
 
   harness.send({ type: 'operationFinished', result: { ok: false, cancelled: true, message: '已取消', files: [] } });
   assert.equal(harness.element('app').getAttribute('aria-busy'), 'false');
   assert.equal(harness.element('generation-status').className, 'status-badge cancelled');
   assert.equal(harness.element('operation-notice').textContent, '已取消');
-  assert.equal(browse.disabled, false);
+});
 
-  build.dispatch('click', { target: build });
-  assert.equal(harness.posted.filter((message) => message.type === 'buildProject').length, 1);
+test('offline catalog notice remains visible while built-in and installed Pack choices stay usable', () => {
+  const harness = startSidebar(baseState({
+    packs: [
+      { value: 'builtin:STM', label: '内置芯片支持', description: 'builtin' },
+      { value: 'STM:STM32F1xx_DFP', label: 'STM32F1xx_DFP', description: 'installed' }
+    ],
+    packCatalogNotice: '在线 Pack 列表暂不可用：network offline'
+  }));
+
+  const notice = harness.element('pack-catalog-notice');
+  assert.equal(notice.hidden, false);
+  assert.match(notice.textContent, /network offline/);
+  const pack = harness.element('target-host').querySelectorAll('select')[1];
+  assert.equal(pack.disabled, false);
+  assert.deepEqual(
+    pack.querySelectorAll('option').map((option) => option.value),
+    ['builtin:STM', 'STM:STM32F1xx_DFP']
+  );
 });
 
 test('cancel scan only appears while the initial scan or workspace scan is running', () => {
@@ -338,18 +316,18 @@ test('cancelled workspace scans keep the previous count instead of reporting zer
 
 test('failure messages stay visible and focus returns to the initiating control', () => {
   const harness = startSidebar(baseState());
-  const importPack = harness.element('import-pack');
-  importPack.dispatch('click', { target: importPack });
+  const generate = harness.element('generate-project');
+  generate.dispatch('click', { target: generate });
   harness.send({
     type: 'operationFinished',
-    result: { ok: false, message: 'Pack 导入失败：文件损坏', files: [] }
+    result: { ok: false, message: '工程生成失败', files: [] }
   });
 
   assert.equal(harness.element('generation-status').className, 'status-badge error');
   const notice = harness.element('operation-notice');
   assert.equal(notice.hidden, false);
-  assert.equal(notice.textContent, 'Pack 导入失败：文件损坏');
-  assert.equal(harness.document.activeElement, importPack);
+  assert.equal(notice.textContent, '工程生成失败');
+  assert.equal(harness.document.activeElement, generate);
 });
 
 test('only the backend-relevant detail group is exposed and probes come from state', () => {
@@ -382,11 +360,9 @@ test('Linux and desktop modes stay reachable without duplicate listeners', () =>
   }) });
   assert.equal(harness.element('mcu-panel').hidden, true);
   assert.equal(harness.element('configuration').hidden, false);
-  assert.equal(harness.element('build-project').hidden, true);
 
   harness.send({ type: 'state', state: baseState() });
   assert.equal(harness.element('mcu-panel').hidden, false);
-  assert.equal(harness.element('build-project').hidden, false);
   const generate = harness.element('generate-project');
   generate.dispatch('click', { target: generate });
   assert.equal(harness.posted.filter((message) => message.type === 'generateProject').length, 1);
@@ -405,9 +381,6 @@ test('sidebar stylesheet covers the required responsive layout without root over
     '.status-dot',
     '.actions.busy',
     '.primary-action',
-    '.toolchain-status',
-    '.toolchain-notice',
-    '.path-row',
     '.advanced:not([open]) > .advanced-grid',
     '@media (min-width: 300px)',
     '@media (min-width: 420px)',
@@ -423,7 +396,7 @@ test('sidebar stylesheet covers the required responsive layout without root over
   assert.match(stylesheet, /overflow-wrap:\s*anywhere/);
 });
 
-test('sidebar uses local inline mask icons including tools and package', () => {
+test('sidebar uses local inline mask icons', () => {
   for (const icon of [
     'folder',
     'chip',
@@ -437,8 +410,7 @@ test('sidebar uses local inline mask icons including tools and package', () => {
     'warning',
     'check',
     'code',
-    'tools',
-    'package'
+    'tools'
   ]) {
     assert.match(stylesheet, new RegExp(`data-icon="${icon}"`));
   }

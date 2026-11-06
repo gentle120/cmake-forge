@@ -1,30 +1,50 @@
 import * as vscode from 'vscode';
-import { registerBuildProject } from './integration/buildProject';
-import { getArmToolchainPath, registerArmToolchainSettings } from './integration/toolchainSettings';
 import {
   getDeviceProfile,
+  getDeviceProfileForPack,
   isRuntimeDeviceProfile,
   listDeviceProfiles,
   type DeviceSeries,
   type DeviceVendor
 } from './devices/deviceProfiles';
-import { listDeviceProfilesForSeries, listDeviceSeries, listDeviceVendors } from './devices/deviceSelection';
-import { getVendorMetadata } from './devices/vendorRegistry';
+import {
+  buildDevicePackOptions,
+  listDeviceProfilesForSeries,
+  listDeviceSeries,
+  listDeviceVendors
+} from './devices/deviceSelection';
+import {
+  getVendorMetadata,
+  hasVendor,
+  importedVendorBaseOrder,
+  registerVendor
+} from './devices/vendorRegistry';
 import { getFlashProbeProfile, listFlashProbeProfiles, type FlashProbeProfile } from './flash/probeProfiles';
 import {
   importPack,
   importPackDirectory,
   listImportedPacks,
   loadImportedProfiles,
+  packVendorIdFromName,
   removePack,
   type ImportPackResult
 } from './devices/importedProfiles';
 import { defaultScanRoots, listKeilPacks } from './env/toolchainScanner';
 import {
+  findInstalledPackEntry,
+  findPackPdsc,
+  listInstalledPackIdentities,
+  resolveInstalledPackIdentity,
+  type InstalledPackIdentity
+} from './packs/installedPacks';
+import {
   downloadPack,
+  listPackVendors,
+  listPacksForVendor,
   searchPacks,
   type FetchLike,
   type PackSearchCacheEntry,
+  type PackIndexEntry,
   type VendorCacheEntry
 } from './packs/packIndex';
 import { existsSync, readdirSync } from 'node:fs';
@@ -64,7 +84,6 @@ import { scanProject, ScanCancelledError, type ProjectDescription } from './scan
 import { discoverWorkspaceProjects } from './scanner/workspaceProjects';
 import { SidebarProvider } from './sidebar/provider';
 import type { CommandResult } from './shared/commandResult';
-import { armGccExecutablePath } from './env/armToolchain';
 
 async function scanWorkspace(root: string): Promise<ProjectDescription | undefined> {
   try {
@@ -283,15 +302,231 @@ function getOpenOcdPath(): string {
 let packStorageRoot = '';
 let activeSidebar: SidebarProvider | undefined;
 const packFileByPart = new Map<string, string>();
+const packArchiveBySource = new Map<string, string>();
 const packSearchCache = new Map<string, PackSearchCacheEntry>();
 const packVendorCache = new Map<string, VendorCacheEntry>();
+const packVendorsTtlMs = 5 * 60 * 1000;
+const packVendorsCacheKey = '\0vendors';
+let packVendorsRequest: Promise<PackIndexEntry[]> | undefined;
+
+async function onlinePackVendors(): Promise<PackIndexEntry[]> {
+  const cached = packVendorCache.get(packVendorsCacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.vendors;
+  }
+  if (!packVendorsRequest) {
+    packVendorsRequest = listPackVendors(fetchWithTimeout).then((vendors) => {
+      packVendorCache.set(packVendorsCacheKey, {
+        vendors,
+        expiresAt: Date.now() + packVendorsTtlMs
+      });
+      return vendors;
+    }).finally(() => {
+      packVendorsRequest = undefined;
+    });
+  }
+  return packVendorsRequest;
+}
+
+function ensureCatalogVendor(id: string, label: string): void {
+  if (hasVendor(id)) {
+    return;
+  }
+  registerVendor({
+    id,
+    label: label || id,
+    definePrefixes: [id.replace(/[^A-Za-z0-9_]/g, '') || id],
+    order: importedVendorBaseOrder + listDeviceProfiles().length
+  });
+}
+
+async function installedPackIdentities(): Promise<InstalledPackIdentity[]> {
+  return listInstalledPackIdentities(listKeilPacks(scanRoots().packRoots, scanFileSystem));
+}
+
+async function discoverPackVendorOptions(): Promise<{
+  vendors: Array<{ value: string; label: string }>;
+  notice?: string;
+}> {
+  const vendors = new Map<string, string>();
+  for (const vendor of listDeviceVendors(listDeviceProfiles())) {
+    vendors.set(vendor, getVendorMetadata(vendor).label);
+  }
+  for (const pack of await installedPackIdentities()) {
+    ensureCatalogVendor(pack.vendorId, pack.vendorName);
+    vendors.set(pack.vendorId, pack.vendorName);
+  }
+
+  let notice: string | undefined;
+  try {
+    for (const entry of await onlinePackVendors()) {
+      const id = packVendorIdFromName(entry.vendorName);
+      ensureCatalogVendor(id, entry.vendorName);
+      vendors.set(id, entry.vendorName);
+    }
+  } catch (error) {
+    notice = `在线 Pack 索引暂不可用：${error instanceof Error ? error.message : String(error)}`;
+  }
+  return {
+    vendors: [...vendors].map(([value, label]) => ({ value, label })),
+    notice
+  };
+}
+
+async function loadDevicePackCatalog(vendorId: string): Promise<{
+  options: ReturnType<typeof buildDevicePackOptions>;
+  notice?: string;
+}> {
+  const imported = await listImportedPacks(packStorageRoot);
+  const importedInVendor = imported.filter((pack) => pack.vendorId === vendorId);
+  const installed = (await installedPackIdentities())
+    .filter((pack) => pack.vendorId === vendorId)
+    .filter((pack) => !importedInVendor.some((record) =>
+      record.packId === `${pack.vendorId}:${pack.name}` && record.version === pack.version
+    ))
+    .map((pack) => ({
+      vendorId: pack.vendorId,
+      name: pack.name,
+      version: pack.version,
+      packFile: pack.packFile,
+      source: pack.source
+    }));
+  let online: Awaited<ReturnType<typeof listPacksForVendor>> = [];
+  let notice: string | undefined;
+  try {
+    const entry = (await onlinePackVendors()).find((candidate) =>
+      packVendorIdFromName(candidate.vendorName) === vendorId
+    );
+    if (entry) {
+      const cached = packSearchCache.get(entry.pdscUrl);
+      if (cached && cached.expiresAt > Date.now()) {
+        online = cached.packs;
+      } else {
+        online = await listPacksForVendor(fetchWithTimeout, entry);
+        packSearchCache.set(entry.pdscUrl, {
+          packs: online,
+          expiresAt: Date.now() + packVendorsTtlMs
+        });
+      }
+    }
+  } catch (error) {
+    notice = `在线 Pack 列表暂不可用：${error instanceof Error ? error.message : String(error)}`;
+  }
+  return {
+    options: buildDevicePackOptions({
+      vendorId,
+      hasBuiltin: listDeviceProfiles().some((profile) => profile.vendor === vendorId),
+      imported: importedInVendor,
+      installed,
+      online
+    }),
+    notice
+  };
+}
+
+async function activateDevicePack(
+  vendorId: string,
+  packId: string,
+  version: string
+): Promise<{ vendorId: string; packId: string; version: string; sourcePack: string; message: string }> {
+  if (packId === `builtin:${vendorId}` && version === 'builtin') {
+    return {
+      vendorId,
+      packId,
+      version,
+      sourcePack: packId,
+      message: '已选择内置芯片支持。'
+    };
+  }
+
+  let record = (await listImportedPacks(packStorageRoot))
+    .find((pack) => pack.packId === packId && pack.version === version);
+  let importedResult: ImportPackResult | undefined;
+  if (!record) {
+    const catalog = await loadDevicePackCatalog(vendorId);
+    const option = catalog.options.find((candidate) =>
+      candidate.packId === packId && candidate.version === version
+    );
+    if (!option) {
+      throw new Error('找不到所选 Pack 版本，请刷新目录后重试。');
+    }
+    if (option.origin === 'installed' && option.packFile) {
+      const entry = await findInstalledPackEntry(
+        listKeilPacks(scanRoots().packRoots, scanFileSystem),
+        option.packFile
+      );
+      const installed = entry ? await resolveInstalledPackIdentity(entry) : undefined;
+      if (!entry || !installed) {
+        throw new Error('已安装 Pack 已不可用，请刷新目录后重试。');
+      }
+      const metadata = { name: installed.name, version: installed.version };
+      if (entry.source === 'directory') {
+        const pdscPath = await findPackPdsc(entry.packFile);
+        if (!pdscPath) {
+          throw new Error('已安装 Pack 目录中没有 PDSC 文件。');
+        }
+        importedResult = await importPackDirectory(
+          entry.packFile,
+          `${entry.packFile}/${pdscPath}`,
+          packStorageRoot,
+          metadata
+        );
+      } else {
+        importedResult = await importPack(
+          await readFile(entry.packFile),
+          entry.packFile.split(/[/\\]/).pop() ?? 'installed.pack',
+          packStorageRoot,
+          metadata
+        );
+      }
+    } else if (option.origin === 'downloadable' && option.packUrl) {
+      const buffer = await downloadPack(fetchWithTimeout, option.packUrl);
+      const fileName = option.packUrl.split('/').pop() ?? `${option.name}.${option.version}.pack`;
+      importedResult = await importPack(buffer, fileName, packStorageRoot, {
+        name: option.name,
+        version: option.version
+      });
+    } else {
+      throw new Error('此 Pack 版本当前不可导入。');
+    }
+    await syncPackFileIndex();
+    // Only the record the importer just produced may be selected; a fallback
+    // match on name/version/part could pick another vendor's same-named Pack.
+    record = importedResult?.pack
+      ? (await listImportedPacks(packStorageRoot)).find((pack) =>
+          pack.packId === importedResult!.pack!.packId
+          && pack.version === importedResult!.pack!.version
+          && pack.packFile === importedResult!.pack!.packFile
+        )
+      : undefined;
+    if (!record || record.parts.length === 0) {
+      const skipped = importedResult?.skipped.length ?? 0;
+      throw new Error(skipped > 0
+        ? `Pack 中没有可用型号，已跳过 ${skipped} 个不受支持或信息不完整的设备。`
+        : 'Pack 中没有可用于生成的芯片。');
+    }
+  }
+
+  if (record.parts.length === 0) {
+    throw new Error('Pack 中没有可用于生成的芯片。');
+  }
+  return {
+    vendorId: record.vendorId,
+    packId: record.packId,
+    version: record.version,
+    sourcePack: record.packFile,
+    message: `已载入 ${record.vendorName} ${record.name} ${record.version}（${record.parts.length} 个型号）。`
+  };
+}
 
 async function syncPackFileIndex(): Promise<void> {
   packFileByPart.clear();
+  packArchiveBySource.clear();
   for (const record of await listImportedPacks(packStorageRoot)) {
     if (!record.archiveFile) {
       continue;
     }
+    packArchiveBySource.set(record.packFile, record.archiveFile);
     for (const part of record.parts) {
       packFileByPart.set(part, record.archiveFile);
     }
@@ -323,10 +558,6 @@ function scanRoots() {
     ? Array.from({ length: 24 }, (_, index) => `${String.fromCharCode(67 + index)}:/`).filter(existsSync)
     : [];
   const roots = defaultScanRoots(process.platform, process.env, os.homedir(), drives);
-  const configured = getArmToolchainPath();
-  if (configured) {
-    roots.pathDirs.unshift(configured);
-  }
   return roots;
 }
 
@@ -348,31 +579,33 @@ async function pickLocalPack(): Promise<{ buffer: Buffer; fileName: string } | u
 }
 
 async function pickKeilPack(): Promise<{ kind: 'buffer'; buffer: Buffer; fileName: string } | { kind: 'directory'; root: string; pdscPath: string } | undefined> {
-  const packs = listKeilPacks(scanRoots().packRoots, scanFileSystem);
-  if (packs.length === 0) {
+  const installed = await installedPackIdentities();
+  if (installed.length === 0) {
     vscode.window.showWarningMessage('未在 Keil Pack 目录中发现已安装的 Pack。');
     return undefined;
   }
   const picked = await vscode.window.showQuickPick(
-    packs.map((pack) => ({
-      label: `${pack.vendor} ${pack.name}`,
+    installed.map((pack) => ({
+      label: `${pack.vendorName} ${pack.name}`,
       description: pack.version,
-      detail: pack.source === 'directory'
-        ? `${pack.packFile}/${pack.vendor}.${pack.name}.${pack.version}.pdsc`
-        : pack.packFile,
-      packFile: pack.packFile,
-      source: pack.source
+      detail: pack.packFile,
+      identity: pack
     })),
-    { placeHolder: `发现 ${packs.length} 个已安装 Pack，选择要导入的` }
+    { placeHolder: `发现 ${installed.length} 个已安装 Pack，选择要导入的` }
   );
   if (!picked) {
     return undefined;
   }
-  if (picked.source === 'directory') {
-    return { kind: 'directory', root: picked.packFile, pdscPath: picked.detail };
+  if (picked.identity.source === 'directory') {
+    const pdsc = await findPackPdsc(picked.identity.packFile);
+    if (!pdsc) {
+      vscode.window.showWarningMessage('所选已安装 Pack 目录中没有 PDSC 文件。');
+      return undefined;
+    }
+    return { kind: 'directory', root: picked.identity.packFile, pdscPath: pdsc };
   }
-  const fileName = picked.packFile.split(/[/\\]/).pop() ?? 'imported.pack';
-  return { kind: 'buffer', buffer: await readFile(picked.packFile), fileName };
+  const fileName = picked.identity.packFile.split(/[/\\]/).pop() ?? 'imported.pack';
+  return { kind: 'buffer', buffer: await readFile(picked.identity.packFile), fileName };
 }
 
 async function pickOnlinePack(): Promise<{ buffer: Buffer; fileName: string } | undefined> {
@@ -568,7 +801,6 @@ async function generateDebugConfigurationOnly(): Promise<void> {
     target,
     probe,
     getOpenOcdPath(),
-    getArmToolchainPath(),
     backend
   ));
 }
@@ -647,7 +879,7 @@ async function generateProject(): Promise<void> {
   reportWorkflowResult(await generateMcuWorkflow(
     createWorkflowHost(root),
     profile,
-    { flash, compilerPath: armGccExecutablePath(getArmToolchainPath() ?? '') }
+    { flash }
   ));
 }
 
@@ -714,8 +946,6 @@ async function generateNativeProject(): Promise<void> {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-  registerArmToolchainSettings(context);
-  registerBuildProject(context, () => activeSidebar?.selection().projectRoot || undefined);
   const host = createWorkflowHost();
   packStorageRoot = context.globalStorageUri.fsPath;
   const sidebarProvider = new SidebarProvider(context, {
@@ -731,7 +961,12 @@ export function activate(context: vscode.ExtensionContext): void {
     discoverToolchains: () => discoverLinuxToolchains(),
     scanProject: (root, options) => scanProject(root, options),
     discoverProjects: (roots, options) => discoverWorkspaceProjects(roots, options),
-    packFileForPart: (part) => packFileByPart.get(part)
+    packFileForPart: (part, sourcePack) => (
+      sourcePack ? packArchiveBySource.get(sourcePack) : packFileByPart.get(part)
+    ),
+    discoverPackVendors: () => discoverPackVendorOptions(),
+    loadPackCatalog: (vendor) => loadDevicePackCatalog(vendor),
+    activatePack: (vendor, packId, version) => activateDevicePack(vendor, packId, version)
   });
   activeSidebar = sidebarProvider;
   void loadImportedProfiles(packStorageRoot).then(async (profiles) => {

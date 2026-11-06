@@ -14,17 +14,28 @@ test('uses the extension name in command and settings display titles', () => {
       'CMake-Embedded: Generate OpenOCD Flash Script',
       'CMake-Embedded: Generate Cortex-Debug Configuration',
       'CMake-Embedded: Import CMSIS Pack',
-      'CMake-Embedded: Remove Imported CMSIS Pack',
-      'CMake-Embedded: Build Project',
-      'CMake-Embedded: Select ARM GNU GCC Toolchain'
+      'CMake-Embedded: Remove Imported CMSIS Pack'
     ]
   );
-  assert.ok(!manifest.contributes.commands.some(
-    (command: { command: string }) => command.command === 'cmakeEmbedded.scanEnvironment'
+  assert.ok(!manifest.contributes.commands.some((command: { command: string }) =>
+    ['cmakeEmbedded.scanEnvironment', 'cmakeEmbedded.buildProject', 'cmakeEmbedded.selectArmToolchain']
+      .includes(command.command)
   ));
+  assert.equal(manifest.contributes.configuration.properties['cmakeEmbedded.armToolchainPath'], undefined);
   assert.equal(manifest.contributes.configuration.title, 'CMake-Embedded');
   assert.ok(manifest.extensionDependencies.includes('ms-vscode.cmake-tools'));
   assert.ok(!manifest.extensionDependencies.includes('marus25.cortex-debug'));
+});
+
+test('registers every contributed command in the extension host', () => {
+  const manifest = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8'));
+  const source = readFileSync(join(__dirname, '..', '..', 'src', 'extension.ts'), 'utf8');
+  const registered = [...source.matchAll(/registerCommand\(\s*'([^']+)'/g)].map((match) => match[1]);
+
+  assert.deepEqual(
+    manifest.contributes.commands.map((command: { command: string }) => command.command),
+    registered
+  );
 });
 
 test('keeps the Marketplace icon square and below the upload size limit', () => {

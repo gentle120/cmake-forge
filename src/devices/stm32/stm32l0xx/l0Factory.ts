@@ -1,4 +1,5 @@
 import type { DeviceProfile } from '../../deviceProfiles';
+import { createStm32BuiltinProfile } from '../builtinProfileFactory';
 
 // Vector table of the STM32L031/L053 core, copied in IRQ order from
 // cmsis-device-l0 Source/Templates/gcc/startup_stm32l053xx.s (g_pfnVectors
@@ -30,35 +31,9 @@ export const stm32l0ExtendedInterruptHandlers = [
   'USB_IRQHandler'
 ];
 
-interface Stm32L0ProfileOptions {
-  define: string;
-  ramLength: number;
-  gnuStartupFileName: string;
-  interruptHandlers: string[];
-}
-
-export function createStm32L0Profile(
-  part: string,
-  flashLength: number,
-  linkerFileName: string,
-  options: Stm32L0ProfileOptions
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'L0x',
-    family: 'STM32L0xx',
-    core: 'cortex-m0plus',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [options.define],
-    compilerFlags: ['-mcpu=cortex-m0plus', '-mthumb'],
-    flash: { origin: 0x08000000, length: flashLength },
-    ram: { origin: 0x20000000, length: options.ramLength },
-    linkerFileName,
-    gnuStartupFileName: options.gnuStartupFileName,
-    toolchainFileName: 'stm32l0-toolchain.cmake',
-    interruptHandlers: [...options.interruptHandlers],
-    debugTarget: 'stm32l0'
-  };
+export function createStm32L0Profile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'L0x', {
+    stm32l0ShortInterruptHandlers,
+    stm32l0ExtendedInterruptHandlers
+  });
 }

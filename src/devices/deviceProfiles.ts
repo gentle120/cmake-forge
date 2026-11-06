@@ -156,6 +156,32 @@ export function getDeviceProfile(part: string): DeviceProfile {
   return copyProfile(profile);
 }
 
+/** Lists only the built-in or imported profiles owned by one selected Pack. */
+export function listDeviceProfilesForPack(sourcePack: string): DeviceProfile[] {
+  if (sourcePack.startsWith('builtin:')) {
+    const vendor = sourcePack.slice('builtin:'.length);
+    return [...builtinProfiles.values()]
+      .filter((profile) => profile.vendor === vendor)
+      .map(copyProfile);
+  }
+  const normalizedSource = sourcePack.replace(/\\/g, '/');
+  const owned = [...importedProfilesByPart.values()]
+    .map((sources) => sources.get(normalizedSource))
+    .filter((profile): profile is DeviceProfile => profile !== undefined);
+  return owned.map(copyProfile);
+}
+
+/** Resolves a device from its selected Pack, not from the global latest override. */
+export function getDeviceProfileForPack(part: string, sourcePack: string): DeviceProfile {
+  const selected = part.trim().toUpperCase();
+  const profile = listDeviceProfilesForPack(sourcePack)
+    .find((candidate) => candidate.part.toUpperCase() === selected);
+  if (!profile) {
+    throw new Error(`Unsupported MCU: ${part} in Pack ${sourcePack}`);
+  }
+  return profile;
+}
+
 /** True when the current registry entry came from an imported pack. */
 export function isRuntimeDeviceProfile(part: string): boolean {
   return importedSourceByPart.has(part.trim().toUpperCase());

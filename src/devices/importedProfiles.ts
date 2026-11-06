@@ -3,6 +3,11 @@ import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { parsePack, parsePackEntries, type PackDeviceCandidate } from '../packs/packParser';
 import { findAdjacentPackArchive, readDirectoryEntries } from '../packs/packFs';
 import {
+  packNameFromFileName,
+  packVendorDisplayName,
+  packVendorId
+} from '../packs/packIdentity';
+import {
   registerDeviceProfiles,
   unregisterDeviceProfilesByPack,
   type DeviceProfile
@@ -11,6 +16,10 @@ import { validateDeviceProfile } from './profileValidation';
 import { getVendorMetadata, hasVendor, importedVendorBaseOrder, registerVendor } from './vendorRegistry';
 
 export interface ImportedPackRecord {
+  packId: string;
+  vendorId: string;
+  name: string;
+  version: string;
   packFile: string;
   source: 'archive' | 'directory';
   /** Absolute path to the real .pack archive used by pyOCD, when available. */
@@ -23,6 +32,12 @@ export interface ImportedPackRecord {
 export interface ImportPackResult {
   imported: string[];
   skipped: Array<{ part: string; reason: string }>;
+  pack?: Pick<ImportedPackRecord, 'packId' | 'vendorId' | 'name' | 'version' | 'packFile'>;
+}
+
+export interface PackIdentityMetadata {
+  name?: string;
+  version?: string;
 }
 
 interface StoredVendor {
@@ -52,7 +67,8 @@ const storeQueues = new Map<string, Promise<unknown>>();
 export async function importPack(
   buffer: Buffer,
   fileName: string,
-  storageRoot: string
+  storageRoot: string,
+  metadata?: PackIdentityMetadata
 ): Promise<ImportPackResult> {
   return queueStoreWrite(storageRoot, async () => {
     const { vendorName, devices } = parsePack(buffer);
@@ -64,7 +80,9 @@ export async function importPack(
       SOURCE_ARCHIVE,
       async (packDir, packFile) => {
         await writeFile(join(packDir, packFile), buffer);
-      }
+      },
+      undefined,
+      metadata
     );
   });
 }
@@ -76,7 +94,8 @@ export async function importPack(
 export async function importPackDirectory(
   root: string,
   pdscPath: string,
-  storageRoot: string
+  storageRoot: string,
+  metadata?: PackIdentityMetadata
 ): Promise<ImportPackResult> {
   return queueStoreWrite(storageRoot, async () => {
     const entries = await readDirectoryEntries(root);
@@ -84,7 +103,7 @@ export async function importPackDirectory(
     const fileName = basename(pdscPath).replace(/\.pdsc$/i, '.pack');
     return importParsedPack(devices, vendorName, fileName, storageRoot, SOURCE_DIRECTORY, async () => {
       // Directory packs stay where the pack manager put them.
-    }, await findAdjacentPackArchive(root));
+    }, await findAdjacentPackArchive(root), metadata);
   });
 }
 
@@ -129,8 +148,18 @@ function sourceOf(record: Partial<ImportedPackRecord>): 'archive' | 'directory' 
 
 function copyRecord(record: ImportedPackRecord, storageRoot: string): ImportedPackRecord {
   const source = sourceOf(record);
+  const vendorId = record.vendorId || packVendorId(record.vendorName);
+  const identity = record.packId && record.name && record.version
+    ? {
+        packId: record.packId,
+        vendorId,
+        name: record.name,
+        version: record.version
+      }
+    : packIdentity(record.packFile, vendorId, packVendorDisplayName(record.vendorName));
   return {
     ...record,
+    ...identity,
     source,
     archiveFile: record.archiveFile
       ? normalizedPackPath(record.packFile, storageRoot, record.archiveFile)
@@ -148,10 +177,12 @@ async function importParsedPack(
   storageRoot: string,
   source: 'archive' | 'directory',
   storePackFile: (packDir: string, packFile: string) => Promise<void>,
-  archiveFile?: string
+  archiveFile?: string,
+  metadata?: PackIdentityMetadata
 ): Promise<ImportPackResult> {
-  const vendorId = sanitizeIdentifier(vendorName);
-  const vendorLabel = vendorDisplayName(vendorName);
+  const vendorId = packVendorId(vendorName);
+  const vendorLabel = packVendorDisplayName(vendorName);
+  const identity = packIdentity(packFile, vendorId, vendorLabel, metadata);
   const packFilePath = ['packs', vendorId, packFile].join('/');
 
   const store = await readStore(storageRoot);
@@ -195,6 +226,7 @@ async function importParsedPack(
   store.profiles = store.profiles.filter((stored) => stored.packFile !== packFilePath);
   store.profiles.push(...importedProfiles);
   store.packs.push({
+    ...identity,
     packFile: packFilePath,
     source,
     archiveFile: archiveFile
@@ -212,7 +244,10 @@ async function importParsedPack(
     importedProfiles.map((stored) => stored.profile),
     packFilePath
   );
-  return result;
+  return metadata ? {
+    ...result,
+    pack: { ...identity, packFile: packFilePath }
+  } : result;
 }
 
 /**
@@ -306,7 +341,7 @@ function packDeviceToProfile(device: PackDeviceCandidate, vendorId: string, vend
     additionalMemory: device.additionalMemory.map((region) => ({ ...region })),
     linkerFileName: `${device.part}.ld`,
     gnuStartupFileName: `startup_${device.part}.S`,
-    toolchainFileName: `${sanitizeIdentifier(vendorName + device.family).toLowerCase()}-toolchain.cmake`,
+    toolchainFileName: `${packVendorId(vendorName + device.family).toLowerCase()}-toolchain.cmake`,
     interruptHandlers: [...(device.interruptHandlers ?? [])],
     debugTarget: debugTargetForSeries(device.series)
   };
@@ -412,7 +447,20 @@ async function readStore(storageRoot: string): Promise<PackStoreFile> {
       } else if (!archiveFile && source === SOURCE_ARCHIVE) {
         archiveFile = runtimeArchivePath(storageRoot, record.packFile);
       }
-      selectedPacks.push({ ...record, source, archiveFile });
+      const vendorId = record.vendorId || packVendorId(record.vendorName || '');
+      const identity = record.packId && record.name && record.version
+        ? {
+            packId: record.packId,
+            vendorId,
+            name: record.name,
+            version: record.version
+          }
+        : packIdentity(
+            basename(record.packFile),
+            vendorId,
+            packVendorDisplayName(record.vendorName || vendorId)
+          );
+      selectedPacks.push({ ...record, ...identity, source, archiveFile });
     }
     return {
       version: 2,
@@ -448,14 +496,30 @@ async function writeStore(storageRoot: string, store: PackStoreFile): Promise<vo
   }
 }
 
-function sanitizeIdentifier(value: string): string {
-  const cleaned = value.replace(/[^A-Za-z0-9_-]/g, '_');
-  return cleaned.length > 0 ? cleaned : 'Unknown';
+/** Creates a registry identity from a vendor name parsed out of a Pack. */
+export function packVendorIdFromName(vendorName: string): string {
+  return packVendorId(vendorName);
 }
 
-/** PDSC Dvendor values carry a numeric suffix ('Sinomcu:985'); drop it for display. */
-function vendorDisplayName(vendorName: string): string {
-  return vendorName.replace(/:\d+$/, '') || vendorName;
+function packIdentity(
+  packFile: string,
+  vendorId: string,
+  vendorName: string,
+  metadata?: PackIdentityMetadata
+): Pick<ImportedPackRecord, 'packId' | 'vendorId' | 'name' | 'version'> {
+  const fileIdentity = packNameFromFileName(packFile);
+  const vendorPrefix = `${vendorName}.`;
+  const name = metadata?.name?.trim()
+    || (fileIdentity.name.toLowerCase().startsWith(vendorPrefix.toLowerCase())
+      ? fileIdentity.name.slice(vendorPrefix.length)
+      : fileIdentity.name);
+  const version = metadata?.version?.trim() || fileIdentity.version || 'unknown';
+  return {
+    packId: `${vendorId}:${name}`,
+    vendorId,
+    name,
+    version
+  };
 }
 
 function errorMessage(error: unknown): string {

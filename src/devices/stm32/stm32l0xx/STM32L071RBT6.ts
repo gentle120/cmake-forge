@@ -1,13 +1,3 @@
-import { createStm32L0Profile, stm32l0ExtendedInterruptHandlers } from './l0Factory';
+import { createStm32L0Profile } from './l0Factory';
 
-export const STM32L071RBT6 = createStm32L0Profile(
-  'STM32L071RBT6',
-  128 * 1024,
-  'STM32L071RBT6.ld',
-  {
-    define: 'STM32L071xx',
-    ramLength: 20 * 1024,
-    gnuStartupFileName: 'startup_stm32l071xx.S',
-    interruptHandlers: stm32l0ExtendedInterruptHandlers
-  }
-);
+export const STM32L071RBT6 = createStm32L0Profile('STM32L071RBT6');

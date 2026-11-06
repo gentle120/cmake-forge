@@ -15,12 +15,9 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - `DeviceProfile`（`src/devices/deviceProfiles.ts`）是生成器的唯一芯片契约；`part` 在注册表内唯一（大写归一化），未知 part 抛 `Unsupported MCU: <part>`。
 - `registerDeviceProfiles()` 允许运行时追加档案；`unregisterDeviceProfilesByPack()` 按来源移除并恢复前一个来源或内置档案；`listDeviceProfiles()/getDeviceProfile()` 签名稳定，返回防御性拷贝。
 - 厂商必须先在 `vendorRegistry` 注册（id 唯一，`getVendorMetadata` 未知 id 抛错）。
-- 命令 ID：`cmakeEmbedded.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/importPack/removePack/buildProject/selectArmToolchain`。
-- 工作区可包含多个工程；扫描、生成、烧录、调试与构建都以当前选中的工程根目录为边界，不跨工程合并源文件。目标工程按工作区持久化；发现结果只有一个时自动选择，多个时保留有效选择或等待用户选择。空工作区根目录仍作为可扫描目标保留；扫描返回零个源文件、头文件目录和宏，并明确提示没有 C/C++ 或汇编源文件。
-- `buildProject` 使用已有 `debug` 或 `release` CMake 预设；配置失败或取消后不得开始编译步骤。构建日志包含 stdout、stderr 和最终不带换行的输出。
-- `cmakeEmbedded.armToolchainPath` 为 ARM GNU bin 目录，由侧栏、构建与生成的 Cortex-Debug/IntelliSense 配置共享；侧栏保存和浏览只接受含 GCC、G++、objcopy、size 的目录，GCC 可执行文件输入归一化为 bin 目录，留空使用 PATH。
-- 工具链设置写入已有的最具体作用域（workspace folder、workspace、global）；显式构建仅叠加子进程 PATH，不修改系统环境或在工程工具链文件中写入机器绝对路径。
-- 工具链侧栏状态仅验证 `arm-none-eabi-gcc/g++/objcopy/size` 文件存在，不代表固件已编译或调试硬件已连接。
+- 命令 ID：`cmakeEmbedded.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/importPack/removePack`；`package.json` 贡献的命令必须与 `extension.ts` 注册的命令一一对应。
+- 工作区可包含多个工程；扫描、生成、烧录与调试都以当前选中的工程根目录为边界，不跨工程合并源文件。目标工程按工作区持久化；发现结果只有一个时自动选择，多个时保留有效选择或等待用户选择。空工作区根目录仍作为可扫描目标保留；扫描返回零个源文件、头文件目录和宏，并明确提示没有 C/C++ 或汇编源文件。
+- 插件不提供构建命令、构建执行器或 ARM GNU 路径设置；配置、编译与调试分别由 CMake Tools 与 Cortex-Debug 拥有。生成产物只写可移植命令名 `arm-none-eabi-gcc/g++/objcopy/size`，不含机器绝对路径。
 - 生成文件落盘前必须经过覆盖确认（`shared/generatedFiles.ts`）。
 - 内核向量表 16 槽 + `interruptHandlers` 按序拼接，槽位 `'0'` 表示保留（`startupGenerator`）。
 
@@ -40,7 +37,10 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - 烧录后端 `openocd|jlink|pyocd` 与探针兼容矩阵见 `src/flash/backendProfiles.ts`；pyocd 后端不支持 J-Link 探针（硬件限制）。
 - pyOCD 的 pack 参数必须是真实存在的 `.pack` 文件；导入设备没有归档时省略 `--pack`，不得生成指向虚拟路径的配置。
 - 在线 Pack 搜索可复用 TTL 缓存，限制并发索引请求，并在取消后停止发起后续请求；同厂商同名 Pack 只展示版本最高的一项。
-- 侧栏 MCU 选择中，series 不属于当前 vendor 时回退到该 vendor 首个系列，不保留跨 vendor 残留。
+- 侧栏 MCU 选择为 vendor → pack → version → series → part 五级；series/part 必须属于当前选中 Pack 的版本，否则回退到该版本首个可用系列与型号，不保留跨 vendor 或跨 Pack 残留。
+- Pack 目录条目按身份区分：`builtin`（每厂商一个虚拟 Pack，单一 `builtin` 版本）、`installed`、`imported`、`downloadable`；同一 packId+version 只展示一个条目，已安装/已导入优先于可下载。
+- 已安装 Pack 的身份取自 PDSC（`Dvendor`、包名、`release version`）；Keil 安装目录名或归档文件名不是最终身份，PDSC 无法解析的条目被跳过。
+- 目录选项的 `packFile` 是安装位置，不是导入档案的所有权键；导入档案的所有权键固定为 `packs/<vendor>/<file>.pack` 形式的扩展存储相对路径。
 - 侧栏调试器列表仅提供当前烧录后端支持的探针；切换后端时不保留不兼容探针。
 
 ## Performance And Resources
@@ -50,7 +50,6 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 ## Safety And Failure Behavior
 
 - 生成器绝不执行外部工具；flash.py 由用户显式运行。
-- 构建命令只在已信任工作区由用户显式触发，最多执行一个构建；取消终止构建进程树，构建命令不执行烧录。
 - zip 读取器遇 Zip64/加密条目抛显式错误，不部分解压。
 - 校验失败的 Pack 设备进入 skipped 并给出原因，不中断整包导入。
 
@@ -58,8 +57,9 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 
 | Contract | Automated evidence location | Operational acceptance surface |
 | --- | --- | --- |
-| DeviceProfile 注册表唯一性与校验 | `src/test/deviceProfile.test.ts` | 侧边栏三级选择流 |
+| DeviceProfile 注册表唯一性与校验 | `src/test/deviceProfile.test.ts` | 侧边栏五级选择流 |
 | Pack 导入→档案可查 | `src/test/packParser.test.ts`、`src/test/importedProfiles.test.ts` | 扩展宿主导入真实 pack 后生成 |
 | 三后端 flash.py/launch.json | `src/test/flashScriptGenerator.test.ts`、`src/test/debugConfigGenerator.test.ts` | 本机 J-Link/pyOCD 真机烧录（用户侧） |
 | 生成工程可编译 | `src/test/cmakeBuild.test.ts` | `cmake --preset debug && cmake --build --preset debug` |
-| Keil Pack 发现 | `src/test/toolchainScanner.test.ts` | 扩展宿主「导入 Pack」选择 Keil 已安装 Pack |
+| Keil Pack 发现与 PDSC 身份 | `src/test/toolchainScanner.test.ts`、`src/test/installedPacks.test.ts` | 扩展宿主「导入 Pack」选择 Keil 已安装 Pack |
+| Pack 目录五级选择与失败恢复 | `src/test/sidebarBuild.test.ts`、`src/test/sidebarAssets.test.ts` | 扩展宿主侧栏实际选择流 |

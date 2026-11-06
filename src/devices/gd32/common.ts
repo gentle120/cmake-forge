@@ -36,12 +36,39 @@ export const gd32f1HighDensityInterruptHandlers = [
   'DMA1_Channel1_IRQHandler', 'DMA1_Channel2_IRQHandler', 'DMA1_Channel3_4_IRQHandler'
 ];
 
-interface Gd32F1ProfileOptions {
-  define?: string;
+interface Gd32F1PartDifference {
+  flashLength?: number;
   ramLength?: number;
+  define?: string;
   gnuStartupFileName?: string;
   interruptHandlers?: string[];
 }
+
+const gd32F1PartDifferences: Record<string, Gd32F1PartDifference> = {
+  GD32F103CBT6: { flashLength: 128 * 1024 },
+  GD32F103RBT6: { flashLength: 128 * 1024 },
+  GD32F103RCT6: {
+    flashLength: 256 * 1024,
+    ramLength: 48 * 1024,
+    define: 'GD32F10X_HD',
+    gnuStartupFileName: 'startup_gd32f10x_hd.S',
+    interruptHandlers: gd32f1HighDensityInterruptHandlers
+  }
+};
+
+interface Gd32F4PartDifference {
+  ramLength?: number;
+  define?: string;
+  gnuStartupFileName?: string;
+}
+
+const gd32F4PartDifferences: Record<string, Gd32F4PartDifference> = {
+  GD32F450VGT6: {
+    ramLength: 256 * 1024,
+    define: 'GD32F450',
+    gnuStartupFileName: 'startup_gd32f450_470.S'
+  }
+};
 
 export const gd32f4InterruptHandlers = [
   'WWDGT_IRQHandler', 'LVD_IRQHandler', 'TAMPER_STAMP_IRQHandler', 'RTC_WKUP_IRQHandler',
@@ -70,12 +97,8 @@ export const gd32f4InterruptHandlers = [
   'SPI4_IRQHandler', 'SPI5_IRQHandler', 'TLI_IRQHandler', 'TLI_ER_IRQHandler', 'IPA_IRQHandler'
 ];
 
-export function createGd32F1Profile(
-  part: string,
-  flashLength: number,
-  linkerFileName: string,
-  options: Gd32F1ProfileOptions = {}
-): DeviceProfile {
+export function createGd32F1Profile(part: string): DeviceProfile {
+  const difference = gd32F1PartDifferences[part] ?? {};
   return {
     part,
     vendor: 'GD',
@@ -84,26 +107,20 @@ export function createGd32F1Profile(
     core: 'cortex-m3',
     architecture: 'arm',
     toolchainPrefix: 'arm-none-eabi',
-    defines: [options.define ?? 'GD32F10X_MD'],
+    defines: [difference.define ?? 'GD32F10X_MD'],
     compilerFlags: ['-mcpu=cortex-m3', '-mthumb'],
-    flash: { origin: 0x08000000, length: flashLength },
-    ram: { origin: 0x20000000, length: options.ramLength ?? 20 * 1024 },
-    linkerFileName,
-    gnuStartupFileName: options.gnuStartupFileName ?? 'startup_gd32f10x_md.S',
+    flash: { origin: 0x08000000, length: difference.flashLength ?? 64 * 1024 },
+    ram: { origin: 0x20000000, length: difference.ramLength ?? 20 * 1024 },
+    linkerFileName: `${part}.ld`,
+    gnuStartupFileName: difference.gnuStartupFileName ?? 'startup_gd32f10x_md.S',
     toolchainFileName: 'gd32-toolchain.cmake',
-    interruptHandlers: [...(options.interruptHandlers ?? gd32f1InterruptHandlers)],
+    interruptHandlers: [...(difference.interruptHandlers ?? gd32f1InterruptHandlers)],
     debugTarget: 'stm32f1x'
   };
 }
 
-export function createGd32F4Profile(
-  part: string,
-  flashLength: number,
-  ramLength: number,
-  linkerFileName: string,
-  define: string,
-  startupFileName: string
-): DeviceProfile {
+export function createGd32F4Profile(part: string): DeviceProfile {
+  const difference = gd32F4PartDifferences[part] ?? {};
   return {
     part,
     vendor: 'GD',
@@ -112,13 +129,13 @@ export function createGd32F4Profile(
     core: 'cortex-m4',
     architecture: 'arm',
     toolchainPrefix: 'arm-none-eabi',
-    defines: [define],
+    defines: [difference.define ?? 'GD32F407'],
     compilerFlags: ['-mcpu=cortex-m4', '-mthumb', '-mfpu=fpv4-sp-d16', '-mfloat-abi=hard'],
-    flash: { origin: 0x08000000, length: flashLength },
-    ram: { origin: 0x20000000, length: ramLength },
+    flash: { origin: 0x08000000, length: 1024 * 1024 },
+    ram: { origin: 0x20000000, length: difference.ramLength ?? 192 * 1024 },
     additionalMemory: [{ name: 'TCMSRAM', attributes: 'rwx', origin: 0x10000000, length: 64 * 1024 }],
-    linkerFileName,
-    gnuStartupFileName: startupFileName,
+    linkerFileName: `${part}.ld`,
+    gnuStartupFileName: difference.gnuStartupFileName ?? 'startup_gd32f407_427.S',
     toolchainFileName: 'gd32f4-toolchain.cmake',
     interruptHandlers: [...gd32f4InterruptHandlers],
     debugTarget: 'stm32f4x'

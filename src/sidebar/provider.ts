@@ -1,14 +1,18 @@
 import * as vscode from 'vscode';
-import type { BuildRunResult } from '../generation/buildRunner';
-import { armGccExecutablePath, inspectArmToolchainPath, normalizeArmToolchainPath } from '../env/armToolchain';
 import type { CommandResult } from '../shared/commandResult';
 import { randomBytes } from 'node:crypto';
 import {
-  getDeviceProfile,
+  getDeviceProfileForPack,
   isRuntimeDeviceProfile,
-  listDeviceProfiles
+  listDeviceProfilesForPack
 } from '../devices/deviceProfiles';
-import { listDeviceProfilesForSeries, listDeviceSeries } from '../devices/deviceSelection';
+import type { DevicePackOption } from '../devices/deviceSelection';
+import {
+  buildDevicePackOptions,
+  listDeviceProfilesForSeries,
+  listDeviceSeries
+} from '../devices/deviceSelection';
+import { getVendorMetadata, hasVendor } from '../devices/vendorRegistry';
 import { getFlashProbeProfile } from '../flash/probeProfiles';
 import { getFlashTargetProfile } from '../flash/targets/targetProfiles';
 import {
@@ -41,7 +45,9 @@ import { renderSidebarHtml } from './html';
 import { parseIncomingMessage, type SidebarIncomingMessage } from './messages';
 import {
   buildSidebarState,
+  nextMcuSelection,
   sanitizeSidebarSelection,
+  type SidebarOption,
   type SidebarSelection
 } from './state';
 
@@ -62,7 +68,14 @@ export interface SidebarProviderDependencies {
   discoverProjects(roots: string[], options?: WorkspaceProjectScanOptions): Promise<WorkspaceProject[]>;
   scanProject?(root: string, options?: { signal?: AbortSignal }): ReturnType<typeof scanProject>;
   /** Resolves the stored CMSIS pack path for an imported part, when available. */
-  packFileForPart?(part: string): string | undefined;
+  packFileForPart?(part: string, sourcePack?: string): string | undefined;
+  discoverPackVendors?(): Promise<{ vendors: Array<{ value: string; label: string }>; notice?: string }>;
+  loadPackCatalog?(vendor: string): Promise<{ options: DevicePackOption[]; notice?: string }>;
+  activatePack?(
+    vendor: string,
+    packId: string,
+    version: string
+  ): Promise<{ vendorId: string; packId: string; version: string; sourcePack: string; message: string }>;
 }
 
 function workspaceName(): string {
@@ -96,6 +109,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private projectDiscoveryController?: AbortController;
   private workspaceScanController?: AbortController;
   private workspaceScanPromise?: Promise<void>;
+  private packOptions: DevicePackOption[] = [];
+  private vendorOptions?: Array<{ value: string; label: string }>;
+  private pendingPackId: string;
+  private packCatalogNotice = '';
+  private packCatalogRequest = 0;
   private readonly viewDisposables: vscode.Disposable[] = [];
 
   constructor(
@@ -105,6 +123,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     this.selectionValue = sanitizeSidebarSelection(
       context.workspaceState.get(selectionKey)
     );
+    this.pendingPackId = this.selectionValue.mcu.packId;
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -141,11 +160,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   }
 
   selection(): SidebarSelection {
-    return sanitizeSidebarSelection(this.selectionValue);
+    return sanitizeSidebarSelection(this.selectionValue, this.selectionValue, this.packOptions);
   }
 
   refresh(): void {
     this.postState();
+    void this.refreshPackCatalog(this.selectionValue.mcu.vendor);
   }
 
   dispose(): void {
@@ -163,11 +183,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   }
 
   private state() {
-    return buildSidebarState(
+    const loader = this.dependencies.loadPackCatalog;
+    // The sidebar loader contract is optional for old host fixtures. Without
+    // it, build built-in options synchronously so the first state remains usable.
+    const state = buildSidebarState(
       workspaceName(),
       this.selectionValue,
       this.dependencies.discoverToolchains(),
-      inspectArmToolchainPath(this.armToolchainPath()),
       this.discoveredProjects.map((project) => ({
         value: project.root,
         label: project.label,
@@ -175,8 +197,38 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         detail: project.markers.join(', ')
       })),
       this.selectionValue.projectRoot,
-      this.discoveringProjects
+      this.discoveringProjects,
+      this.packOptions,
+      this.pendingPackId,
+      this.vendorOptions,
+      this.packCatalogNotice
     );
+    if (!loader || this.packOptions.length > 0) {
+      return state;
+    }
+    const vendor = state.selection.mcu.vendor;
+    const fallback = buildDevicePackOptions({
+      vendorId: vendor,
+      hasBuiltin: listDeviceProfilesForPack(`builtin:${vendor}`).length > 0,
+      imported: [],
+      installed: [],
+      online: []
+    });
+    return {
+      ...state,
+      packs: fallback.map((option) => ({
+        value: option.packId,
+        label: option.name,
+        description: option.origin
+      })),
+      versions: fallback
+        .filter((option) => option.packId === this.selectionValue.mcu.packId)
+        .map((option) => ({
+          value: option.version,
+          label: option.version === 'builtin' ? '内置' : option.version,
+          description: option.origin
+        }))
+    };
   }
 
   private postState(): void {
@@ -185,30 +237,266 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
 
   private async saveSelection(value: unknown): Promise<void> {
     const previous = this.selectionValue;
-    this.selectionValue = sanitizeSidebarSelection(value, previous);
+    const requested = sanitizeSidebarSelection(value, previous, this.packOptions);
+    this.selectionValue = requested.mcu.vendor === previous.mcu.vendor
+      ? sanitizeSidebarSelection(
+          nextMcuSelection(previous, {
+            vendor: requested.mcu.vendor,
+            packId: requested.mcu.packId,
+            version: requested.mcu.version,
+            sourcePack: requested.mcu.sourcePack,
+            series: requested.mcu.series,
+            part: requested.mcu.part
+          }, this.packOptions),
+          previous,
+          this.packOptions
+        )
+      : requested;
     const vendorChanged = this.selectionValue.mcu.vendor !== previous.mcu.vendor;
-    const seriesChanged = this.selectionValue.mcu.series !== previous.mcu.series;
-    if (vendorChanged || seriesChanged) {
-      const profiles = listDeviceProfiles();
-      const nextSeries = vendorChanged
-        ? listDeviceSeries(profiles, this.selectionValue.mcu.vendor)[0]
-        : this.selectionValue.mcu.series;
-      const nextPart = listDeviceProfilesForSeries(
-        profiles,
-        this.selectionValue.mcu.vendor,
-        nextSeries
-      )[0]?.part;
-      this.selectionValue = sanitizeSidebarSelection({
-        ...this.selectionValue,
-        mcu: {
-          vendor: this.selectionValue.mcu.vendor,
-          series: nextSeries,
-          part: nextPart
-        }
-      }, previous);
-    }
     await this.context.workspaceState.update(selectionKey, this.selectionValue);
+    if (vendorChanged) {
+      this.pendingPackId = this.selectionValue.mcu.packId;
+      this.packOptions = [];
+      this.packCatalogNotice = '';
+    }
     this.postState();
+    if (vendorChanged) {
+      await this.refreshPackCatalog(this.selectionValue.mcu.vendor);
+    }
+  }
+
+  private async refreshPackCatalog(vendor: string): Promise<void> {
+    const request = ++this.packCatalogRequest;
+    this.packOptions = [];
+    this.post({
+      type: 'packCatalogLoading',
+      vendor,
+      packs: buildDevicePackOptions({
+        vendorId: vendor,
+        hasBuiltin: listDeviceProfilesForPack(`builtin:${vendor}`).length > 0,
+        imported: [],
+        installed: [],
+        online: []
+      }).map((option) => ({
+        value: option.packId,
+        label: option.name,
+        description: option.origin
+      })),
+      versions: [],
+      notice: ''
+    });
+    try {
+      const [vendorResult, catalogResult] = await Promise.all([
+        this.vendorOptions || !this.dependencies.discoverPackVendors
+          ? Promise.resolve(undefined)
+          : this.dependencies.discoverPackVendors(),
+        this.dependencies.loadPackCatalog
+          ? this.dependencies.loadPackCatalog(vendor)
+          : Promise.resolve({
+              options: [] as DevicePackOption[],
+              notice: undefined as string | undefined
+            })
+      ]);
+      if (request !== this.packCatalogRequest || vendor !== this.selectionValue.mcu.vendor) {
+        return;
+      }
+      if (vendorResult) {
+        this.vendorOptions = vendorResult.vendors;
+      }
+      this.packOptions = catalogResult.options;
+      this.packCatalogNotice = catalogResult.notice || vendorResult?.notice || '';
+
+      const selected = this.packOptions.find((option) =>
+        option.packId === this.selectionValue.mcu.packId
+        && option.version === this.selectionValue.mcu.version
+      );
+      const fallback = this.packOptions.find((option) =>
+        option.packId === `builtin:${vendor}`
+      ) ?? this.packOptions[0];
+      if (!selected && fallback) {
+        this.pendingPackId = fallback.packId;
+        if (fallback.origin === 'builtin' && (
+          this.selectionValue.mcu.vendor !== vendor
+          || !listDeviceProfilesForPack(`builtin:${vendor}`).some((profile) =>
+            profile.part === this.selectionValue.mcu.part
+          )
+        )) {
+          this.selectionValue = sanitizeSidebarSelection(
+            nextMcuSelection(this.selectionValue, {
+              vendor,
+              packId: fallback.packId,
+              version: fallback.version,
+              sourcePack: undefined
+            }, this.packOptions),
+            this.selectionValue,
+            this.packOptions
+          );
+          await this.context.workspaceState.update(selectionKey, this.selectionValue);
+        }
+      } else {
+        this.pendingPackId = selected?.packId ?? this.selectionValue.mcu.packId;
+      }
+      const options = this.optionsForCatalog();
+      this.post({
+        type: 'packCatalogState',
+        vendor,
+        packs: options.packs,
+        versions: options.versions,
+        notice: this.packCatalogNotice
+      });
+      this.postState();
+    } catch (error) {
+      if (request !== this.packCatalogRequest || vendor !== this.selectionValue.mcu.vendor) {
+        return;
+      }
+      this.packCatalogNotice = error instanceof Error ? error.message : String(error);
+      this.packOptions = this.packOptions.filter((option) =>
+        option.vendorId === vendor && option.origin !== 'downloadable'
+      );
+      const options = this.optionsForCatalog();
+      this.post({
+        type: 'packCatalogState',
+        vendor,
+        packs: options.packs,
+        versions: options.versions,
+        notice: this.packCatalogNotice
+      });
+      this.postState();
+    }
+  }
+
+  private optionsForCatalog(): { packs: SidebarOption[]; versions: SidebarOption[] } {
+    const vendor = this.selectionValue.mcu.vendor;
+    const choices = this.packOptions.length > 0
+      ? this.packOptions
+      : buildDevicePackOptions({
+          vendorId: vendor,
+          hasBuiltin: listDeviceProfilesForPack(`builtin:${vendor}`).length > 0,
+          imported: [],
+          installed: [],
+          online: []
+        });
+    const packs = new Map<string, DevicePackOption>();
+    for (const option of choices) {
+      if (!packs.has(option.packId)) {
+        packs.set(option.packId, option);
+      }
+    }
+    return {
+      packs: [...packs.values()].map((option) => ({
+        value: option.packId,
+        label: option.name,
+        description: option.origin
+      })),
+      versions: choices
+        .filter((option) => option.packId === this.pendingPackId)
+        .map((option) => ({
+          value: option.version,
+          label: option.version === 'builtin' ? '内置' : option.version,
+          description: option.origin
+        }))
+    };
+  }
+
+  private async activatePack(packId: string, version: string): Promise<void> {
+    if (this.busy) {
+      return;
+    }
+    const vendor = this.selectionValue.mcu.vendor;
+    const option = this.packOptions.find((candidate) =>
+      candidate.packId === packId && candidate.version === version
+    );
+    if (!option || !this.dependencies.activatePack) {
+      this.post({
+        type: 'notification',
+        level: 'error',
+        message: '所选 Pack 版本当前不可用，请刷新目录后重试。'
+      });
+      return;
+    }
+
+    this.busy = true;
+    this.post({ type: 'operationStarted', operation: '正在准备芯片支持包' });
+    try {
+      const activated = await this.dependencies.activatePack(vendor, packId, version);
+      const activatedVendor = activated.vendorId;
+      if (activatedVendor !== vendor && !this.vendorOptions?.some((item) => item.value === activatedVendor)) {
+        this.vendorOptions = [
+          ...(this.vendorOptions ?? []),
+          {
+            value: activatedVendor,
+            label: hasVendor(activatedVendor)
+              ? getVendorMetadata(activatedVendor).label
+              : activatedVendor
+          }
+        ];
+      }
+      let sourcePack = activated.sourcePack;
+      if (option.origin !== 'builtin' && this.dependencies.loadPackCatalog) {
+        const catalog = await this.dependencies.loadPackCatalog(activatedVendor);
+        this.packOptions = catalog.options;
+        this.packCatalogNotice = catalog.notice ?? '';
+        // The catalog key is the storage key of an already imported version;
+        // an installed option's packFile is only its Keil installation path.
+        const catalogKey = this.packOptions.find((candidate) =>
+          candidate.packId === activated.packId
+          && candidate.version === activated.version
+          && candidate.origin !== 'installed'
+        )?.packFile;
+        sourcePack = catalogKey ?? sourcePack;
+      }
+      const profiles = listDeviceProfilesForPack(sourcePack);
+      if (profiles.length === 0) {
+        throw new Error('此 Pack 版本没有可用于生成的芯片。');
+      }
+      const series = [...new Set(profiles.map((profile) => profile.series))]
+        .sort((left, right) => left.localeCompare(right))[0];
+      const profile = profiles
+        .filter((candidate) => candidate.series === series)
+        .sort((left, right) => left.part.localeCompare(right.part))[0];
+      if (!profile) {
+        throw new Error('此 Pack 版本没有可用于生成的芯片。');
+      }
+      this.selectionValue = sanitizeSidebarSelection(
+        nextMcuSelection(this.selectionValue, {
+          vendor: activatedVendor,
+          packId: activated.packId,
+          version: activated.version,
+          sourcePack,
+          series,
+          part: profile.part
+        }, this.packOptions),
+        this.selectionValue,
+        this.packOptions
+      );
+      this.pendingPackId = activated.packId;
+      await this.context.workspaceState.update(selectionKey, this.selectionValue);
+      const options = this.optionsForCatalog();
+      this.post({
+        type: 'packCatalogState',
+        vendor: activatedVendor,
+        packs: options.packs,
+        versions: options.versions,
+        notice: this.packCatalogNotice
+      });
+      this.postState();
+      this.post({
+        type: 'operationFinished',
+        result: { ok: true, message: activated.message, files: [] }
+      });
+    } catch (error) {
+      this.post({
+        type: 'operationFinished',
+        result: {
+          ok: false,
+          message: error instanceof Error ? error.message : String(error),
+          files: []
+        }
+      });
+    } finally {
+      this.busy = false;
+      this.postState();
+    }
   }
 
   private async discoverProjects(): Promise<void> {
@@ -306,15 +594,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     };
   }
 
-  private armToolchainPath(): string {
-    return normalizeArmToolchainPath(vscode.workspace
-      .getConfiguration('cmakeEmbedded', vscode.workspace.workspaceFolders?.[0]?.uri)
-      .get<string>('armToolchainPath', ''));
-  }
-
   private flashGenerationOptions() {
     const selection = this.selectionValue.flash;
-    const profile = getDeviceProfile(this.selectionValue.mcu.part);
+    const profile = this.selectedDeviceProfile();
     const probe = getFlashProbeProfile(selection.probeId);
     const requested = selection.backend as FlashBackendId;
     const backend: FlashBackendId = backendSupportsProbe(requested, probe.id)
@@ -324,7 +606,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       part: profile.part,
       core: profile.core,
       packFile: isRuntimeDeviceProfile(profile.part)
-        ? this.dependencies.packFileForPart?.(profile.part)
+        ? this.dependencies.packFileForPart?.(
+            profile.part,
+            this.selectionValue.mcu.sourcePack
+          )
         : undefined
     };
     return {
@@ -335,6 +620,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       device,
       executables: this.executablePaths()
     };
+  }
+
+  private selectedDeviceProfile() {
+    return getDeviceProfileForPack(
+      this.selectionValue.mcu.part,
+      this.selectionValue.mcu.sourcePack ?? `builtin:${this.selectionValue.mcu.vendor}`
+    );
   }
 
   private async handleMessage(message: SidebarIncomingMessage): Promise<void> {
@@ -352,6 +644,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         this.discoveringProjects = false;
         this.postState();
       });
+      void this.refreshPackCatalog(this.selectionValue.mcu.vendor);
       this.postState();
       if (this.selectionValue.debugEnabled) {
         this.post({
@@ -373,6 +666,24 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           message: `无法保存侧栏选择：${text}`
         });
       }
+      return;
+    }
+    if (message.type === 'selectPack') {
+      if (this.packOptions.some((option) => option.packId === message.packId)) {
+        this.pendingPackId = message.packId;
+        const options = this.optionsForCatalog();
+        this.post({
+          type: 'packCatalogState',
+          vendor: this.selectionValue.mcu.vendor,
+          packs: options.packs,
+          versions: options.versions,
+          notice: this.packCatalogNotice
+        });
+      }
+      return;
+    }
+    if (message.type === 'activatePack') {
+      await this.activatePack(message.packId, message.version);
       return;
     }
     if (message.type === 'setProjectRoot') {
@@ -399,33 +710,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.postState();
       return;
     }
-    if (message.type === 'setArmToolchainPath' || message.type === 'browseArmToolchain') {
-      await this.runGeneration('正在设置 ARM GNU 工具链', async () => {
-        const result = await vscode.commands.executeCommand<CommandResult>('cmakeEmbedded.selectArmToolchain',
-          message.type === 'setArmToolchainPath' ? message.path : undefined);
-        return { kind: 'mcu', ...result, files: [] };
-      });
-      this.postState();
-      return;
-    }
     if (message.type === 'openSettings') {
       await vscode.commands.executeCommand(
         'workbench.action.openSettings',
         '@ext:gentle120.cmake-embedded'
       );
-      return;
-    }
-    if (message.type === 'buildProject') {
-      await this.runGeneration('正在配置并编译', async () => {
-        const result = await vscode.commands.executeCommand<BuildRunResult | undefined>('cmakeEmbedded.buildProject');
-        return {
-          kind: 'mcu',
-          ok: result?.ok ?? false,
-          cancelled: result?.cancelled ?? !result,
-          message: result?.message ?? '构建未执行，详情见通知或输出面板。',
-          files: []
-        };
-      });
       return;
     }
     if (message.type === 'generateProject') {
@@ -472,13 +761,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         if (this.selectionValue.mode === 'linux') {
           return generateLinuxWorkflow(this.workflowHost(), this.toolchainForSelection());
         }
-        const profile = getDeviceProfile(this.selectionValue.mcu.part);
+        const profile = this.selectedDeviceProfile();
         const flash = this.selectionValue.flash.enabled
           ? this.flashGenerationOptions()
           : undefined;
-        const project = await generateMcuWorkflow(this.workflowHost(), profile, {
-          flash, compilerPath: armGccExecutablePath(this.armToolchainPath())
-        });
+        const project = await generateMcuWorkflow(this.workflowHost(), profile, { flash });
         if (!project.ok || !this.selectionValue.debugEnabled || !flash) {
           return project;
         }
@@ -487,7 +774,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           flash.target,
           flash.probe,
           flash.openocdPath,
-          this.armToolchainPath() || undefined,
           flash.backend,
           flash.device
         );
@@ -523,7 +809,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           flash.target,
           flash.probe,
           flash.openocdPath,
-          this.armToolchainPath() || undefined,
           flash.backend,
           flash.device
         );

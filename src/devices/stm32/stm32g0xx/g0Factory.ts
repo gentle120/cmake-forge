@@ -1,4 +1,5 @@
 import type { DeviceProfile } from '../../deviceProfiles';
+import { createStm32BuiltinProfile } from '../builtinProfileFactory';
 
 // External IRQ sections transcribed from the GCC startup files in
 // STMicroelectronics/cmsis-device-g0, Source/Templates/gcc/. Reserved slots
@@ -54,46 +55,11 @@ export const stm32g0b1InterruptHandlers = [
   'USART1_IRQHandler', 'USART2_LPUART2_IRQHandler', 'USART3_4_5_6_LPUART1_IRQHandler', 'CEC_IRQHandler'
 ];
 
-const familyTables: Record<string, { gnuStartupFileName: string; interruptHandlers: string[] }> = {
-  STM32G030: { gnuStartupFileName: 'startup_stm32g030xx.S', interruptHandlers: stm32g030InterruptHandlers },
-  STM32G071: { gnuStartupFileName: 'startup_stm32g071xx.S', interruptHandlers: stm32g071InterruptHandlers },
-  STM32G0B1: { gnuStartupFileName: 'startup_stm32g0b1xx.S', interruptHandlers: stm32g0b1InterruptHandlers }
-};
-
-interface Stm32G0ProfileOptions {
-  define?: string;
-  ramLength?: number;
-  gnuStartupFileName?: string;
-  interruptHandlers?: string[];
-}
-
-export function createStm32G0Profile(
-  part: string,
-  flashLength: number,
-  linkerFileName: string,
-  options: Stm32G0ProfileOptions = {}
-): DeviceProfile {
-  const family = part.match(/^STM32G[0-9A-Z]{3}/)?.[0] ?? 'STM32G071';
-  const table = familyTables[family] ?? {
-    gnuStartupFileName: 'startup_stm32g071xx.S',
-    interruptHandlers: stm32g071InterruptHandlers
-  };
-  return {
-    part,
-    vendor: 'STM',
-    series: 'G0x',
-    family: 'STM32G0xx',
-    core: 'cortex-m0plus',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [options.define ?? `${family}xx`],
-    compilerFlags: ['-mcpu=cortex-m0plus', '-mthumb'],
-    flash: { origin: 0x08000000, length: flashLength },
-    ram: { origin: 0x20000000, length: options.ramLength ?? 8 * 1024 },
-    linkerFileName,
-    gnuStartupFileName: options.gnuStartupFileName ?? table.gnuStartupFileName,
-    toolchainFileName: 'stm32g0-toolchain.cmake',
-    interruptHandlers: [...(options.interruptHandlers ?? table.interruptHandlers)],
-    debugTarget: 'stm32g0x'
-  };
+export function createStm32G0Profile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'G0x', {
+    stm32g030InterruptHandlers,
+    stm32g041InterruptHandlers,
+    stm32g071InterruptHandlers,
+    stm32g0b1InterruptHandlers
+  });
 }

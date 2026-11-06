@@ -1,4 +1,5 @@
 import type { DeviceProfile } from '../../deviceProfiles';
+import { createStm32BuiltinProfile } from '../builtinProfileFactory';
 
 // Vector table of the STM32WB55xx Cortex-M4 core, copied in IRQ order from
 // cmsis-device-wb Source/Templates/gcc/startup_stm32wb55xx_cm4.s (g_pfnVectors
@@ -23,27 +24,8 @@ export const stm32wbInterruptHandlers = [
   'DMA2_Channel6_IRQHandler', 'DMA2_Channel7_IRQHandler', 'DMAMUX1_OVR_IRQHandler'
 ];
 
-export function createStm32WbProfile(
-  part: string,
-  flashLength: number,
-  linkerFileName: string
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'WBx',
-    family: 'STM32WBxx',
-    core: 'cortex-m4',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: ['STM32WB55xx'],
-    compilerFlags: ['-mcpu=cortex-m4', '-mthumb', '-mfpu=fpv4-sp-d16', '-mfloat-abi=hard'],
-    flash: { origin: 0x08000000, length: flashLength },
-    ram: { origin: 0x20000000, length: 192 * 1024 },
-    linkerFileName,
-    gnuStartupFileName: 'startup_stm32wb55xx.S',
-    toolchainFileName: 'stm32wb-toolchain.cmake',
-    interruptHandlers: [...stm32wbInterruptHandlers],
-    debugTarget: 'stm32wbx'
-  };
+export function createStm32WbProfile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'WBx', {
+    stm32wbInterruptHandlers
+  });
 }

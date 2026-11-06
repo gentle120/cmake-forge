@@ -21,6 +21,13 @@ export interface ParsedPack {
   devices: PackDeviceCandidate[];
 }
 
+/** Package-level identity from the PDSC header, independent of device parsing. */
+export interface PackIdentity {
+  vendorName: string;
+  name: string;
+  version: string;
+}
+
 const CORE_BY_DCORE: Record<string, string> = {
   // Short form used by Keil-built packs.
   CM0: 'cortex-m0',
@@ -107,6 +114,33 @@ function processorAttributes(node: XmlNode): ProcessorAttributes {
     attributes.dfpu = dfpu;
   }
   return attributes;
+}
+
+/**
+ * Reads the package-level PDSC identity: release vendor, pack name and version.
+ * An extracted Keil installation folder or archive name is not authoritative.
+ */
+export function parsePackIdentity(entries: Array<{ name: string; data: Buffer }>): PackIdentity {
+  const pdscEntry = entries.find((entry) => entry.name.toLowerCase().endsWith('.pdsc'));
+  if (!pdscEntry) {
+    throw new Error('No .pdsc file found in pack');
+  }
+  const document = xmlParser.parse(pdscEntry.data.toString('utf8')) as XmlNode;
+  const packageNode = asNode(document.package);
+  const devicesNode = asNode(packageNode.devices);
+  const firstFamily = asNode(asNodeArray(devicesNode.family)[0]);
+  const vendorName =
+    textOf(firstFamily['@_Dvendor']) ?? textOf(packageNode.vendor);
+  if (!vendorName) {
+    throw new Error('PDSC has no family vendor (Dvendor)');
+  }
+  const name = textOf(packageNode.name) ?? '';
+  const release = asNode(packageNode.release);
+  return {
+    vendorName,
+    name,
+    version: textOf(release['@_version']) ?? ''
+  };
 }
 
 /** Parses a .pack (ZIP) archive. */

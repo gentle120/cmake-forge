@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import test from 'node:test';
 import { parseIncomingMessage } from '../sidebar/messages';
 
@@ -17,8 +15,6 @@ test('accepts each supported sidebar command', () => {
   assert.deepEqual(parseIncomingMessage({ type: 'generateDebugConfiguration' }), {
     type: 'generateDebugConfiguration'
   });
-  assert.deepEqual(parseIncomingMessage({ type: 'buildProject' }), { type: 'buildProject' });
-  assert.deepEqual(parseIncomingMessage({ type: 'browseArmToolchain' }), { type: 'browseArmToolchain' });
   assert.deepEqual(parseIncomingMessage({ type: 'openSettings' }), { type: 'openSettings' });
   assert.equal(parseIncomingMessage({ type: 'scanEnvironment' }), undefined);
 });
@@ -40,15 +36,21 @@ test('accepts the selected project root and rejects non-string values', () => {
   assert.equal(parseIncomingMessage({ type: 'setProjectRoot', root: 42 }), undefined);
 });
 
-test('accepts only string toolchain paths and allows clearing the configured directory', () => {
-  assert.deepEqual(parseIncomingMessage({ type: 'setArmToolchainPath', path: 'C:/Arm/bin' }), {
-    type: 'setArmToolchainPath', path: 'C:/Arm/bin'
+test('accepts Pack selection and version activation messages', () => {
+  assert.deepEqual(parseIncomingMessage({ type: 'selectPack', packId: 'STM:STM32F1xx_DFP' }), {
+    type: 'selectPack',
+    packId: 'STM:STM32F1xx_DFP'
   });
-  assert.deepEqual(parseIncomingMessage({ type: 'setArmToolchainPath', path: '' }), {
-    type: 'setArmToolchainPath', path: ''
+  assert.deepEqual(parseIncomingMessage({
+    type: 'activatePack',
+    packId: 'STM:STM32F1xx_DFP',
+    version: '2.4.1'
+  }), {
+    type: 'activatePack',
+    packId: 'STM:STM32F1xx_DFP',
+    version: '2.4.1'
   });
-  assert.equal(parseIncomingMessage({ type: 'setArmToolchainPath' }), undefined);
-  assert.equal(parseIncomingMessage({ type: 'setArmToolchainPath', path: 42 }), undefined);
+  assert.equal(parseIncomingMessage({ type: 'activatePack', packId: 42, version: '1.0.0' }), undefined);
 });
 
 test('rejects malformed messages', () => {
@@ -59,13 +61,4 @@ test('rejects malformed messages', () => {
   assert.equal(parseIncomingMessage({}), undefined);
   assert.equal(parseIncomingMessage({ type: 'unknown' }), undefined);
   assert.equal(parseIncomingMessage({ type: 'saveSelection' }), undefined);
-});
-
-test('provider routes buildProject to the cmakeEmbedded.buildProject command', () => {
-  const provider = readFileSync(join(__dirname, '..', '..', 'src', 'sidebar', 'provider.ts'), 'utf8');
-  const block = provider.slice(provider.indexOf("message.type === 'buildProject'"));
-  assert.ok(
-    /vscode\.commands\.executeCommand(?:<[^\n]+>)?\('cmakeEmbedded\.buildProject'\)/.test(block),
-    'expected buildProject to dispatch the cmakeEmbedded.buildProject command'
-  );
 });

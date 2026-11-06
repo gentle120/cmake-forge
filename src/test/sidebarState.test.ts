@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { inspectArmToolchainPath } from '../env/armToolchain';
+import {
+  getDeviceProfile,
+  registerDeviceProfiles,
+  unregisterDeviceProfilesByPack
+} from '../devices/deviceProfiles';
 import {
   buildSidebarState,
   defaultSidebarSelection,
@@ -9,13 +13,99 @@ import {
 } from '../sidebar/state';
 
 test('defaults to the first STM32 F1 device', () => {
-  const selection = defaultSidebarSelection();
+  const selection = defaultSidebarSelection() as unknown as {
+    mode: string;
+    mcu: { vendor: string; packId: string; version: string; series: string; part: string };
+    flash: { enabled: boolean };
+  };
 
   assert.equal(selection.mode, 'mcu');
   assert.equal(selection.mcu.vendor, 'STM');
+  assert.equal(selection.mcu.packId, 'builtin:STM');
+  assert.equal(selection.mcu.version, 'builtin');
   assert.equal(selection.mcu.series, 'F1x');
   assert.equal(selection.mcu.part, 'STM32F103C8T6');
   assert.equal(selection.flash.enabled, false);
+});
+
+test('filters series and devices to the selected Pack version', () => {
+  const stateApi = {
+    sanitizeSidebarSelection,
+    buildSidebarState
+  } as unknown as {
+    sanitizeSidebarSelection(
+      value: unknown,
+      fallback: ReturnType<typeof defaultSidebarSelection>,
+      packOptions: Array<{
+        packId: string;
+        vendorId: string;
+        name: string;
+        version: string;
+        origin: 'imported';
+        packFile: string;
+      }>
+    ): ReturnType<typeof defaultSidebarSelection>;
+    buildSidebarState(
+      workspaceName: string,
+      selection: ReturnType<typeof defaultSidebarSelection>,
+      discoveredToolchains: unknown[],
+      projects: unknown[],
+      projectRoot: string,
+      discoveringProjects: boolean,
+      packOptions: Array<{
+        packId: string;
+        vendorId: string;
+        name: string;
+        version: string;
+        origin: 'imported';
+        packFile: string;
+      }>
+    ): ReturnType<typeof buildSidebarState>;
+  };
+  const original = getDeviceProfile('STM32F103C8T6');
+  const oldVersion = {
+    ...original,
+    ram: { ...original.ram, length: 16 * 1024 }
+  };
+  registerDeviceProfiles([oldVersion], 'packs/STM/STM32F1xx_DFP.1.0.0.pack');
+  const packOptions = [{
+    packId: 'STM:STM32F1xx_DFP',
+    vendorId: 'STM',
+    name: 'STM32F1xx_DFP',
+    version: '1.0.0',
+    origin: 'imported' as const,
+    packFile: 'packs/STM/STM32F1xx_DFP.1.0.0.pack'
+  }];
+
+  try {
+    const selection = stateApi.sanitizeSidebarSelection({
+      ...defaultSidebarSelection(),
+      mcu: {
+        vendor: 'STM',
+        packId: 'STM:STM32F1xx_DFP',
+        version: '1.0.0',
+        series: 'F1x',
+        part: 'STM32F103C8T6'
+      }
+    }, defaultSidebarSelection(), packOptions);
+    const state = stateApi.buildSidebarState(
+      'firmware',
+      selection,
+      [],
+      [],
+      '',
+      false,
+      packOptions
+    );
+
+    assert.deepEqual(state.devices.map((device) => device.value), ['STM32F103C8T6']);
+    assert.equal(
+      (state.selection.mcu as unknown as { version: string }).version,
+      '1.0.0'
+    );
+  } finally {
+    unregisterDeviceProfilesByPack('packs/STM/STM32F1xx_DFP.1.0.0.pack');
+  }
 });
 
 test('replaces stale values with current registry defaults', () => {
@@ -75,14 +165,6 @@ test('bootstrap filters parts and annotates detected toolchains', () => {
   assert.ok(state.devices.every((device) => device.value.startsWith('STM32F1')));
   assert.ok(state.linuxToolchains.some((toolchain) => toolchain.value === 'arm'));
   assert.match(state.linuxToolchains.find((toolchain) => toolchain.value === 'arm')?.detail ?? '', /PATH/);
-});
-
-test('bootstrap exposes the effective ARM GNU toolchain independently of MCU selection', () => {
-  const toolchain = inspectArmToolchainPath('C:/ARM GNU/bin', () => true);
-  const state = buildSidebarState('firmware', defaultSidebarSelection(), [], toolchain);
-  assert.equal(state.armToolchain.binDir, 'C:/ARM GNU/bin');
-  assert.equal(state.armToolchain.state, 'ready');
-  assert.equal(buildSidebarState('firmware', defaultSidebarSelection()).armToolchain.state, 'path');
 });
 
 test('normalizes incompatible probes and only offers probes supported by the selected backend', () => {
@@ -151,7 +233,6 @@ test('uses the selected project label and exposes project discovery state', () =
     'workspace',
     defaultSidebarSelection(),
     [],
-    inspectArmToolchainPath(''),
     [
       { value: 'C:/work/firmware', label: 'work/firmware' },
       { value: 'C:/work/desktop', label: 'work/desktop' }

@@ -1,4 +1,5 @@
 import type { DeviceProfile } from '../../deviceProfiles';
+import { createStm32BuiltinProfile } from '../builtinProfileFactory';
 
 // External IRQ sections transcribed from cmsis-device-l1
 // Source/Templates/gcc startup files (IRQ 0-56 depending on density); '0'
@@ -54,34 +55,11 @@ export const stm32l152xeInterruptHandlers = [
   '0', 'COMP_ACQ_IRQHandler'
 ];
 
-interface Stm32L1ProfileOptions {
-  flashLength?: number;
-  ramLength?: number;
-  interruptHandlers?: string[];
-}
-
-export function createStm32L1Profile(
-  part: string,
-  linkerFileName: string,
-  define: string,
-  options: Stm32L1ProfileOptions = {}
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'L1x',
-    family: 'STM32L1xx',
-    core: 'cortex-m3',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [define],
-    compilerFlags: ['-mcpu=cortex-m3', '-mthumb'],
-    flash: { origin: 0x08000000, length: options.flashLength ?? 256 * 1024 },
-    ram: { origin: 0x20000000, length: options.ramLength ?? 32 * 1024 },
-    linkerFileName,
-    gnuStartupFileName: `startup_${define.toLowerCase()}.S`,
-    toolchainFileName: 'stm32l1-toolchain.cmake',
-    interruptHandlers: [...(options.interruptHandlers ?? stm32l151xcInterruptHandlers)],
-    debugTarget: 'stm32l1'
-  };
+export function createStm32L1Profile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'L1x', {
+    stm32l100xcInterruptHandlers,
+    stm32l151xbInterruptHandlers,
+    stm32l151xcInterruptHandlers,
+    stm32l152xeInterruptHandlers
+  });
 }

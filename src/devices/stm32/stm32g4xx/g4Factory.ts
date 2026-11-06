@@ -1,4 +1,5 @@
 import type { DeviceProfile } from '../../deviceProfiles';
+import { createStm32BuiltinProfile } from '../builtinProfileFactory';
 
 // Vector table of the STM32G431xx, copied in IRQ order from
 // cmsis-device-g4 Source/Templates/gcc/startup_stm32g431xx.s (g_pfnVectors
@@ -80,31 +81,9 @@ interface Stm32G4ProfileOptions {
 // SRAM2 16K form the 96KB contiguous application RAM at 0x20000000, while the
 // 32KB CCMSRAM sits alone at 0x10000000. The 32KB parts (G431) override every
 // memory-related option.
-export function createStm32G4Profile(
-  part: string,
-  flashLength: number,
-  linkerFileName: string,
-  options: Stm32G4ProfileOptions = {}
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'G4x',
-    family: 'STM32G4xx',
-    core: 'cortex-m4',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [options.define ?? 'STM32G474xx'],
-    compilerFlags: ['-mcpu=cortex-m4', '-mthumb', '-mfpu=fpv4-sp-d16', '-mfloat-abi=hard'],
-    flash: { origin: 0x08000000, length: flashLength },
-    ram: { origin: 0x20000000, length: options.ramLength ?? 96 * 1024 },
-    additionalMemory: options.additionalMemory ?? [
-      { name: 'CCMSRAM', attributes: 'rw', origin: 0x10000000, length: 32 * 1024 }
-    ],
-    linkerFileName,
-    gnuStartupFileName: options.gnuStartupFileName ?? 'startup_stm32g474xx.S',
-    toolchainFileName: 'stm32g4-toolchain.cmake',
-    interruptHandlers: [...(options.interruptHandlers ?? stm32g474InterruptHandlers)],
-    debugTarget: 'stm32g4x'
-  };
+export function createStm32G4Profile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'G4x', {
+    stm32g431InterruptHandlers,
+    stm32g474InterruptHandlers
+  });
 }

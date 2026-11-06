@@ -34,12 +34,11 @@ test('creates a usable C/C++ properties file when none exists', () => {
   }]);
 });
 
-test('uses the configured ARM GCC path without removing user include directories or defines', () => {
-  const compiler = 'C:/ARM GNU/bin/arm-none-eabi-gcc.exe';
+test('keeps a portable ARM GCC command without removing user include directories or defines', () => {
   const result = JSON.parse(configureCppProperties(JSON.stringify({
     configurations: [{ name: 'MCU', includePath: ['${workspaceFolder}/include'], defines: ['APP_FEATURE=1'] }]
-  }), compiler));
-  assert.equal(result.configurations[0].compilerPath, compiler);
+  })));
+  assert.equal(result.configurations[0].compilerPath, 'arm-none-eabi-gcc');
   assert.deepEqual(result.configurations[0].includePath, ['${workspaceFolder}/include']);
   assert.deepEqual(result.configurations[0].defines, ['APP_FEATURE=1']);
 });

@@ -165,7 +165,7 @@ test('downloadPack returns the raw pack bytes and rejects on non-2xx', async () 
   await assert.rejects(downloadPack(fetcher, 'https://packs.example.com/missing.pack'), /HTTP 404/);
 });
 
-test('reuses cached vendor indexes across searches and deduplicates newer pack versions', async () => {
+test('reuses cached vendor indexes and retains every available Pack version', async () => {
   const stubs = indexStubs();
   stubs['https://packs.example.com/MS32.pdidx'] = {
     ok: true,
@@ -185,12 +185,15 @@ test('reuses cached vendor indexes across searches and deduplicates newer pack v
   };
   const options = { cache: new Map(), vendorCache: new Map(), now: () => 1000 };
 
-  assert.equal((await searchPacks(counted, 'ms32', options)).length, 2);
+  assert.equal((await searchPacks(counted, 'ms32', options)).length, 3);
   const requestsAfterFirstSearch = vendorIndexRequests;
   const second = await searchPacks(counted, 'ms32', options);
 
   assert.equal(vendorIndexRequests > requestsAfterFirstSearch, true);
-  assert.deepEqual(second.map((pack) => pack.version).sort(), ['0.9.1', '1.3.0']);
+  assert.deepEqual(
+    second.map((pack) => pack.version),
+    ['1.2.0', '1.3.0', '0.9.1']
+  );
 });
 
 test('limits concurrent vendor index requests', async () => {

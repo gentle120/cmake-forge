@@ -47,6 +47,21 @@ test('renders a CSP-safe sidebar shell with local assets', () => {
   assert.doesNotMatch(html, /https?:\/\//);
 });
 
+test('does not render the extension-owned ARM path or CMake build controls', () => {
+  const html = renderSidebarHtml(webview, extensionUri, 'nonce123');
+
+  assert.doesNotMatch(html, /arm-toolchain-title|arm-gcc-path|browse-arm-toolchain|arm-gcc-status/);
+  assert.doesNotMatch(html, /id="build-project"|data-command="buildProject"/);
+});
+
+test('presents Pack selection as the MCU target flow instead of a manual import action', () => {
+  const html = renderSidebarHtml(webview, extensionUri, 'nonce123');
+
+  assert.match(html, /id="target-host"/);
+  assert.match(html, /id="pack-catalog-notice"/);
+  assert.doesNotMatch(html, /id="import-pack-any"|data-command="importPack"/);
+});
+
 test('renders the Chinese default titles', () => {
   const html = renderSidebarHtml(webview, extensionUri, 'nonce123');
 
@@ -54,4 +69,11 @@ test('renders the Chinese default titles', () => {
   assert.match(html, /生成工程/);
   assert.match(html, /扫描工作区/);
   assert.match(html, /取消扫描/);
+});
+
+test('renders no placeholder action container without a command', () => {
+  const html = renderSidebarHtml(webview, extensionUri, 'nonce123');
+
+  assert.doesNotMatch(html, /id="mode-actions"/);
+  assert.doesNotMatch(html, /class="section-actions"/);
 });

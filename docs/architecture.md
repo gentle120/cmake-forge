@@ -6,7 +6,7 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 
 ## System Context
 
-- 用户与外部系统：嵌入式开发者在 VS Code 侧边栏/命令面板选择方向与芯片；扩展读写工作区文件并生成 `.vscode/` 配置；烧录/调试依赖用户 PATH 或设置中的 OpenOCD、arm-none-eabi、J-Link、pyOCD；CMSIS Pack 来自本地文件、Keil 安装库或 keil.com 索引。
+- 用户与外部系统：嵌入式开发者在 VS Code 侧边栏/命令面板选择方向与芯片；扩展读写工作区文件并生成 `.vscode/` 配置；配置与编译由 CMake Tools 负责，烧录/调试依赖用户 PATH 或设置中的 OpenOCD、arm-none-eabi、J-Link、pyOCD；CMSIS Pack 来自内置虚拟 Pack、本地文件、Keil 安装库或 keil.com 索引。
 - 运行与部署目标：VS Code 扩展宿主（Node，`engines.vscode ^1.85`），`main: ./out/extension.js`，tsc 编译，无打包器。
 - 信任与安全边界：生成文件落盘前有覆盖确认；不执行外部烧录器进程（仅生成脚本供用户执行）；Pack 导入只读 zip 内容并复制到扩展 globalStorage。
 
@@ -15,12 +15,11 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 | Component | Responsibility | May depend on | Must not own |
 | --- | --- | --- | --- |
 | `src/devices/` | 芯片档案注册表（DeviceProfile）、厂商元数据、校验、Pack 导入持久化 | vendorRegistry、generator 契约 | UI、烧录细节 |
-| `src/packs/` | zip 读取、PDSC/SVD 解析、在线索引 | 无 vscode 依赖 | 档案注册（交给 devices） |
-| `src/env/` | Keil Pack 目录发现、ARM bin 路径归一化与文件状态、独立工具链扫描算法（Pack/兼容测试使用） | node fs（注入式） | 设置写入（交给宿主接线） |
+| `src/packs/` | zip 读取、PDSC/SVD 解析、已安装 Pack 身份解析、在线索引 | 无 vscode 依赖 | 档案注册（交给 devices） |
+| `src/env/` | Keil Pack 目录发现、独立工具链扫描算法（Pack/兼容测试使用） | node fs（注入式） | 设置写入、身份解析（交给 packs） |
 | `src/generator/` | 纯函数字符串生成器（CMake/toolchain/linker/startup/flash/debug） | DeviceProfile、Flash*Profile 契约 | 文件系统、UI |
-| `src/generation/` | 生成工作流及显式构建编排；Node 构建执行器管理 CMake 进程、日志、环境与取消 | generator、scanner、integration、shared、Node 进程 API | 芯片数据、烧录执行 |
-| `src/integration/buildProject.ts` | 构建命令注册、工作区信任、预设选择、输出和进度 UI | generation 构建工作流、VS Code API | 生成器、芯片数据 |
-| `src/integration/toolchainSettings.ts` | ARM GNU 路径选择、有效作用域读写 | env 工具链状态、VS Code API | 编译、系统环境修改 |
+| `src/generation/` | 生成工作流编排 | generator、scanner、integration、shared | 芯片数据、烧录执行、编译执行 |
+| `src/integration/` | 生成产物的宿主接线（C/C++ IntelliSense、工作区设置写入） | generator 契约、VS Code API | 生成器逻辑、芯片数据、编译执行 |
 | `src/flash/` | 烧录探针、target、后端注册表 | devices 档案（经 debugTarget 桥） | 调用外部进程 |
 | `src/scanner/` | 工作区源码/头文件/宏扫描 | vendorRegistry（宏前缀） | — |
 | `src/sidebar/` + `src/extension.ts` | 命令/QuickPick/Webview 交互层、状态持久化 | 全部下层注册表 API | 生成逻辑 |
@@ -28,15 +27,15 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 
 ## Dependency Direction
 
-生成路径：`sidebar/extension → generation → generator/scanner/integration → devices/flash/packs/env → shared`。构建路径：`sidebar/extension → integration/buildProject → generation/buildWorkflow → generation/buildRunner → CMake`。生成器与解析器无 vscode 依赖；构建命令的 vscode 交互由专用适配器隔离。
+生成路径：`sidebar/extension → generation → generator/scanner/integration → devices/flash/packs/env → shared`。插件没有构建路径：生成结束后由 CMake Tools 读取生成的 `CMakeLists.txt`、预设和工具链文件完成配置与编译。生成器与解析器无 vscode 依赖；宿主交互由 `sidebar/` 与 `extension.ts` 隔离。
 
 ## Data And Control Flow
 
-MCU 路径：选芯片（vendor→series→part，来自合并注册表=内置+Pack 导入）→ `getDeviceProfile(part)` → `generateMcuWorkflow` 生成 CMakeLists/toolchain/linker/startup/presets（flash.py 与 launch.json 经烧录后端 openocd/jlink/pyocd 参数化）→ 覆盖确认 → 写盘。烧录 target 经 `DeviceProfile.debugTarget` 桥接到 OpenOCD cfg；无映射的设备走 jlink/pyocd 后端。Pack 导入：zip→PDSC/SVD→DeviceProfile 合成→globalStorage 持久化→注册表注入。
+MCU 路径：目录加载（vendor→pack→version：内置虚拟 Pack、已安装 PDSC 身份、已导入记录、在线版本）→ 选择版本激活并按其所有权取档案 → `getDeviceProfileForPack` → `generateMcuWorkflow` 生成 CMakeLists/toolchain/linker/startup/presets（flash.py 与 launch.json 经烧录后端 openocd/jlink/pyocd 参数化）→ 覆盖确认 → 写盘。烧录 target 经 `DeviceProfile.debugTarget` 桥接到 OpenOCD cfg；无映射的设备走 jlink/pyocd 后端。Pack 导入：zip 或解压目录→PDSC/SVD→DeviceProfile 合成→globalStorage 持久化→注册表注入；identity 与 profile 所有权都以导入存储路径为准。
 
-编译路径：用户显式构建→工作区信任与 CMake 文件检查→Debug/Release 选择→子进程 PATH 叠加 ARM GNU bin→CMake 配置→配置成功后编译。输出实时送到构建日志面板，取消终止构建进程树；不启动烧录器。
+编译路径：生成的工程文件交给 CMake Tools，由用户在其 UI 或 `cmake --preset` 中配置和编译；插件不启动编译器进程。
 
-工具链路径：侧栏输入/浏览/环境扫描→ARM bin 归一化与文件校验→已有有效设置作用域写入→侧栏文件状态、构建子进程以及 MCU 生成时的 IntelliSense/Cortex-Debug 配置。设置更新不执行编译器或修改系统 PATH。
+工具链路径：插件不保存 ARM GNU 路径。生成的工具链文件、Cortex-Debug 配置和 IntelliSense 只写 `arm-none-eabi-*` 命令名，解析交给 `PATH` 或 CMake Tools kit。
 
 ## Cross-Cutting Constraints
 

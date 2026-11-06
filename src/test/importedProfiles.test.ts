@@ -14,6 +14,20 @@ import {
 } from '../devices/importedProfiles';
 import { getVendorMetadata } from '../devices/vendorRegistry';
 
+interface PackIdentityView {
+  packId: string;
+  vendorId: string;
+  name: string;
+  version: string;
+}
+
+const importPackWithMetadata = importPack as unknown as (
+  buffer: Buffer,
+  fileName: string,
+  storageRoot: string,
+  metadata: { name: string; version: string }
+) => ReturnType<typeof importPack>;
+
 const fixturePath = join(__dirname, '..', '..', 'src', 'test', 'fixtures', 'ms32f031.pack');
 
 function buildZip(entries: Array<{ name: string; data: string }>): Buffer {
@@ -97,6 +111,11 @@ test('imports the fixture pack, restores profiles, overwrites, and removes the p
     assert.equal(packs[0].source, 'archive');
     assert.equal(packs[0].archiveFile, join(root, 'packs', 'MS_Semi', 'ms32f031.pack'));
     assert.equal(packs[0].vendorName, 'MS Semi');
+    const identity = packs[0] as unknown as PackIdentityView;
+    assert.equal(identity.vendorId, 'MS_Semi');
+    assert.equal(identity.packId, 'MS_Semi:ms32f031');
+    assert.equal(identity.name, 'ms32f031');
+    assert.equal(identity.version, 'unknown');
     assert.deepEqual(packs[0].parts, ['MS32F031A6A0ZW']);
     assert.match(packs[0].importedAt, /^\d{4}-\d{2}-\d{2}T/);
 
@@ -118,6 +137,23 @@ test('imports the fixture pack, restores profiles, overwrites, and removes the p
     assert.deepEqual(await listImportedPacks(root), []);
     assert.equal(existsSync(join(root, 'packs', 'MS_Semi', 'ms32f031.pack')), false);
     assert.throws(() => getDeviceProfile('MS32F031A6A0ZW'), /Unsupported MCU/);
+  });
+});
+
+test('persists the selected Pack identity and version from catalog metadata', async () => {
+  const fixture = await readFile(fixturePath);
+  await withStorageRoot(async (root) => {
+    await importPackWithMetadata(fixture, 'Sinomcu.MS32F0xx_DFP.1.1.1.pack', root, {
+      name: 'MS32F0xx_DFP',
+      version: '1.1.1'
+    });
+
+    const [pack] = await listImportedPacks(root);
+    const identity = pack as unknown as PackIdentityView;
+    assert.equal(identity.vendorId, 'MS_Semi');
+    assert.equal(identity.name, 'MS32F0xx_DFP');
+    assert.equal(identity.version, '1.1.1');
+    assert.equal(identity.packId, 'MS_Semi:MS32F0xx_DFP');
   });
 });
 
@@ -197,6 +233,11 @@ test('migrates version 1 pack metadata to a real archive path', async () => {
     const packs = await listImportedPacks(root);
     assert.equal(packs[0].source, 'archive');
     assert.equal(packs[0].archiveFile, join(root, 'packs', 'MS_Semi', 'legacy.pack'));
+    const identity = packs[0] as unknown as PackIdentityView;
+    assert.equal(identity.vendorId, 'MS_Semi');
+    assert.equal(identity.packId, 'MS_Semi:legacy');
+    assert.equal(identity.name, 'legacy');
+    assert.equal(identity.version, 'unknown');
     assert.equal(existsSync(packs[0].archiveFile!), true);
   });
 });
@@ -256,6 +297,93 @@ test('a failed reimport keeps the previously valid profiles registered', async (
     assert.deepEqual(
       (await loadImportedProfiles(root)).map((profile) => profile.part),
       ['MS32F031A6A0ZW']
+    );
+  });
+});
+
+test('same-named Packs from different vendors use PDSC identity for storage and profile ownership', async () => {
+  const vendorAPdsc = `<?xml version="1.0" encoding="utf-8"?>
+<package><devices><family Dvendor="Vendor A" Dfamily="A100 Family">
+  <processor Dcore="Cortex-M0"/>
+  <device Dname="A100">
+    <memory id="IROM1" start="0x08000000" size="0x4000"/>
+    <memory id="IRAM1" start="0x20000000" size="0x2000"/>
+    <debug svd="A100.svd"/>
+  </device>
+</family></devices></package>`;
+  const vendorBPdsc = vendorAPdsc
+    .replaceAll('Vendor A', 'Vendor B')
+    .replaceAll('A100 Family', 'B100 Family')
+    .replaceAll('A100', 'B100');
+  const svd = `<?xml version="1.0" encoding="utf-8"?>
+<device><peripherals><peripheral><name>WWDG</name>
+  <interrupt><name>WWDG</name><value>0</value></interrupt>
+</peripheral></peripherals></device>`;
+  const sharedName = 'Shared_DFP.1.0.0.pack';
+  await withStorageRoot(async (root) => {
+    await importPack(
+      buildZip([{ name: 'VendorA.pdsc', data: vendorAPdsc }, { name: 'A100.svd', data: svd }]),
+      sharedName,
+      root,
+      { name: 'Shared_DFP', version: '1.0.0' }
+    );
+    await importPack(
+      buildZip([{ name: 'VendorB.pdsc', data: vendorBPdsc }, { name: 'B100.svd', data: svd }]),
+      sharedName,
+      root,
+      { name: 'Shared_DFP', version: '1.0.0' }
+    );
+
+    const packs = await listImportedPacks(root);
+    assert.deepEqual(
+      packs.map((pack) => [pack.vendorId, pack.packId, pack.packFile]).sort(),
+      [
+        ['Vendor_A', 'Vendor_A:Shared_DFP', 'packs/Vendor_A/Shared_DFP.1.0.0.pack'],
+        ['Vendor_B', 'Vendor_B:Shared_DFP', 'packs/Vendor_B/Shared_DFP.1.0.0.pack']
+      ]
+    );
+    assert.deepEqual(
+      (await loadImportedProfiles(root)).map((profile) => profile.part).sort(),
+      ['A100', 'B100']
+    );
+  });
+});
+
+test('keeps multiple versions of one PDSC Pack as separate records and ownership', async () => {
+  const pdsc = `<?xml version="1.0" encoding="utf-8"?>
+<package><devices><family Dvendor="Vendor A" Dfamily="A100 Family">
+  <processor Dcore="Cortex-M0"/>
+  <device Dname="A100">
+    <memory id="IROM1" start="0x08000000" size="0x4000"/>
+    <memory id="IRAM1" start="0x20000000" size="0x2000"/>
+    <debug svd="A100.svd"/>
+  </device>
+</family></devices></package>`;
+  const svd = `<?xml version="1.0" encoding="utf-8"?>
+<device><peripherals><peripheral><name>WWDG</name>
+  <interrupt><name>WWDG</name><value>0</value></interrupt>
+</peripheral></peripherals></device>`;
+  await withStorageRoot(async (root) => {
+    for (const version of ['1.0.0', '1.10.0']) {
+      await importPack(
+        buildZip([{ name: 'VendorA.pdsc', data: pdsc }, { name: 'A100.svd', data: svd }]),
+        `Shared_DFP.${version}.pack`,
+        root,
+        { name: 'Shared_DFP', version }
+      );
+    }
+
+    const packs = await listImportedPacks(root);
+    assert.deepEqual(
+      packs.map((pack) => [pack.version, pack.packFile]).sort(),
+      [
+        ['1.0.0', 'packs/Vendor_A/Shared_DFP.1.0.0.pack'],
+        ['1.10.0', 'packs/Vendor_A/Shared_DFP.1.10.0.pack']
+      ]
+    );
+    assert.deepEqual(
+      packs.map((pack) => pack.parts),
+      [['A100'], ['A100']]
     );
   });
 });

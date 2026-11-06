@@ -93,3 +93,14 @@ test('rejects Zip64 entries', () => {
 test('rejects data that has no end of central directory record', () => {
   assert.throws(() => readZipEntries(Buffer.from('definitely not a zip archive')), /end of central directory/);
 });
+
+test('reads only the entries a selector asks for', () => {
+  const buffer = buildZip([
+    { name: 'Vendor.pdsc', data: Buffer.from('<package/>', 'utf8'), method: 0 },
+    { name: 'Device.svd', data: Buffer.from('<device/>', 'utf8'), method: 0 }
+  ]);
+
+  assert.deepEqual(readZipEntries(buffer, (name) => name.endsWith('.pdsc')).map((entry) => entry.name), [
+    'Vendor.pdsc'
+  ]);
+});

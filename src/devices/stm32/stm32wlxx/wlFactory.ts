@@ -1,4 +1,5 @@
 import type { DeviceProfile } from '../../deviceProfiles';
+import { createStm32BuiltinProfile } from '../builtinProfileFactory';
 
 // External interrupts of the STM32WL55xx Cortex-M4 vector table in hardware
 // order, transcribed from the ST cmsis-device-wl GCC startup
@@ -24,37 +25,8 @@ export const stm32wlInterruptHandlers = [
   'DMA2_Channel7_IRQHandler', 'DMAMUX1_OVR_IRQHandler'
 ];
 
-interface Stm32WlProfileOptions {
-  define?: string;
-  flashLength?: number;
-  ramLength?: number;
-  gnuStartupFileName?: string;
-  interruptHandlers?: string[];
-}
-
-export function createStm32WlProfile(
-  part: string,
-  linkerFileName: string,
-  options: Stm32WlProfileOptions = {}
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'WLx',
-    family: 'STM32WLxx',
-    core: 'cortex-m4',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [options.define ?? 'STM32WL55xx'],
-    // The WL55 application core is a Cortex-M4 without FPU, so unlike the
-    // F4/L4 profiles these flags carry no -mfpu/-mfloat-abi pair.
-    compilerFlags: ['-mcpu=cortex-m4', '-mthumb'],
-    flash: { origin: 0x08000000, length: options.flashLength ?? 512 * 1024 },
-    ram: { origin: 0x20000000, length: options.ramLength ?? 64 * 1024 },
-    linkerFileName,
-    gnuStartupFileName: options.gnuStartupFileName ?? 'startup_stm32wl55xx.S',
-    toolchainFileName: 'stm32wl-toolchain.cmake',
-    interruptHandlers: [...(options.interruptHandlers ?? stm32wlInterruptHandlers)],
-    debugTarget: 'stm32wlx'
-  };
+export function createStm32WlProfile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'WLx', {
+    stm32wlInterruptHandlers
+  });
 }

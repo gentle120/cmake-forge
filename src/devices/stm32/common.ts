@@ -1,4 +1,5 @@
 import type { DeviceProfile } from '../deviceProfiles';
+import { createStm32BuiltinProfile } from './builtinProfileFactory';
 
 export const stm32f1InterruptHandlers = [
   'WWDG_IRQHandler', 'PVD_IRQHandler', 'TAMPER_IRQHandler', 'RTC_IRQHandler',
@@ -93,109 +94,23 @@ export const stm32l4ShortInterruptHandlers = [
   ...stm32l4InterruptHandlers.slice(0, stm32l4InterruptHandlers.indexOf('CRS_IRQHandler'))
 ];
 
-interface Stm32F1ProfileOptions {
-  define?: string;
-  ramLength?: number;
-  gnuStartupFileName?: string;
-  interruptHandlers?: string[];
+export function createStm32F1Profile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'F1x', {
+    stm32f1InterruptHandlers,
+    stm32f1HighDensityInterruptHandlers
+  });
 }
 
-interface Stm32F4ProfileOptions {
-  ramLength?: number;
-  gnuStartupFileName?: string;
-  interruptHandlers?: string[];
-  additionalMemory?: DeviceProfile['additionalMemory'];
+export function createStm32F4Profile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'F4x', {
+    stm32f4InterruptHandlers,
+    stm32f4ExtendedInterruptHandlers
+  });
 }
 
-interface Stm32L4ProfileOptions {
-  define?: string;
-  flashLength?: number;
-  ramLength?: number;
-  additionalMemory?: DeviceProfile['additionalMemory'];
-  gnuStartupFileName?: string;
-  interruptHandlers?: string[];
-}
-
-export function createStm32F1Profile(
-  part: string,
-  flashLength: number,
-  linkerFileName: string,
-  options: Stm32F1ProfileOptions = {}
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'F1x',
-    family: 'STM32F1xx',
-    core: 'cortex-m3',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [options.define ?? 'STM32F103xB'],
-    compilerFlags: ['-mcpu=cortex-m3', '-mthumb'],
-    flash: { origin: 0x08000000, length: flashLength },
-    ram: { origin: 0x20000000, length: options.ramLength ?? 20 * 1024 },
-    linkerFileName,
-    gnuStartupFileName: options.gnuStartupFileName ?? 'startup_stm32f103xb.S',
-    toolchainFileName: 'stm32f1-toolchain.cmake',
-    interruptHandlers: [...(options.interruptHandlers ?? stm32f1InterruptHandlers)],
-    debugTarget: 'stm32f1x'
-  };
-}
-
-export function createStm32F4Profile(
-  part: string,
-  flashLength: number,
-  linkerFileName: string,
-  define: string,
-  options: Stm32F4ProfileOptions = {}
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'F4x',
-    family: 'STM32F4xx',
-    core: 'cortex-m4',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [define],
-    compilerFlags: ['-mcpu=cortex-m4', '-mthumb', '-mfpu=fpv4-sp-d16', '-mfloat-abi=hard'],
-    flash: { origin: 0x08000000, length: flashLength },
-    ram: { origin: 0x20000000, length: options.ramLength ?? 128 * 1024 },
-    additionalMemory: options.additionalMemory ?? [
-      { name: 'CCMRAM', attributes: 'rw', origin: 0x10000000, length: 64 * 1024 }
-    ],
-    linkerFileName,
-    gnuStartupFileName: options.gnuStartupFileName ?? 'startup_stm32f407xx.S',
-    toolchainFileName: 'stm32f4-toolchain.cmake',
-    interruptHandlers: [...(options.interruptHandlers ?? stm32f4InterruptHandlers)],
-    debugTarget: 'stm32f4x'
-  };
-}
-
-export function createStm32L4Profile(
-  part: string,
-  linkerFileName: string,
-  options: Stm32L4ProfileOptions = {}
-): DeviceProfile {
-  return {
-    part,
-    vendor: 'STM',
-    series: 'L4x',
-    family: 'STM32L4xx',
-    core: 'cortex-m4',
-    architecture: 'arm',
-    toolchainPrefix: 'arm-none-eabi',
-    defines: [options.define ?? 'STM32L496xx'],
-    compilerFlags: ['-mcpu=cortex-m4', '-mthumb', '-mfpu=fpv4-sp-d16', '-mfloat-abi=hard'],
-    flash: { origin: 0x08000000, length: options.flashLength ?? 512 * 1024 },
-    ram: { origin: 0x20000000, length: options.ramLength ?? 256 * 1024 },
-    additionalMemory: options.additionalMemory ?? [
-      { name: 'RAM2', attributes: 'rw', origin: 0x10000000, length: 64 * 1024 }
-    ],
-    linkerFileName,
-    gnuStartupFileName: options.gnuStartupFileName ?? 'startup_stm32l496xx.S',
-    toolchainFileName: 'stm32l4-toolchain.cmake',
-    interruptHandlers: [...(options.interruptHandlers ?? stm32l4InterruptHandlers)],
-    debugTarget: 'stm32l4x'
-  };
+export function createStm32L4Profile(part: string): DeviceProfile {
+  return createStm32BuiltinProfile(part, 'L4x', {
+    stm32l4InterruptHandlers,
+    stm32l4ShortInterruptHandlers
+  });
 }

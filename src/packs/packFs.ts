@@ -30,11 +30,17 @@ async function safeReaddir(path: string): Promise<string[]> {
 }
 
 /**
- * Collects every entry of an extracted CMSIS pack directory relative to its
+ * Collects the entries of an extracted CMSIS pack directory relative to its
  * root, mirroring the entry set a .pack ZIP would have produced: the .pdsc
  * plus every other file (SVD, startup sources, and so on).
+ *
+ * `select` limits which files are read, so identity resolution does not load a
+ * whole pack tree.
  */
-export async function readDirectoryEntries(root: string): Promise<ZipEntry[]> {
+export async function readDirectoryEntries(
+  root: string,
+  select?: (name: string) => boolean
+): Promise<ZipEntry[]> {
   const entries: ZipEntry[] = [];
   const walk = async (directory: string, prefix: string): Promise<void> => {
     for (const name of await safeReaddir(directory)) {
@@ -48,7 +54,7 @@ export async function readDirectoryEntries(root: string): Promise<ZipEntry[]> {
       }
       if (isDirectory) {
         await walk(absolute, relative);
-      } else {
+      } else if (!select || select(relative)) {
         entries.push({ name: relative, data: await readFile(absolute) });
       }
     }

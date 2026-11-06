@@ -170,15 +170,7 @@ export async function searchPacks(
       }
     }
   }
-  const latest = new Map<string, PackIndexPack>();
-  for (const pack of matches) {
-    const key = `${pack.vendorName}\0${pack.name}`;
-    const existing = latest.get(key);
-    if (!existing || compareVersions(pack.version, existing.version) > 0) {
-      latest.set(key, pack);
-    }
-  }
-  return [...latest.values()].sort((left, right) => (
+  return matches.sort((left, right) => (
     left.vendorName.localeCompare(right.vendorName)
     || left.name.localeCompare(right.name)
     || compareVersions(left.version, right.version)
