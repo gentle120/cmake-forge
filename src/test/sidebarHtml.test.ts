@@ -36,6 +36,14 @@ test('renders a CSP-safe sidebar shell with local assets', () => {
   assert.match(html, /aria-label="目标工程"/);
   assert.match(html, /id="generate-project"/);
   assert.match(html, /id="generation-status"/);
+  assert.match(html, /id="cancel-workspace-scan"/);
+  assert.match(html, /data-command="cancelWorkspaceScan"/);
+  assert.match(html, /data-always-enabled="true"/);
+  assert.match(html, /id="cancel-workspace-scan"[^>]*hidden/);
+  assert.match(html, /id="cancel-workspace-scan"[^>]*data-always-enabled="true"/);
+  assert.doesNotMatch(html, /scan-environment/);
+  assert.doesNotMatch(html, /扫描环境/);
+  assert.doesNotMatch(html, /id="toolchain-actions"/);
   assert.doesNotMatch(html, /https?:\/\//);
 });
 
@@ -45,4 +53,5 @@ test('renders the Chinese default titles', () => {
   assert.match(html, /CMake 工程生成/);
   assert.match(html, /生成工程/);
   assert.match(html, /扫描工作区/);
+  assert.match(html, /取消扫描/);
 });

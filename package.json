@@ -76,10 +76,6 @@
         "title": "CMake-Embedded: Generate Cortex-Debug Configuration"
       },
       {
-        "command": "cmakeEmbedded.scanEnvironment",
-        "title": "CMake-Embedded: Scan Toolchains"
-      },
-      {
         "command": "cmakeEmbedded.importPack",
         "title": "CMake-Embedded: Import CMSIS Pack"
       },

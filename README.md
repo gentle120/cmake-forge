@@ -20,6 +20,7 @@
 
 - 选择结果按工作区保存，下次打开自动恢复。
 - 一个工作区包含多个工程时，“目标工程”会列出各工程目录；扫描与生成只处理当前选中的工程。
+- 工作区发现或源文件扫描较慢时，可点击“取消扫描”中止当前扫描。
 - MCU 页面可同时生成 `flash.py` 和 Cortex-Debug 配置。
 - MCU 页面提供“构建”按钮，选择 Debug 或 Release 后依次执行 CMake 配置和编译。
 - 桌面 C/C++ 页面可选择可执行文件、静态库或动态库以及语言标准。
@@ -50,8 +51,7 @@
 `cmake.cmakePath` 设置。MCU 工程还需要 **ARM GNU Toolchain**，其中包含
 `arm-none-eabi-gcc`、`arm-none-eabi-g++`、`arm-none-eabi-objcopy` 和
 `arm-none-eabi-size`。在 MCU 页面的 **ARM GNU GCC** 区域填写 `bin` 目录，
-或点击“浏览…”选择目录；输入后按 Enter 或移出字段保存。也可用“扫描环境”发现
-EIDE、ARM GNU 独立安装、已挂载盘中的 STM32CubeCLT 和 PATH 工具链。
+或点击“浏览…”选择目录；输入后按 Enter 或移出字段保存。
 设置与 `cmakeEmbedded.armToolchainPath` 同步，留空使用 PATH；已有工作区覆盖值
 会在同一作用域更新。状态只验证工具文件存在，不代表固件已编译或硬件已连接。
 

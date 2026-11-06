@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { registerBuildProject } from './integration/buildProject';
-import { getArmToolchainPath, registerArmToolchainSettings, saveArmToolchainPath } from './integration/toolchainSettings';
+import { getArmToolchainPath, registerArmToolchainSettings } from './integration/toolchainSettings';
 import {
   getDeviceProfile,
   isRuntimeDeviceProfile,
@@ -19,7 +19,7 @@ import {
   removePack,
   type ImportPackResult
 } from './devices/importedProfiles';
-import { defaultScanRoots, listKeilPacks, scanToolchains, type ToolchainHit } from './env/toolchainScanner';
+import { defaultScanRoots, listKeilPacks } from './env/toolchainScanner';
 import {
   downloadPack,
   searchPacks,
@@ -64,11 +64,7 @@ import { scanProject, ScanCancelledError, type ProjectDescription } from './scan
 import { discoverWorkspaceProjects } from './scanner/workspaceProjects';
 import { SidebarProvider } from './sidebar/provider';
 import type { CommandResult } from './shared/commandResult';
-import {
-  armGccExecutablePath,
-  normalizeArmToolchainPath,
-  prioritizeArmToolchainHits
-} from './env/armToolchain';
+import { armGccExecutablePath } from './env/armToolchain';
 
 async function scanWorkspace(root: string): Promise<ProjectDescription | undefined> {
   try {
@@ -339,72 +335,6 @@ const fetchWithTimeout: FetchLike = (url) => {
   const timer = setTimeout(() => controller.abort(), 12000);
   return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
 };
-
-async function scanEnvironmentOnly(): Promise<CommandResult> {
-  const hits = scanToolchains(scanRoots(), scanFileSystem);
-  if (hits.length === 0) {
-    const message = '环境扫描未发现工具链（ARM GNU / EIDE / STM32CubeCLT / Keil / J-Link / PATH）。';
-    void vscode.window.showInformationMessage(message);
-    return { ok: false, message };
-  }
-  const configuration = vscode.workspace.getConfiguration('cmakeEmbedded');
-  const settingsByKind = new Map<ToolchainHit['kind'], string>([
-    ['openocd', 'openocdPath'],
-    ['arm-gcc', 'armToolchainPath'],
-    ['jlink', 'jlinkPath'],
-    ['pyocd', 'pyocdPath']
-  ]);
-  const applied: string[] = [];
-  const notes: string[] = [];
-  const currentArm = normalizeArmToolchainPath(getArmToolchainPath() ?? '');
-  const discoveredArm = hits.filter((candidate) => candidate.kind === 'arm-gcc');
-  let armGccHits = prioritizeArmToolchainHits(
-    discoveredArm,
-    currentArm
-  );
-  if (armGccHits.length > 1) {
-    const picked = await vscode.window.showQuickPick(
-      armGccHits.map((hit) => ({
-        label: hit.label,
-        description: hit.path,
-        detail: currentArm && normalizeArmToolchainPath(hit.path) === currentArm
-          ? '当前设置'
-          : undefined,
-        hit
-      })),
-      { placeHolder: '发现多个 ARM GNU 工具链，选择构建使用的一个' }
-    );
-    armGccHits = picked ? [picked.hit] : [];
-    if (!picked) {
-      notes.push('保留当前 ARM GNU 工具链设置。');
-    }
-  }
-  for (const [kind, setting] of settingsByKind) {
-    const hit = kind === 'arm-gcc'
-      ? armGccHits[0]
-      : hits.find((candidate) => candidate.kind === kind);
-    if (!hit) {
-      continue;
-    }
-    if (kind === 'arm-gcc') {
-      if (!(await saveArmToolchainPath(hit.path)).ok) {
-        continue;
-      }
-    } else {
-      await configuration.update(setting, hit.path, vscode.ConfigurationTarget.Global);
-    }
-    applied.push(`${hit.label}: ${hit.path}`);
-  }
-  const details = [
-    ...(applied.length > 0 ? [`已写入设置：\n${applied.join('\n')}`] : []),
-    ...notes
-  ];
-  const message = details.length > 0
-    ? `环境扫描完成。${details.join('\n')}`
-    : `环境扫描发现 ${hits.length} 项工具链，无可自动填充的设置。`;
-  void vscode.window.showInformationMessage(message);
-  return { ok: true, message };
-}
 
 async function pickLocalPack(): Promise<{ buffer: Buffer; fileName: string } | undefined> {
   const picked = await vscode.window.showOpenDialog({
@@ -799,7 +729,8 @@ export function activate(context: vscode.ExtensionContext): void {
       return action === '覆盖';
     },
     discoverToolchains: () => discoverLinuxToolchains(),
-    discoverProjects: (roots) => discoverWorkspaceProjects(roots),
+    scanProject: (root, options) => scanProject(root, options),
+    discoverProjects: (roots, options) => discoverWorkspaceProjects(roots, options),
     packFileForPart: (part) => packFileByPart.get(part)
   });
   activeSidebar = sidebarProvider;
@@ -818,7 +749,6 @@ export function activate(context: vscode.ExtensionContext): void {
       'cmakeEmbedded.generateDebugConfiguration',
       () => generateDebugConfigurationOnly()
     ),
-    vscode.commands.registerCommand('cmakeEmbedded.scanEnvironment', () => scanEnvironmentOnly()),
     vscode.commands.registerCommand('cmakeEmbedded.importPack', () => importPackOnly()),
     vscode.commands.registerCommand('cmakeEmbedded.removePack', () => removePackOnly()),
     vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebarProvider, {

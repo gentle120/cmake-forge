@@ -29,11 +29,13 @@ import {
 import { discoverLinuxToolchains } from '../linux/discovery';
 import { createLinuxToolchain } from '../linux/toolchainGenerator';
 import { describeNativeProject } from '../native/projectStructure';
-import { scanProject } from '../scanner/projectScanner';
+import { scanProject, ScanCancelledError } from '../scanner/projectScanner';
 import {
   discoverWorkspaceProjects,
   reconcileProjectRoot,
-  type WorkspaceProject
+  WorkspaceProjectsCancelledError,
+  type WorkspaceProject,
+  type WorkspaceProjectScanOptions
 } from '../scanner/workspaceProjects';
 import { renderSidebarHtml } from './html';
 import { parseIncomingMessage, type SidebarIncomingMessage } from './messages';
@@ -45,11 +47,20 @@ import {
 
 const selectionKey = 'cmakeEmbedded.sidebarSelection.v1';
 
+interface SidebarScanHost {
+  scanProject(root: string, options?: { signal?: AbortSignal }): ReturnType<typeof scanProject>;
+}
+
+const scanHost: SidebarScanHost = {
+  scanProject: (root, options) => scanProject(root, options)
+};
+
 export interface SidebarProviderDependencies {
   workflow: ProjectWorkflowHost;
   confirmOverwrite(files: string[]): Promise<boolean>;
   discoverToolchains(): ReturnType<typeof discoverLinuxToolchains>;
-  discoverProjects(roots: string[]): Promise<WorkspaceProject[]>;
+  discoverProjects(roots: string[], options?: WorkspaceProjectScanOptions): Promise<WorkspaceProject[]>;
+  scanProject?(root: string, options?: { signal?: AbortSignal }): ReturnType<typeof scanProject>;
   /** Resolves the stored CMSIS pack path for an imported part, when available. */
   packFileForPart?(part: string): string | undefined;
 }
@@ -82,6 +93,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private selectionValue: SidebarSelection;
   private discoveredProjects: WorkspaceProject[] = [];
   private discoveringProjects = true;
+  private projectDiscoveryController?: AbortController;
+  private workspaceScanController?: AbortController;
   private readonly viewDisposables: vscode.Disposable[] = [];
 
   constructor(
@@ -136,6 +149,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
 
   dispose(): void {
     this.disposed = true;
+    this.projectDiscoveryController?.abort();
+    this.workspaceScanController?.abort();
     this.viewDisposables.splice(0).forEach((disposable) => disposable.dispose());
     this.view = undefined;
   }
@@ -197,11 +212,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
 
   private async discoverProjects(): Promise<void> {
     const roots = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
+    const controller = new AbortController();
+    this.projectDiscoveryController?.abort();
+    this.projectDiscoveryController = controller;
     this.discoveringProjects = true;
     this.postState();
     try {
       this.discoveredProjects = roots.length > 0
-        ? await this.dependencies.discoverProjects(roots)
+        ? await this.dependencies.discoverProjects(roots, { signal: controller.signal })
         : [];
       const projectRoot = reconcileProjectRoot(
         this.discoveredProjects,
@@ -214,9 +232,23 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         });
         await this.context.workspaceState.update(selectionKey, this.selectionValue);
       }
+    } catch (error) {
+      if (!(error instanceof WorkspaceProjectsCancelledError)) {
+        throw error;
+      }
+      if (this.projectDiscoveryController === controller) {
+        this.post({
+          type: 'notification',
+          level: 'info',
+          message: '已取消发现工作区工程。'
+        });
+      }
     } finally {
-      this.discoveringProjects = false;
-      this.postState();
+      if (this.projectDiscoveryController === controller) {
+        this.projectDiscoveryController = undefined;
+        this.discoveringProjects = false;
+        this.postState();
+      }
     }
   }
 
@@ -305,11 +337,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   }
 
   private async handleMessage(message: SidebarIncomingMessage): Promise<void> {
+    if (message.type === 'cancelWorkspaceScan') {
+      this.cancelWorkspaceScan();
+      return;
+    }
     if (this.busy && message.type !== 'ready' && message.type !== 'openSettings') {
       return;
     }
     if (message.type === 'ready') {
-      void this.discoverProjects();
+      void this.discoverProjects().catch((error) => {
+        const text = error instanceof Error ? error.message : String(error);
+        this.post({ type: 'notification', level: 'error', message: text });
+        this.discoveringProjects = false;
+        this.postState();
+      });
       this.postState();
       if (this.selectionValue.debugEnabled) {
         this.post({
@@ -347,14 +388,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     }
     if (message.type === 'scanWorkspace') {
       await this.scan();
-      return;
-    }
-    if (message.type === 'scanEnvironment') {
-      await this.runGeneration('正在扫描本机工具链', async () => {
-        const result = await vscode.commands.executeCommand<CommandResult>('cmakeEmbedded.scanEnvironment');
-        return { kind: 'mcu', ...result, files: [] };
-      });
-      this.postState();
       return;
     }
     if (message.type === 'importPack') {
@@ -516,10 +549,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     if (this.busy) {
       return;
     }
+    const controller = new AbortController();
+    this.workspaceScanController = controller;
     this.busy = true;
     this.post({ type: 'operationStarted', operation: '正在扫描工作区' });
     try {
-      const project = await scanProject(root);
+      const project = await (this.dependencies.scanProject ?? scanHost.scanProject)(
+        root,
+        { signal: controller.signal }
+      );
       this.post({
         type: 'workspaceScan',
         sources: project.sources.length,
@@ -535,13 +573,37 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         }
       });
     } catch (error) {
+      if (error instanceof ScanCancelledError) {
+        this.post({
+          type: 'operationFinished',
+          result: {
+            ok: false,
+            cancelled: true,
+            message: '已取消扫描工作区。',
+            files: []
+          }
+        });
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.post({
         type: 'operationFinished',
         result: { ok: false, message, files: [] }
       });
     } finally {
-      this.busy = false;
+      if (this.workspaceScanController === controller) {
+        this.workspaceScanController = undefined;
+        this.busy = false;
+        this.postState();
+      }
     }
+  }
+
+  private cancelWorkspaceScan(): void {
+    if (this.projectDiscoveryController) {
+      this.projectDiscoveryController.abort();
+      return;
+    }
+    this.workspaceScanController?.abort();
   }
 }

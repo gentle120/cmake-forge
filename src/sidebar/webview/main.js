@@ -5,7 +5,8 @@
   let initiator = null;
   let gccDirty = false;
   let gccBrowseIntent = false;
-  let scanStoredSnapshot = null;
+  let activeOperation = '';
+  let cancelRequested = false;
 
   const app = document.getElementById('app');
   const workspaceName = document.getElementById('workspace-name');
@@ -19,6 +20,7 @@
   const mcuPanel = document.getElementById('mcu-panel');
   const configuration = document.getElementById('configuration');
   const workspaceSummary = document.getElementById('workspace-summary');
+  const cancelWorkspaceScanButton = document.getElementById('cancel-workspace-scan');
   const modeActions = document.getElementById('mode-actions');
   const operationNotice = document.getElementById('operation-notice');
   const resultRegion = document.getElementById('result-region');
@@ -441,6 +443,7 @@
     workspaceName.title = selectedProject?.label || state.workspaceName || '';
     const mode = state.selection.mode;
     const isMcu = mode === 'mcu';
+    syncCancelWorkspaceScan();
     modeMcu.setAttribute('aria-pressed', String(isMcu));
     modeLinux.setAttribute('aria-pressed', String(mode === 'linux'));
     modeNative.setAttribute('aria-pressed', String(mode === 'native'));
@@ -469,6 +472,16 @@
       if (control.dataset.alwaysEnabled === 'true') return;
       control.disabled = busy || (control === projectRootSelect && Boolean(state?.discoveringProjects));
     });
+    syncCancelWorkspaceScan();
+  }
+
+  function syncCancelWorkspaceScan() {
+    const scanActive = Boolean(state?.discoveringProjects)
+      || (busy && activeOperation === '正在扫描工作区');
+    if (!scanActive) cancelRequested = false;
+    cancelWorkspaceScanButton.hidden = !scanActive;
+    cancelWorkspaceScanButton.disabled = cancelRequested;
+    cancelWorkspaceScanButton.setAttribute('aria-busy', String(cancelRequested));
   }
 
   function setStatusBadge(tone, text) {
@@ -480,12 +493,20 @@
 
   function setBusy(active, text) {
     busy = active;
+    if (active) {
+      activeOperation = text || activeOperation;
+    }
+    if (!active) {
+      activeOperation = '';
+      cancelRequested = false;
+    }
     app.setAttribute('aria-busy', String(active));
     actionsEl.classList.toggle('busy', active);
     if (active) {
       setStatusBadge('busy', text || '处理中');
     }
     applyDisabled();
+    syncCancelWorkspaceScan();
   }
 
   function showNotice(element, message, tone) {
@@ -531,17 +552,11 @@
     const cancelled = value.cancelled === true;
     const tone = ok ? 'success' : cancelled ? 'cancelled' : 'error';
     const command = initiator?.dataset?.command || '';
-    const stored = state?.armToolchain?.binDir ?? '';
-    // A successful browse or a scan that actually rewrote the setting replaces
-    // the draft; a cancellation or rejection keeps the user's unsaved text.
+    // A successful browse replaces the draft; cancellation or rejection keeps
+    // the user's unsaved text.
     if (ok && command === 'browseArmToolchain') {
       gccDirty = false;
     }
-    if (ok && command === 'scanEnvironment' && scanStoredSnapshot !== null
-      && stored !== scanStoredSnapshot) {
-      gccDirty = false;
-    }
-    scanStoredSnapshot = null;
     setBusy(false);
     setStatusBadge(tone, ok ? '已完成' : cancelled ? '已取消' : '失败');
     const message = typeof value.message === 'string' ? value.message : '';
@@ -563,9 +578,7 @@
   function startOperation(target, text) {
     if (busy) return false;
     initiator = target || null;
-    scanStoredSnapshot = target?.dataset?.command === 'scanEnvironment'
-      ? state?.armToolchain?.binDir ?? ''
-      : null;
+    cancelRequested = false;
     showNotice(gccNotice, '');
     showNotice(operationNotice, '');
     setBusy(true, text);
@@ -612,7 +625,6 @@
   };
 
   const commandLabels = {
-    scanEnvironment: '正在扫描本机工具链',
     importPack: '正在导入 Pack',
     scanWorkspace: '正在扫描工作区',
     generateProject: '正在生成工程',
@@ -620,6 +632,7 @@
     generateFlashScript: '正在生成 flash.py',
     generateDebugConfiguration: '正在生成调试配置'
   };
+  const cancellableCommands = new Set(['scanWorkspace']);
 
   app.addEventListener('click', (event) => {
     const target = event.target instanceof Element
@@ -635,8 +648,17 @@
       post({ type: 'browseArmToolchain' });
       return;
     }
+    if (command === 'cancelWorkspaceScan') {
+      if (cancelRequested || cancelWorkspaceScanButton.hidden) return;
+      cancelRequested = true;
+      syncCancelWorkspaceScan();
+      setStatusBadge('busy', '正在取消扫描');
+      post({ type: 'cancelWorkspaceScan' });
+      return;
+    }
     if (!(command in commandLabels)) return;
     if (!startOperation(target, commandLabels[command])) return;
+    if (cancellableCommands.has(command)) syncCancelWorkspaceScan();
     showNotice(operationNotice, '');
     post({ type: command });
   });
@@ -696,6 +718,7 @@
     if (message.type === 'operationStarted') {
       if (!busy) {
         initiator = null;
+        activeOperation = message.operation || '';
       }
       setBusy(true, message.operation);
       return;

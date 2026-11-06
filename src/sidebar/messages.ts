@@ -3,7 +3,7 @@ export type SidebarIncomingMessage =
   | { type: 'saveSelection'; selection: unknown }
   | { type: 'setProjectRoot'; root: string }
   | { type: 'scanWorkspace' }
-  | { type: 'scanEnvironment' }
+  | { type: 'cancelWorkspaceScan' }
   | { type: 'importPack' }
   | { type: 'generateProject' }
   | { type: 'generateFlashScript' }
@@ -31,7 +31,7 @@ export type SidebarOutgoingMessage =
 const commandTypes = new Set([
   'ready',
   'scanWorkspace',
-  'scanEnvironment',
+  'cancelWorkspaceScan',
   'importPack',
   'generateProject',
   'generateFlashScript',

@@ -115,11 +115,6 @@ export function renderSidebarHtml(
           </div>
         </div>
         <p id="arm-gcc-notice" class="toolchain-notice" role="alert" hidden></p>
-        <div id="toolchain-actions" class="section-actions">
-          <button id="scan-environment" class="secondary-action" type="button" data-command="scanEnvironment">
-            <span class="ui-icon" data-icon="tools" aria-hidden="true"></span><span>扫描环境</span>
-          </button>
-        </div>
       </section>
 
       <section class="control-section target-section" aria-labelledby="target-title">
@@ -200,12 +195,13 @@ export function renderSidebarHtml(
         <button id="scan-workspace" class="secondary-action compact" type="button" data-command="scanWorkspace">
           <span class="ui-icon" data-icon="refresh" aria-hidden="true"></span><span>扫描工作区</span>
         </button>
+        <button id="cancel-workspace-scan" class="secondary-action compact" type="button"
+          data-command="cancelWorkspaceScan" data-always-enabled="true" hidden>
+          <span class="ui-icon" data-icon="cancel" aria-hidden="true"></span><span>取消扫描</span>
+        </button>
       </div>
       <p id="workspace-summary" class="workspace-summary" aria-live="polite">尚未扫描工作区</p>
       <div id="mode-actions" class="section-actions">
-        <button id="scan-environment-any" class="secondary-action" type="button" data-command="scanEnvironment">
-          <span class="ui-icon" data-icon="tools" aria-hidden="true"></span><span>扫描环境</span>
-        </button>
         <button id="import-pack-any" class="secondary-action" type="button" data-command="importPack">
           <span class="ui-icon" data-icon="package" aria-hidden="true"></span><span>导入 Pack</span>
         </button>

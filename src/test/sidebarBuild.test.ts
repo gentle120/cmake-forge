@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createRequire } from 'node:module';
-import { runInNewContext } from 'node:vm';
 import test from 'node:test';
+import { ScanCancelledError } from '../scanner/projectScanner';
+import { WorkspaceProjectsCancelledError } from '../scanner/workspaceProjects';
+import { loadHostModule } from './support/hostModule';
 
 test('sidebar locks generation while building and forwards the actual failure result', async () => {
   const started = Promise.withResolvers<void>();
@@ -25,14 +25,11 @@ test('sidebar locks generation while building and forwards the actual failure re
     } }
   };
   const filename = join(__dirname, '..', 'sidebar', 'provider.js');
-  const moduleObject = { exports: {} as { SidebarProvider: new (context: object, dependencies: object) => {
+  const api = loadHostModule<{ SidebarProvider: new (context: object, dependencies: object) => {
     resolveWebviewView(view: object): void; dispose(): void;
-  } } };
-  const load = runInNewContext('(function(require,module,exports){\n' + readFileSync(filename, 'utf8') + '\n})');
-  const req = createRequire(filename);
-  load((name: string) => name === 'vscode' ? vscode : req(name), moduleObject, moduleObject.exports);
+  } }>(filename, vscode);
   const uri = { path: '/extension', with(change: object) { return { ...this, ...change }; } };
-  const provider = new moduleObject.exports.SidebarProvider({
+  const provider = new api.SidebarProvider({
     workspaceState: {
       get: () => undefined,
       update: async (_key: string, value: unknown) => { stateWrites.push(value); }
@@ -68,7 +65,6 @@ test('sidebar locks generation while building and forwards the actual failure re
     receive!({ type: 'generateProject' });
     receive!({ type: 'setArmToolchainPath', path: 'C:/Other ARM/bin' });
     receive!({ type: 'browseArmToolchain' });
-    receive!({ type: 'scanEnvironment' });
     assert.equal(scanCalls, 0);
     assert.equal(commandCalls, 1);
     gate.resolve({ ok: false, message: 'configure failed' }); await finished.promise;
@@ -77,6 +73,188 @@ test('sidebar locks generation while building and forwards the actual failure re
     assert.equal(result.message, 'configure failed');
   } finally {
     gate.resolve({ ok: false, message: 'stopped' });
+    provider.dispose();
+  }
+});
+
+test('sidebar cancels project discovery before the busy guard and ends discovery state', async () => {
+  const started = Promise.withResolvers<void>();
+  const cancelled = Promise.withResolvers<void>();
+  const messages: Array<{
+    type: string;
+    message?: string;
+    state?: {
+      discoveringProjects: boolean;
+      projects: Array<{ value: string }>;
+      projectRoot: string;
+    };
+  }> = [];
+  let signal: AbortSignal | undefined;
+  const vscode = {
+    workspace: {
+      workspaceFolders: [{ name: 'workspace', uri: { fsPath: 'C:/workspace' } }],
+      getConfiguration: () => ({ get: (_key: string, fallback: string) => fallback })
+    },
+    commands: { executeCommand: async () => undefined }
+  };
+  const filename = join(__dirname, '..', 'sidebar', 'provider.js');
+  const api = loadHostModule<{ SidebarProvider: new (context: object, dependencies: object) => {
+    resolveWebviewView(view: object): void; dispose(): void;
+  } }>(filename, vscode);
+  const provider = new api.SidebarProvider({
+    workspaceState: { get: () => undefined, update: async () => {} },
+    extensionUri: { path: '/extension', with(change: object) { return { ...this, ...change }; } }
+  }, {
+    workflow: {},
+    confirmOverwrite: async () => true,
+    discoverToolchains: () => [],
+    discoverProjects: async (_roots: string[], options?: { signal?: AbortSignal }) => {
+      signal = options?.signal;
+      started.resolve();
+      const cancellationSignal = signal;
+      if (!cancellationSignal) throw new Error('missing cancellation signal');
+      return new Promise<never>((_resolve, reject) => {
+        cancellationSignal.addEventListener('abort', () => {
+          cancelled.resolve();
+          reject(new WorkspaceProjectsCancelledError());
+        }, { once: true });
+      });
+    }
+  });
+  let receive: ((value: object) => void) | undefined;
+  provider.resolveWebviewView({
+    webview: {
+      cspSource: 'test',
+      asWebviewUri: () => 'test',
+      postMessage: (message: typeof messages[number]) => {
+        messages.push(message);
+        return Promise.resolve(true);
+      },
+      onDidReceiveMessage: (listener: typeof receive) => {
+        receive = listener;
+        return { dispose() {} };
+      }
+    },
+    onDidDispose: () => ({ dispose() {} })
+  });
+  try {
+    receive!({ type: 'ready' });
+    await started.promise;
+    assert.ok(messages.some((message) => (
+      message.type === 'state' && message.state?.discoveringProjects === true
+    )));
+    receive!({ type: 'cancelWorkspaceScan' });
+    await cancelled.promise;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(messages.some((message) => (
+      message.type === 'notification' && message.message === '已取消发现工作区工程。'
+    )));
+    const finalState = [...messages].reverse().find((message) => message.type === 'state')?.state;
+    assert.equal(finalState?.discoveringProjects, false);
+    assert.equal(finalState?.projectRoot, '');
+    assert.equal(finalState?.projects.length, 0);
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('sidebar cancels a running source scan and reports a neutral cancellation', async () => {
+  const root = 'C:/workspace';
+  const selection = {
+    mode: 'mcu',
+    projectRoot: root,
+    mcu: { vendor: 'STM', series: 'F1x', part: 'STM32F103C8T6' },
+    linux: { toolchainFamily: 'loongson' },
+    native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
+    debugEnabled: false,
+    flash: {
+      enabled: false,
+      targetId: 'stm32f1xx',
+      probeId: 'stlink',
+      openocdPath: 'openocd',
+      backend: 'openocd'
+    }
+  };
+  const messages: Array<{
+    type: string;
+    result?: { ok: boolean; cancelled?: boolean; message: string; files: string[] };
+  }> = [];
+  const scanStarted = Promise.withResolvers<void>();
+  const vscode = {
+    workspace: {
+      workspaceFolders: [{ name: 'workspace', uri: { fsPath: root } }],
+      getConfiguration: () => ({ get: (_key: string, fallback: unknown) => fallback })
+    },
+    commands: { executeCommand: async () => undefined }
+  };
+  const api = loadHostModule<{ SidebarProvider: new (context: object, dependencies: object) => {
+    resolveWebviewView(view: object): void;
+    dispose(): void;
+  } }>(join(__dirname, '..', 'sidebar', 'provider.js'), vscode);
+  const provider = new api.SidebarProvider({
+    workspaceState: {
+      get: () => selection,
+      update: async () => {}
+    },
+    extensionUri: { path: '/extension', with(change: object) { return { ...this, ...change }; } }
+  }, {
+    workflow: {},
+    confirmOverwrite: async () => true,
+    discoverToolchains: () => [],
+    discoverProjects: async () => [{
+      root,
+      relativePath: '',
+      label: 'workspace',
+      markers: ['source']
+    }],
+    scanProject: async (_root: string, options?: { signal?: AbortSignal }) => {
+      const signal = options?.signal;
+      if (!signal) throw new Error('missing scan signal');
+      scanStarted.resolve();
+      return new Promise<{
+        sources: string[];
+        includeDirs: string[];
+        defines: string[];
+      }>((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          reject(new ScanCancelledError());
+        }, { once: true });
+      });
+    }
+  });
+  let receive: ((value: object) => void) | undefined;
+  const finished = Promise.withResolvers<void>();
+  provider.resolveWebviewView({
+    webview: {
+      cspSource: 'test',
+      asWebviewUri: () => 'test',
+      postMessage: (message: typeof messages[number]) => {
+        messages.push(message);
+        if (message.type === 'operationFinished') finished.resolve();
+        return Promise.resolve(true);
+      },
+      onDidReceiveMessage: (listener: typeof receive) => {
+        receive = listener;
+        return { dispose() {} };
+      }
+    },
+    onDidDispose: () => ({ dispose() {} })
+  });
+  try {
+    receive!({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    receive!({ type: 'scanWorkspace' });
+    await scanStarted.promise;
+    receive!({ type: 'cancelWorkspaceScan' });
+    await finished.promise;
+    const result = [...messages].reverse()
+      .find((message) => message.type === 'operationFinished')?.result;
+    assert.equal(result?.ok, false);
+    assert.equal(result?.cancelled, true);
+    assert.equal(result?.message, '已取消扫描工作区。');
+    assert.equal(result?.files.length, 0);
+    assert.equal(messages.filter((message) => message.type === 'workspaceScan').length, 0);
+  } finally {
     provider.dispose();
   }
 });

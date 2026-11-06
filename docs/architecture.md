@@ -16,7 +16,7 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 | --- | --- | --- | --- |
 | `src/devices/` | 芯片档案注册表（DeviceProfile）、厂商元数据、校验、Pack 导入持久化 | vendorRegistry、generator 契约 | UI、烧录细节 |
 | `src/packs/` | zip 读取、PDSC/SVD 解析、在线索引 | 无 vscode 依赖 | 档案注册（交给 devices） |
-| `src/env/` | 本机工具链扫描（ARM GNU/EIDE/Keil/CubeCLT/J-Link/PATH）、ARM bin 路径归一化与文件状态 | node fs（注入式） | 设置写入（交给宿主接线） |
+| `src/env/` | Keil Pack 目录发现、ARM bin 路径归一化与文件状态、独立工具链扫描算法（Pack/兼容测试使用） | node fs（注入式） | 设置写入（交给宿主接线） |
 | `src/generator/` | 纯函数字符串生成器（CMake/toolchain/linker/startup/flash/debug） | DeviceProfile、Flash*Profile 契约 | 文件系统、UI |
 | `src/generation/` | 生成工作流及显式构建编排；Node 构建执行器管理 CMake 进程、日志、环境与取消 | generator、scanner、integration、shared、Node 进程 API | 芯片数据、烧录执行 |
 | `src/integration/buildProject.ts` | 构建命令注册、工作区信任、预设选择、输出和进度 UI | generation 构建工作流、VS Code API | 生成器、芯片数据 |

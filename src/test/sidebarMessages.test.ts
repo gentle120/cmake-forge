@@ -7,6 +7,9 @@ import { parseIncomingMessage } from '../sidebar/messages';
 test('accepts each supported sidebar command', () => {
   assert.deepEqual(parseIncomingMessage({ type: 'ready' }), { type: 'ready' });
   assert.deepEqual(parseIncomingMessage({ type: 'scanWorkspace' }), { type: 'scanWorkspace' });
+  assert.deepEqual(parseIncomingMessage({ type: 'cancelWorkspaceScan' }), {
+    type: 'cancelWorkspaceScan'
+  });
   assert.deepEqual(parseIncomingMessage({ type: 'generateProject' }), { type: 'generateProject' });
   assert.deepEqual(parseIncomingMessage({ type: 'generateFlashScript' }), {
     type: 'generateFlashScript'
@@ -17,6 +20,7 @@ test('accepts each supported sidebar command', () => {
   assert.deepEqual(parseIncomingMessage({ type: 'buildProject' }), { type: 'buildProject' });
   assert.deepEqual(parseIncomingMessage({ type: 'browseArmToolchain' }), { type: 'browseArmToolchain' });
   assert.deepEqual(parseIncomingMessage({ type: 'openSettings' }), { type: 'openSettings' });
+  assert.equal(parseIncomingMessage({ type: 'scanEnvironment' }), undefined);
 });
 
 test('keeps the selection payload for provider-side sanitization', () => {

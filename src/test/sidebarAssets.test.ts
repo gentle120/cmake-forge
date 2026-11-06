@@ -134,9 +134,9 @@ test('sidebar renderer wires every supported command', () => {
     'saveSelection',
     'setArmToolchainPath',
     'browseArmToolchain',
-    'scanEnvironment',
     'importPack',
     'scanWorkspace',
+    'cancelWorkspaceScan',
     'generateProject',
     'generateFlashScript',
     'generateDebugConfiguration',
@@ -181,8 +181,8 @@ test('every command button is unique and its command is dispatched by the render
   }
   assert.deepEqual(
     [...new Set(commands)].sort(),
-    ['browseArmToolchain', 'buildProject', 'generateDebugConfiguration',
-      'generateFlashScript', 'generateProject', 'importPack', 'scanEnvironment', 'scanWorkspace']
+    ['browseArmToolchain', 'buildProject', 'cancelWorkspaceScan', 'generateDebugConfiguration',
+      'generateFlashScript', 'generateProject', 'importPack', 'scanWorkspace']
   );
   // One delegated listener owns the static commands; no per-button wiring remains.
   const catalogListeners = [...scriptSource.matchAll(/app\.addEventListener\('click'/g)];
@@ -251,7 +251,7 @@ test('unsaved GCC draft survives refreshes, and a rejected save keeps the draft'
   assert.equal(input.value, 'F:/typed/draft', 'a focused draft must not be overwritten');
   assert.equal(harness.element('arm-gcc-status').getAttribute('data-state'), 'ready');
 
-  input.dispatch('focusout', { relatedTarget: harness.element('scan-environment') });
+  input.dispatch('focusout', { relatedTarget: harness.element('workspace-title') });
   harness.send({ type: 'operationFinished', result: { ok: false, message: '目录不完整', files: [] } });
   harness.send({ type: 'state', state: baseState({
     armToolchain: { binDir: 'C:/stored/bin', state: 'ready', message: '已找到 ARM GCC' }
@@ -295,6 +295,45 @@ test('busy state guards duplicate commands and reports cancellation neutrally', 
 
   build.dispatch('click', { target: build });
   assert.equal(harness.posted.filter((message) => message.type === 'buildProject').length, 1);
+});
+
+test('cancel scan only appears while the initial scan or workspace scan is running', () => {
+  const harness = startSidebar(baseState({ discoveringProjects: true }));
+  const cancel = harness.element('cancel-workspace-scan');
+  assert.equal(cancel.hidden, false);
+  assert.equal(cancel.disabled, false);
+
+  harness.send({ type: 'state', state: baseState() });
+  assert.equal(cancel.hidden, true);
+
+  const scan = harness.element('scan-workspace');
+  scan.dispatch('click', { target: scan });
+  harness.send({ type: 'operationStarted', operation: '正在扫描工作区' });
+  assert.equal(cancel.hidden, false);
+  assert.equal(cancel.disabled, false);
+  cancel.dispatch('click', { target: cancel });
+  assert.deepEqual(harness.posted.at(-1), { type: 'cancelWorkspaceScan' });
+  cancel.dispatch('click', { target: cancel });
+  assert.equal(harness.posted.filter((message) => message.type === 'cancelWorkspaceScan').length, 1);
+});
+
+test('cancelled workspace scans keep the previous count instead of reporting zero', () => {
+  const harness = startSidebar(baseState());
+  harness.send({
+    type: 'workspaceScan',
+    sources: 12,
+    includeDirs: 3,
+    defines: 2
+  });
+  const summary = harness.element('workspace-summary');
+  const previous = summary.textContent;
+  const scan = harness.element('scan-workspace');
+  scan.dispatch('click', { target: scan });
+  harness.send({
+    type: 'operationFinished',
+    result: { ok: true, message: '扫描完成', files: [] }
+  });
+  assert.equal(summary.textContent, previous);
 });
 
 test('failure messages stay visible and focus returns to the initiating control', () => {
