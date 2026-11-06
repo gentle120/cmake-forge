@@ -13,9 +13,9 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 ## Public Interfaces
 
 - `DeviceProfile`（`src/devices/deviceProfiles.ts`）是生成器的唯一芯片契约；`part` 在注册表内唯一（大写归一化），未知 part 抛 `Unsupported MCU: <part>`。
-- `registerDeviceProfiles()` 允许运行时追加档案；`listDeviceProfiles()/getDeviceProfile()` 签名稳定，返回防御性拷贝。
+- `registerDeviceProfiles()` 允许运行时追加档案；`unregisterDeviceProfilesByPack()` 按来源移除并恢复前一个来源或内置档案；`listDeviceProfiles()/getDeviceProfile()` 签名稳定，返回防御性拷贝。
 - 厂商必须先在 `vendorRegistry` 注册（id 唯一，`getVendorMetadata` 未知 id 抛错）。
-- 命令 ID：`cmakeEmbedded.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/scanEnvironment/importPack/buildProject/selectArmToolchain`。
+- 命令 ID：`cmakeEmbedded.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/scanEnvironment/importPack/removePack/buildProject/selectArmToolchain`。
 - `buildProject` 使用已有 `debug` 或 `release` CMake 预设；配置失败或取消后不得开始编译步骤。构建日志包含 stdout、stderr 和最终不带换行的输出。
 - `cmakeEmbedded.armToolchainPath` 为 ARM GNU bin 目录，由侧栏、构建与生成的 Cortex-Debug/IntelliSense 配置共享；侧栏保存和浏览只接受含 GCC、G++、objcopy、size 的目录，GCC 可执行文件输入归一化为 bin 目录，留空使用 PATH。
 - 工具链设置写入已有的最具体作用域（workspace folder、workspace、global）；显式构建仅叠加子进程 PATH，不修改系统环境或在工程工具链文件中写入机器绝对路径。
@@ -25,8 +25,8 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 
 ## Data And Persistence
 
-- Pack 导入持久化在扩展 globalStorage：`packs/<vendor>/<file>.pack` + `packs.json`（含序列化 DeviceProfile）；同 part 重复导入覆盖旧版。
-- Keil 安装目录中的已解压 Pack 以目录引用方式导入（`packs.json` 记录元数据但不复制文件）；`importPackDirectory` 删除导入记录不触碰原目录。
+- Pack 导入持久化在扩展 globalStorage：归档来源保存到 `packs/<vendor>/<file>.pack`，`packs.json`（version 2）记录 `source`、真实 `archiveFile` 和序列化 DeviceProfile；同 part 重复导入覆盖旧版。
+- Keil 安装目录中的已解压 Pack 以目录引用方式导入（`packs.json` 记录元数据但不复制目录）；目录旁存在 `.pack` 时记录其绝对路径，删除导入记录不触碰原目录。
 - `CMAKE_EMBEDDED_SKIP_FIRMWARE_BUILDS=1` 跳过真实固件编译用例；CI（release.yml）默认置位。
 - `.mcu-cmake.json`、`.vscode/launch.json`、`c_cpp_properties.json` 的写入保留用户已有内容（JSONC 解析合并）。
 
@@ -36,6 +36,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - PDSC `<processor Dcore>` 在 family/subFamily/device 任一层均有效，device 层缺失时继承上层；`CM0` 缩写与 `Cortex-M0` 全名等价。
 - `Dvendor` 的数字后缀（如 `Sinomcu:985`）不进入厂商显示名；vendor id 由完整值 sanitize 得出。
 - 烧录后端 `openocd|jlink|pyocd` 与探针兼容矩阵见 `src/flash/backendProfiles.ts`；pyocd 后端不支持 J-Link 探针（硬件限制）。
+- pyOCD 的 pack 参数必须是真实存在的 `.pack` 文件；导入设备没有归档时省略 `--pack`，不得生成指向虚拟路径的配置。
 - 侧栏 MCU 选择中，series 不属于当前 vendor 时回退到该 vendor 首个系列，不保留跨 vendor 残留。
 - 侧栏调试器列表仅提供当前烧录后端支持的探针；切换后端时不保留不兼容探针。
 

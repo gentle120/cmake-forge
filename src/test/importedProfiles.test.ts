@@ -60,6 +60,9 @@ async function withStorageRoot(run: (root: string) => Promise<void>): Promise<vo
   try {
     await run(root);
   } finally {
+    for (const pack of await listImportedPacks(root)) {
+      await removePack(root, pack.packFile);
+    }
     await rm(root, { recursive: true, force: true });
   }
 }
@@ -91,6 +94,8 @@ test('imports the fixture pack, restores profiles, overwrites, and removes the p
     const packs = await listImportedPacks(root);
     assert.equal(packs.length, 1);
     assert.equal(packs[0].packFile, 'packs/MS_Semi/ms32f031.pack');
+    assert.equal(packs[0].source, 'archive');
+    assert.equal(packs[0].archiveFile, join(root, 'packs', 'MS_Semi', 'ms32f031.pack'));
     assert.equal(packs[0].vendorName, 'MS Semi');
     assert.deepEqual(packs[0].parts, ['MS32F031A6A0ZW']);
     assert.match(packs[0].importedAt, /^\d{4}-\d{2}-\d{2}T/);
@@ -112,6 +117,7 @@ test('imports the fixture pack, restores profiles, overwrites, and removes the p
     await removePack(root, 'packs/MS_Semi/ms32f031.pack');
     assert.deepEqual(await listImportedPacks(root), []);
     assert.equal(existsSync(join(root, 'packs', 'MS_Semi', 'ms32f031.pack')), false);
+    assert.throws(() => getDeviceProfile('MS32F031A6A0ZW'), /Unsupported MCU/);
   });
 });
 
@@ -148,6 +154,109 @@ test('skips devices whose synthesized profile fails validation', async () => {
     const packs = await listImportedPacks(root);
     assert.equal(packs.length, 1);
     assert.deepEqual(packs[0].parts, []);
+  });
+});
+
+test('removing the latest pack restores an earlier profile for the same part', async () => {
+  const fixture = await readFile(fixturePath);
+  await withStorageRoot(async (root) => {
+    await importPack(fixture, 'first.pack', root);
+    await importPack(fixture, 'second.pack', root);
+
+    assert.deepEqual(
+      (await listImportedPacks(root)).map((pack) => pack.packFile),
+      ['packs/MS_Semi/first.pack', 'packs/MS_Semi/second.pack']
+    );
+
+    await removePack(root, 'packs/MS_Semi/second.pack');
+
+    assert.equal(getDeviceProfile('MS32F031A6A0ZW').part, 'MS32F031A6A0ZW');
+
+    await removePack(root, 'packs/MS_Semi/first.pack');
+    assert.throws(() => getDeviceProfile('MS32F031A6A0ZW'), /Unsupported MCU/);
+  });
+});
+
+test('migrates version 1 pack metadata to a real archive path', async () => {
+  const fixture = await readFile(fixturePath);
+  await withStorageRoot(async (root) => {
+    await mkdir(join(root, 'packs', 'MS_Semi'), { recursive: true });
+    await writeFile(join(root, 'packs', 'MS_Semi', 'legacy.pack'), fixture);
+    await writeFile(join(root, 'packs.json'), JSON.stringify({
+      version: 1,
+      packs: [{
+        packFile: 'packs/MS_Semi/legacy.pack',
+        vendorName: 'MS Semi',
+        importedAt: new Date().toISOString(),
+        parts: ['MS32F031A6A0ZW']
+      }],
+      vendors: [],
+      profiles: []
+    }), 'utf8');
+
+    const packs = await listImportedPacks(root);
+    assert.equal(packs[0].source, 'archive');
+    assert.equal(packs[0].archiveFile, join(root, 'packs', 'MS_Semi', 'legacy.pack'));
+    assert.equal(existsSync(packs[0].archiveFile!), true);
+  });
+});
+
+test('a directory pack without a nearby archive has no pyOCD archive path', async () => {
+  const pdsc = `<?xml version="1.0" encoding="utf-8"?>
+<package><devices><family Dvendor="Sinomcu:985" Dfamily="MS32FXXX Series">
+  <processor Dcore="Cortex-M0"/>
+  <device Dname="MS32F031A6A0ZW">
+    <memory id="IROM1" start="0x08000000" size="0x8000"/>
+    <memory id="IRAM1" start="0x20000000" size="0x1000"/>
+    <debug svd="MS32F031.svd"/>
+  </device>
+</family></devices></package>`;
+  const svd = `<?xml version="1.0" encoding="utf-8"?>
+<device><peripherals><peripheral><name>WWDG</name>
+  <interrupt><name>WWDG</name><value>0</value></interrupt>
+</peripheral></peripherals></device>`;
+  const root = await mkdtemp(join(tmpdir(), 'cmake-embedded-dirpack-noarch-'));
+  const packRoot = await mkdtemp(join(tmpdir(), 'cmake-embedded-keilpack-noarch-'));
+  try {
+    await writeFile(join(packRoot, 'Sinomcu.pdsc'), pdsc, 'utf8');
+    await writeFile(join(packRoot, 'MS32F031.svd'), svd, 'utf8');
+    await importPackDirectory(packRoot, join(packRoot, 'Sinomcu.pdsc'), root);
+
+    const packs = await listImportedPacks(root);
+    assert.equal(packs[0].source, 'directory');
+    assert.equal(packs[0].archiveFile, undefined);
+  } finally {
+    for (const pack of await listImportedPacks(root)) {
+      await removePack(root, pack.packFile);
+    }
+    await rm(root, { recursive: true, force: true });
+    await rm(packRoot, { recursive: true, force: true });
+  }
+});
+
+test('a failed reimport keeps the previously valid profiles registered', async () => {
+  const fixture = await readFile(fixturePath);
+  const broken = buildZip([{
+    name: 'broken.pdsc',
+    data: `<?xml version="1.0" encoding="utf-8"?>
+<package><devices><family Dvendor="MS Semi" Dfamily="MS32F031">
+  <device Dname="MS32F031A6A0ZW" Dcore="CM0"><debug svd="missing.svd"/></device>
+</family></devices></package>`
+  }]);
+  await withStorageRoot(async (root) => {
+    await importPack(fixture, 'valid.pack', root);
+    assert.equal(getDeviceProfile('MS32F031A6A0ZW').part, 'MS32F031A6A0ZW');
+
+    const result = await importPack(broken, 'valid.pack', root);
+    assert.deepEqual(result.imported, []);
+    assert.equal(existsSync(join(root, 'packs', 'MS_Semi', 'valid.pack')), true);
+    assert.equal(getDeviceProfile('MS32F031A6A0ZW').part, 'MS32F031A6A0ZW');
+    const packs = await listImportedPacks(root);
+    assert.deepEqual(packs.map((pack) => pack.parts), [['MS32F031A6A0ZW']]);
+    assert.deepEqual(
+      (await loadImportedProfiles(root)).map((profile) => profile.part),
+      ['MS32F031A6A0ZW']
+    );
   });
 });
 
@@ -188,6 +297,7 @@ test('imports an extracted pack directory in place with the vendor display name'
     await mkdir(join(packRoot, 'CMSIS', 'SVD'), { recursive: true });
     await writeFile(join(packRoot, 'Sinomcu.MS32F0xx_DFP.pdsc'), pdsc, 'utf8');
     await writeFile(join(packRoot, 'CMSIS', 'SVD', 'MS32F031.svd'), svd, 'utf8');
+    await writeFile(join(packRoot, 'Sinomcu.MS32F0xx_DFP.1.1.1.pack'), 'archive', 'utf8');
 
     const result = await importPackDirectory(
       packRoot,
@@ -200,6 +310,11 @@ test('imports an extracted pack directory in place with the vendor display name'
     assert.equal(packs.length, 1);
     assert.equal(packs[0].vendorName, 'Sinomcu');
     assert.equal(packs[0].packFile, 'packs/Sinomcu_985/Sinomcu.MS32F0xx_DFP.pack');
+    assert.equal(packs[0].source, 'directory');
+    assert.equal(
+      packs[0].archiveFile,
+      join(packRoot, 'Sinomcu.MS32F0xx_DFP.1.1.1.pack')
+    );
 
     const loaded = await loadImportedProfiles(root);
     assert.deepEqual(loaded.map((profile) => profile.part), ['MS32F031A6A0ZW']);
@@ -210,9 +325,13 @@ test('imports an extracted pack directory in place with the vendor display name'
 
     await removePack(root, packs[0].packFile);
     assert.deepEqual(await listImportedPacks(root), []);
+    assert.throws(() => getDeviceProfile('MS32F031A6A0ZW'), /Unsupported MCU/);
     // The referenced pack directory itself survives removal of the import record.
     assert.equal(existsSync(join(packRoot, 'Sinomcu.MS32F0xx_DFP.pdsc')), true);
   } finally {
+    for (const pack of await listImportedPacks(root)) {
+      await removePack(root, pack.packFile);
+    }
     await rm(root, { recursive: true, force: true });
     await rm(packRoot, { recursive: true, force: true });
   }

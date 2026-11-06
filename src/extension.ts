@@ -1,7 +1,13 @@
 import * as vscode from 'vscode';
 import { registerBuildProject } from './integration/buildProject';
 import { getArmToolchainPath, registerArmToolchainSettings, saveArmToolchainPath } from './integration/toolchainSettings';
-import { getDeviceProfile, listDeviceProfiles, type DeviceSeries, type DeviceVendor } from './devices/deviceProfiles';
+import {
+  getDeviceProfile,
+  isRuntimeDeviceProfile,
+  listDeviceProfiles,
+  type DeviceSeries,
+  type DeviceVendor
+} from './devices/deviceProfiles';
 import { listDeviceProfilesForSeries, listDeviceSeries, listDeviceVendors } from './devices/deviceSelection';
 import { getVendorMetadata } from './devices/vendorRegistry';
 import { getFlashProbeProfile, listFlashProbeProfiles, type FlashProbeProfile } from './flash/probeProfiles';
@@ -10,6 +16,7 @@ import {
   importPackDirectory,
   listImportedPacks,
   loadImportedProfiles,
+  removePack,
   type ImportPackResult
 } from './devices/importedProfiles';
 import { defaultScanRoots, listKeilPacks, scanToolchains, type ToolchainHit } from './env/toolchainScanner';
@@ -245,8 +252,11 @@ const packFileByPart = new Map<string, string>();
 async function syncPackFileIndex(): Promise<void> {
   packFileByPart.clear();
   for (const record of await listImportedPacks(packStorageRoot)) {
+    if (!record.archiveFile) {
+      continue;
+    }
     for (const part of record.parts) {
-      packFileByPart.set(part, record.packFile);
+      packFileByPart.set(part, record.archiveFile);
     }
   }
 }
@@ -256,6 +266,16 @@ function executablePaths(): FlashExecutablePaths {
   return {
     jlink: configuration.get<string>('jlinkPath', 'JLink')?.trim() || 'JLink',
     pyocd: configuration.get<string>('pyocdPath', 'pyocd')?.trim() || 'pyocd'
+  };
+}
+
+function flashDeviceFor(profile: ReturnType<typeof getDeviceProfile>): FlashDeviceContext {
+  return {
+    part: profile.part,
+    core: profile.core,
+    packFile: isRuntimeDeviceProfile(profile.part)
+      ? packFileByPart.get(profile.part)
+      : undefined
   };
 }
 
@@ -471,6 +491,33 @@ async function importPackOnly(): Promise<CommandResult> {
   }
 }
 
+async function removePackOnly(): Promise<CommandResult> {
+  const packs = await listImportedPacks(packStorageRoot);
+  if (packs.length === 0) {
+    const message = '没有可删除的已导入 Pack。';
+    void vscode.window.showInformationMessage(message);
+    return { ok: false, message };
+  }
+  const picked = await vscode.window.showQuickPick(
+    packs.map((pack) => ({
+      label: pack.vendorName,
+      description: pack.packFile,
+      detail: `${pack.parts.length} 个型号 · ${pack.source}`,
+      pack
+    })),
+    { placeHolder: '选择要删除的已导入 Pack' }
+  );
+  if (!picked) {
+    return { ok: false, cancelled: true, message: '未删除 Pack。' };
+  }
+  await removePack(packStorageRoot, picked.pack.packFile);
+  await syncPackFileIndex();
+  activeSidebar?.refresh();
+  const message = `已删除 ${picked.pack.vendorName}（${picked.pack.parts.length} 个型号）。`;
+  void vscode.window.showInformationMessage(message);
+  return { ok: true, message };
+}
+
 async function selectFlashBackend(
   probe: FlashProbeProfile,
   profile?: { debugTarget?: string }
@@ -587,7 +634,7 @@ async function generateProject(): Promise<void> {
       return;
     }
     let backend: FlashBackendId = 'openocd';
-    const device: FlashDeviceContext = { part: profile.part, core: profile.core };
+    const device = flashDeviceFor(profile);
     let target: FlashTargetProfile;
     if (profile.debugTarget) {
       target = getFlashTargetProfileForDevice(profile);
@@ -714,6 +761,7 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand('cmakeEmbedded.scanEnvironment', () => scanEnvironmentOnly()),
     vscode.commands.registerCommand('cmakeEmbedded.importPack', () => importPackOnly()),
+    vscode.commands.registerCommand('cmakeEmbedded.removePack', () => removePackOnly()),
     vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebarProvider, {
       webviewOptions: { retainContextWhenHidden: true }
     }),

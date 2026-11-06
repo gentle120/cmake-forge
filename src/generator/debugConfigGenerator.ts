@@ -1,5 +1,6 @@
 import type { FlashProbeProfile } from '../flash/probeProfiles';
 import type { FlashTargetProfile } from '../flash/targets/targetProfiles';
+import { existsSync } from 'node:fs';
 import {
   jlinkDeviceName,
   pyocdTargetName,
@@ -133,6 +134,9 @@ function createConfiguration(options: CortexDebugConfigurationOptions): Record<s
     configuration.device = jlinkDeviceName(options.device?.part, options.device?.core);
     configuration.interface = 'swd';
   } else if (backend === 'pyocd') {
+    if (options.device?.packFile && !existsSync(options.device.packFile)) {
+      throw new Error(`pyOCD pack file does not exist: ${options.device.packFile}`);
+    }
     configuration.servertype = 'pyocd';
     configuration.target = pyocdTargetName(options.device?.part);
     if (options.device?.packFile) {

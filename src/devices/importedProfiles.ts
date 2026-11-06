@@ -1,13 +1,20 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { basename, join, resolve, sep } from 'node:path';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { parsePack, parsePackEntries, type PackDeviceCandidate } from '../packs/packParser';
-import { readDirectoryEntries } from '../packs/packFs';
-import { registerDeviceProfiles, type DeviceProfile } from './deviceProfiles';
+import { findAdjacentPackArchive, readDirectoryEntries } from '../packs/packFs';
+import {
+  registerDeviceProfiles,
+  unregisterDeviceProfilesByPack,
+  type DeviceProfile
+} from './deviceProfiles';
 import { validateDeviceProfile } from './profileValidation';
 import { getVendorMetadata, hasVendor, importedVendorBaseOrder, registerVendor } from './vendorRegistry';
 
 export interface ImportedPackRecord {
   packFile: string;
+  source: 'archive' | 'directory';
+  /** Absolute path to the real .pack archive used by pyOCD, when available. */
+  archiveFile?: string;
   vendorName: string;
   importedAt: string;
   parts: string[];
@@ -31,13 +38,15 @@ interface StoredProfile {
 }
 
 interface PackStoreFile {
-  version: 1;
+  version: 2;
   packs: ImportedPackRecord[];
   vendors: StoredVendor[];
   profiles: StoredProfile[];
 }
 
-const EMPTY_STORE: PackStoreFile = { version: 1, packs: [], vendors: [], profiles: [] };
+const EMPTY_STORE: PackStoreFile = { version: 2, packs: [], vendors: [], profiles: [] };
+const SOURCE_ARCHIVE = 'archive' as const;
+const SOURCE_DIRECTORY = 'directory' as const;
 
 export async function importPack(
   buffer: Buffer,
@@ -45,9 +54,16 @@ export async function importPack(
   storageRoot: string
 ): Promise<ImportPackResult> {
   const { vendorName, devices } = parsePack(buffer);
-  return importParsedPack(devices, vendorName, basename(fileName), storageRoot, async (packDir, packFile) => {
-    await writeFile(join(packDir, packFile), buffer);
-  });
+  return importParsedPack(
+    devices,
+    vendorName,
+    basename(fileName),
+    storageRoot,
+    SOURCE_ARCHIVE,
+    async (packDir, packFile) => {
+      await writeFile(join(packDir, packFile), buffer);
+    }
+  );
 }
 
 /**
@@ -62,9 +78,48 @@ export async function importPackDirectory(
   const entries = await readDirectoryEntries(root);
   const { vendorName, devices } = parsePackEntries(entries);
   const fileName = basename(pdscPath).replace(/\.pdsc$/i, '.pack');
-  return importParsedPack(devices, vendorName, fileName, storageRoot, async () => {
+  return importParsedPack(devices, vendorName, fileName, storageRoot, SOURCE_DIRECTORY, async () => {
     // Directory packs stay where the pack manager put them.
-  });
+  }, await findAdjacentPackArchive(root));
+}
+
+function runtimeArchivePath(storageRoot: string, packFilePath: string): string {
+  return resolve(storageRoot, packFilePath);
+}
+
+function normalizedPackPath(packFile: string, storageRoot: string, archiveFile?: string): string {
+  if (archiveFile) {
+    return isAbsolute(archiveFile)
+      ? resolve(archiveFile)
+      : resolve(storageRoot, archiveFile);
+  }
+  return runtimeArchivePath(storageRoot, packFile);
+}
+
+async function isRealFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function sourceOf(record: Partial<ImportedPackRecord>): 'archive' | 'directory' {
+  return record.source === SOURCE_DIRECTORY ? SOURCE_DIRECTORY : SOURCE_ARCHIVE;
+}
+
+function copyRecord(record: ImportedPackRecord, storageRoot: string): ImportedPackRecord {
+  const source = sourceOf(record);
+  return {
+    ...record,
+    source,
+    archiveFile: record.archiveFile
+      ? normalizedPackPath(record.packFile, storageRoot, record.archiveFile)
+      : source === SOURCE_ARCHIVE
+        ? runtimeArchivePath(storageRoot, record.packFile)
+        : undefined,
+    parts: [...record.parts]
+  };
 }
 
 async function importParsedPack(
@@ -72,19 +127,22 @@ async function importParsedPack(
   vendorName: string,
   packFile: string,
   storageRoot: string,
-  storePackFile: (packDir: string, packFile: string) => Promise<void>
+  source: 'archive' | 'directory',
+  storePackFile: (packDir: string, packFile: string) => Promise<void>,
+  archiveFile?: string
 ): Promise<ImportPackResult> {
   const vendorId = sanitizeIdentifier(vendorName);
   const vendorLabel = vendorDisplayName(vendorName);
   const packFilePath = ['packs', vendorId, packFile].join('/');
 
   const store = await readStore(storageRoot);
-  dropPackRecord(store, packFilePath);
+  const existingPack = store.packs.some((record) => record.packFile === packFilePath);
 
   const firstUsableSeries = devices.find((device) => !device.error)?.series ?? '';
   const vendor = await ensureVendor(store, vendorId, vendorLabel, firstUsableSeries);
 
   const result: ImportPackResult = { imported: [], skipped: [] };
+  const importedProfiles: StoredProfile[] = [];
   for (const device of devices) {
     if (device.error) {
       result.skipped.push({ part: device.part || '(unnamed device)', reason: device.error });
@@ -97,26 +155,44 @@ async function importParsedPack(
     const profile = packDeviceToProfile(device, vendorId, vendorLabel);
     try {
       validateDeviceProfile(profile);
-      registerDeviceProfiles([profile]);
     } catch (error) {
       result.skipped.push({ part: device.part, reason: errorMessage(error) });
       continue;
     }
     result.imported.push(profile.part);
-    store.profiles.push({ packFile: packFilePath, profile });
+    importedProfiles.push({ packFile: packFilePath, profile });
+  }
+
+  // A broken upgrade must not erase the last known-good pack.
+  if (existingPack && result.imported.length === 0) {
+    return result;
   }
 
   const packDir = join(storageRoot, 'packs', vendorId);
   await mkdir(packDir, { recursive: true });
   await storePackFile(packDir, packFile);
 
+  store.packs = store.packs.filter((record) => record.packFile !== packFilePath);
+  store.profiles = store.profiles.filter((stored) => stored.packFile !== packFilePath);
+  store.profiles.push(...importedProfiles);
   store.packs.push({
     packFile: packFilePath,
+    source,
+    archiveFile: archiveFile
+      ? resolve(archiveFile)
+      : source === SOURCE_ARCHIVE
+        ? runtimeArchivePath(storageRoot, packFilePath)
+        : undefined,
     vendorName: vendorLabel,
     importedAt: new Date().toISOString(),
     parts: result.imported
   });
   await writeStore(storageRoot, store);
+  unregisterDeviceProfilesByPack(packFilePath);
+  registerDeviceProfiles(
+    importedProfiles.map((stored) => stored.profile),
+    packFilePath
+  );
   return result;
 }
 
@@ -137,36 +213,59 @@ export async function loadImportedProfiles(storageRoot: string): Promise<DeviceP
       });
     }
   }
+  const loadedParts = new Set<string>();
+  for (const pack of store.packs) {
+    const profiles = store.profiles
+      .filter((stored) => stored.packFile === pack.packFile)
+      .map((stored) => stored.profile)
+      .filter((profile) => {
+        try {
+          validateDeviceProfile(profile);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+    registerDeviceProfiles(profiles, pack.packFile);
+    profiles.forEach((profile) => loadedParts.add(profile.part.toUpperCase()));
+  }
   for (const stored of store.profiles) {
+    if (loadedParts.has(stored.profile.part.toUpperCase())) {
+      loaded.push(stored.profile);
+      continue;
+    }
     try {
       validateDeviceProfile(stored.profile);
-      registerDeviceProfiles([stored.profile]);
+      registerDeviceProfiles([stored.profile], stored.packFile);
+      loaded.push(stored.profile);
     } catch {
       continue;
     }
-    loaded.push(stored.profile);
   }
   return loaded;
 }
 
 export async function listImportedPacks(storageRoot: string): Promise<ImportedPackRecord[]> {
   const store = await readStore(storageRoot);
-  return store.packs.map((record) => ({ ...record, parts: [...record.parts] }));
+  return store.packs.map((record) => copyRecord(record, storageRoot));
 }
 
 export async function removePack(storageRoot: string, packFile: string): Promise<void> {
   const normalized = packFile.replace(/\\/g, '/');
   const store = await readStore(storageRoot);
-  const stillPresent = store.packs.some((record) => record.packFile === normalized);
-  if (!stillPresent) {
+  const pack = store.packs.find((record) => record.packFile === normalized);
+  if (!pack) {
     return;
   }
   store.packs = store.packs.filter((record) => record.packFile !== normalized);
   store.profiles = store.profiles.filter((stored) => stored.packFile !== normalized);
   await writeStore(storageRoot, store);
-  const packPath = join(storageRoot, normalized);
-  if (resolve(packPath).startsWith(resolve(storageRoot) + sep)) {
-    await rm(packPath, { force: true });
+  unregisterDeviceProfilesByPack(normalized);
+  if (sourceOf(pack) === SOURCE_ARCHIVE) {
+    const packPath = normalizedPackPath(normalized, storageRoot, pack.archiveFile);
+    if (resolve(packPath).startsWith(resolve(storageRoot) + sep)) {
+      await rm(packPath, { force: true });
+    }
   }
 }
 
@@ -256,18 +355,32 @@ async function ensureVendor(
   return vendor;
 }
 
-function dropPackRecord(store: PackStoreFile, packFilePath: string): void {
-  store.packs = store.packs.filter((record) => record.packFile !== packFilePath);
-  store.profiles = store.profiles.filter((stored) => stored.packFile !== packFilePath);
-}
-
 async function readStore(storageRoot: string): Promise<PackStoreFile> {
   try {
     const raw = await readFile(join(storageRoot, 'packs.json'), 'utf8');
     const parsed = JSON.parse(raw) as Partial<PackStoreFile>;
+    const selectedPacks: ImportedPackRecord[] = [];
+    for (const record of Array.isArray(parsed.packs) ? parsed.packs : []) {
+      let source = sourceOf(record);
+      let archiveFile = record.archiveFile
+        ? normalizedPackPath(record.packFile, storageRoot, record.archiveFile)
+        : undefined;
+      if (!archiveFile && record.source === undefined) {
+        const legacyArchive = runtimeArchivePath(storageRoot, record.packFile);
+        if (await isRealFile(legacyArchive)) {
+          archiveFile = legacyArchive;
+        } else {
+          // Version 1 could not distinguish an extracted directory from an archive.
+          source = SOURCE_DIRECTORY;
+        }
+      } else if (!archiveFile && source === SOURCE_ARCHIVE) {
+        archiveFile = runtimeArchivePath(storageRoot, record.packFile);
+      }
+      selectedPacks.push({ ...record, source, archiveFile });
+    }
     return {
-      version: 1,
-      packs: Array.isArray(parsed.packs) ? parsed.packs : [],
+      version: 2,
+      packs: selectedPacks,
       vendors: Array.isArray(parsed.vendors) ? parsed.vendors : [],
       profiles: Array.isArray(parsed.profiles) ? parsed.profiles : []
     };

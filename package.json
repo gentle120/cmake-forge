@@ -84,6 +84,10 @@
         "title": "CMake-Embedded: Import CMSIS Pack"
       },
       {
+        "command": "cmakeEmbedded.removePack",
+        "title": "CMake-Embedded: Remove Imported CMSIS Pack"
+      },
+      {
         "command": "cmakeEmbedded.buildProject",
         "title": "CMake-Embedded: Build Project"
       },

@@ -34,6 +34,8 @@
 | `CMake-Embedded: Generate C/C++ Project` | 桌面 | 选择目标类型和语言标准，生成普通 CMake 工程 |
 | `CMake-Embedded: Generate OpenOCD Flash Script` | MCU | 仅生成 `flash.py` |
 | `CMake-Embedded: Generate Cortex-Debug Configuration` | MCU | 仅生成 `.vscode/launch.json` 调试配置 |
+| `CMake-Embedded: Import CMSIS Pack` | MCU | 从本地归档、Keil 已安装目录或在线索引导入芯片 |
+| `CMake-Embedded: Remove Imported CMSIS Pack` | MCU | 删除已导入的 Pack 并立即刷新设备列表 |
 | `CMake-Embedded: Build Project` | 全部 | 使用 Debug/Release 预设配置并编译已有 CMake 工程 |
 | `CMake-Embedded: Select ARM GNU GCC Toolchain` | MCU | 浏览并保存 ARM GNU 工具链 bin 目录 |
 
@@ -126,6 +128,12 @@ OpenOCD 烧录 target 独立选择，因此也可以给已有自定义 CMake 工
 
 当前芯片数据库支持常用的 STM32/GD32 F1、F4 型号和 STM32L4 型号。
 侧栏和命令面板都会先按厂商选择，再按系列和具体型号选择。
+
+除内置型号外，可通过 `Import CMSIS Pack` 导入本地 `.pack`、Keil 已安装的
+解压 Pack，或从 keil.com 在线索引下载。导入型号会立即出现在侧栏中；删除
+Pack 也会立即移除对应型号，无需重启扩展。pyOCD 需要真实的 `.pack` 文件：
+普通归档导入会保存归档副本；解压目录若旁边没有 `.pack` 文件，pyOCD 配置
+不会附带虚拟路径。
 
 ### 使用方法
 

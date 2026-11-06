@@ -1,5 +1,6 @@
 import type { FlashProbeProfile } from '../flash/probeProfiles';
 import type { FlashTargetProfile } from '../flash/targets/targetProfiles';
+import { existsSync } from 'node:fs';
 import {
   backendSupportsProbe,
   jlinkDeviceName,
@@ -76,6 +77,9 @@ export function generateFlashScript(
     return generateJlinkScript(projectName, device, executables.jlink ?? 'JLink');
   }
   if (backend === 'pyocd') {
+    if (device?.packFile && !existsSync(device.packFile)) {
+      throw new Error(`pyOCD pack file does not exist: ${device.packFile}`);
+    }
     return generatePyocdScript(projectName, probe, device, executables.pyocd ?? 'pyocd');
   }
   return generateOpenocdScript(projectName, target, probe, openocdPath);

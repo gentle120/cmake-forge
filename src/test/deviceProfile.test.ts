@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getDeviceProfile, listDeviceProfiles } from '../devices/deviceProfiles';
+import {
+  getDeviceProfile,
+  listDeviceProfiles,
+  registerDeviceProfiles,
+  unregisterDeviceProfiles,
+  unregisterDeviceProfilesByPack
+} from '../devices/deviceProfiles';
 import { validateDeviceProfile } from '../devices/profileValidation';
 import {
   listDeviceProfilesForSeries,
@@ -276,4 +282,39 @@ test('returns defensive copies of profile data', () => {
   assert.notEqual(freshProfile.compilerFlags.length, 0);
   assert.notEqual(freshProfile.interruptHandlers[0], 'MUTATED_IRQHandler');
   assert.equal(freshProfile.flash.length, 64 * 1024);
+});
+
+test('removes runtime profiles without removing built-in profiles', () => {
+  const imported = {
+    ...getDeviceProfile('STM32F103C8T6'),
+    part: 'RUNTIME_ONLY_MCU'
+  };
+  registerDeviceProfiles([imported]);
+  assert.equal(getDeviceProfile('RUNTIME_ONLY_MCU').part, 'RUNTIME_ONLY_MCU');
+
+  unregisterDeviceProfiles(['RUNTIME_ONLY_MCU']);
+  assert.throws(() => getDeviceProfile('RUNTIME_ONLY_MCU'), /Unsupported MCU/);
+  assert.equal(getDeviceProfile('STM32F103C8T6').part, 'STM32F103C8T6');
+});
+
+test('restores a built-in profile after a runtime override is removed', () => {
+  const original = getDeviceProfile('STM32F103C8T6');
+  registerDeviceProfiles([{ ...original, ram: { origin: 0x20000000, length: 0x1000 } }]);
+  assert.equal(getDeviceProfile('STM32F103C8T6').ram.length, 0x1000);
+
+  unregisterDeviceProfiles(['STM32F103C8T6']);
+  assert.equal(getDeviceProfile('STM32F103C8T6').ram.length, original.ram.length);
+});
+
+test('keeps the newest pack source and falls back when it is unregistered', () => {
+  const original = getDeviceProfile('STM32F103C8T6');
+  registerDeviceProfiles([{ ...original, ram: { origin: 0x20000000, length: 0x1000 } }], 'first.pack');
+  registerDeviceProfiles([{ ...original, ram: { origin: 0x20000000, length: 0x2000 } }], 'second.pack');
+  assert.equal(getDeviceProfile('STM32F103C8T6').ram.length, 0x2000);
+
+  unregisterDeviceProfilesByPack('second.pack');
+  assert.equal(getDeviceProfile('STM32F103C8T6').ram.length, 0x1000);
+
+  unregisterDeviceProfilesByPack('first.pack');
+  assert.equal(getDeviceProfile('STM32F103C8T6').ram.length, original.ram.length);
 });

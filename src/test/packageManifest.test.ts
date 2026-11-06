@@ -15,6 +15,7 @@ test('uses the extension name in command and settings display titles', () => {
       'CMake-Embedded: Generate Cortex-Debug Configuration',
       'CMake-Embedded: Scan Toolchains',
       'CMake-Embedded: Import CMSIS Pack',
+      'CMake-Embedded: Remove Imported CMSIS Pack',
       'CMake-Embedded: Build Project',
       'CMake-Embedded: Select ARM GNU GCC Toolchain'
     ]

@@ -39,26 +39,96 @@ import { validateDeviceProfile } from './profileValidation';
 
 const allProfiles = [...gd32Profiles, ...stm32Profiles];
 const profiles: Record<string, DeviceProfile> = {};
+const builtinProfiles = new Map<string, DeviceProfile>();
+const importedProfilesByPart = new Map<string, Map<string, DeviceProfile>>();
+const importedSourceByPart = new Map<string, string>();
 for (const profile of allProfiles) {
   addProfile(profile, false);
+  builtinProfiles.set(profile.part.toUpperCase(), profile);
 }
 
-function addProfile(profile: DeviceProfile, replace: boolean): void {
+function addProfile(profile: DeviceProfile, replace: boolean, sourcePack?: string): void {
   validateDeviceProfile(profile);
   const key = profile.part.toUpperCase();
   if (!replace && profiles[key]) {
     throw new Error(`Invalid MCU profile ${profile.part}: duplicate part`);
   }
   profiles[key] = profile;
+  if (replace && sourcePack) {
+    const normalizedSource = sourcePack.replace(/\\/g, '/');
+    const sources = importedProfilesByPart.get(key) ?? new Map<string, DeviceProfile>();
+    sources.set(normalizedSource, profile);
+    importedProfilesByPart.set(key, sources);
+    importedSourceByPart.set(key, normalizedSource);
+  }
 }
 
 /**
  * Appends runtime-imported device profiles (CMSIS packs). Registering a part
  * again replaces the previous record so pack upgrades win.
  */
-export function registerDeviceProfiles(imported: DeviceProfile[]): void {
+export function registerDeviceProfiles(imported: DeviceProfile[], sourcePack?: string): void {
   for (const profile of imported) {
-    addProfile(profile, true);
+    addProfile(profile, true, sourcePack);
+  }
+}
+
+export function unregisterDeviceProfiles(parts: string[], sourcePack?: string): void {
+  for (const part of parts) {
+    const key = part.trim().toUpperCase();
+    if (sourcePack) {
+      const normalizedSource = sourcePack.replace(/\\/g, '/');
+      const sources = importedProfilesByPart.get(key);
+      if (!sources?.delete(normalizedSource)) {
+        continue;
+      }
+      if (importedSourceByPart.get(key) !== normalizedSource) {
+        continue;
+      }
+      const nextSource = [...sources.entries()].at(-1);
+      if (nextSource) {
+        importedSourceByPart.set(key, nextSource[0]);
+        profiles[key] = nextSource[1];
+        continue;
+      }
+    }
+    importedProfilesByPart.delete(key);
+    importedSourceByPart.delete(key);
+    const builtin = builtinProfiles.get(key);
+    if (builtin) {
+      profiles[key] = builtin;
+    } else {
+      delete profiles[key];
+    }
+  }
+}
+
+/** Removes only the profiles owned by one imported pack and restores the next source. */
+export function unregisterDeviceProfilesByPack(sourcePack: string): void {
+  const normalizedSource = sourcePack.replace(/\\/g, '/');
+  for (const [key, sources] of [...importedProfilesByPart]) {
+    if (!sources.has(normalizedSource)) {
+      continue;
+    }
+    if (importedSourceByPart.get(key) !== normalizedSource) {
+      sources.delete(normalizedSource);
+      continue;
+    }
+    sources.delete(normalizedSource);
+    const nextSource = [...sources.entries()].at(-1);
+    if (nextSource) {
+      importedSourceByPart.set(key, nextSource[0]);
+      profiles[key] = nextSource[1];
+      continue;
+    }
+    importedProfilesByPart.delete(key);
+    importedSourceByPart.delete(key);
+    const builtin = builtinProfiles.get(key);
+    if (builtin) {
+      profiles[key] = builtin;
+    } else {
+      delete profiles[key];
+    }
   }
 }
 
@@ -84,4 +154,9 @@ export function getDeviceProfile(part: string): DeviceProfile {
     throw new Error(`Unsupported MCU: ${part}`);
   }
   return copyProfile(profile);
+}
+
+/** True when the current registry entry came from an imported pack. */
+export function isRuntimeDeviceProfile(part: string): boolean {
+  return importedSourceByPart.has(part.trim().toUpperCase());
 }

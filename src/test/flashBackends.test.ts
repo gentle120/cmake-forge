@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import {
   backendSupportsProbe,
@@ -40,8 +43,18 @@ function assertPythonSyntax(script: string): Promise<void> {
 const importedDevice: FlashDeviceContext = {
   part: 'MS32F031A6A0ZW',
   core: 'cortex-m0',
-  packFile: 'C:/packs/MS32F031/MS32F031_DFP.1.0.0.pack'
 };
+
+async function withPackFile(run: (packFile: string) => Promise<void>): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'cmake-embedded-flash-'));
+  const packFile = join(root, 'MS32F031_DFP.1.0.0.pack');
+  await writeFile(packFile, 'pack');
+  try {
+    await run(packFile);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
 
 test('exposes the three backend profiles with their probe matrices', () => {
   const backends = listFlashBackendProfiles();
@@ -98,25 +111,42 @@ test('generates a J-Link flash script for an imported part', async () => {
 });
 
 test('generates a pyOCD flash script with the imported CMSIS pack', async () => {
-  const script = generateFlashScript(
-    'demo',
-    getFlashTargetProfile('stm32f1xx'),
-    getFlashProbeProfile('stlink'),
-    'openocd',
-    'pyocd',
-    importedDevice,
-    { pyocd: 'pyocd' }
-  );
+  await withPackFile(async (packFile) => {
+    const script = generateFlashScript(
+      'demo',
+      getFlashTargetProfile('stm32f1xx'),
+      getFlashProbeProfile('stlink'),
+      'openocd',
+      'pyocd',
+      { ...importedDevice, packFile },
+      { pyocd: 'pyocd' }
+    );
 
-  assert.match(script, /with pyOCD/);
-  assert.match(script, /PYOCD_TARGET = "ms32f031a6a0zw"/);
-  assert.match(script, /PYOCD_PACK = "C:\/packs\/MS32F031\/MS32F031_DFP.1.0.0.pack"/);
-  assert.match(script, /"--target", args.target/);
-  assert.match(script, /"--pack", args.pack/);
-  assert.match(script, /"--probe", PYOCD_PROBES\[args.probe\]/);
-  assert.match(script, /"stlink": "stlink"/);
-  assert.match(script, /"daplink": "cmsis-dap"/);
-  await assertPythonSyntax(script);
+    assert.match(script, /with pyOCD/);
+    assert.match(script, /PYOCD_TARGET = "ms32f031a6a0zw"/);
+    assert.equal(script.includes(`PYOCD_PACK = ${JSON.stringify(packFile)}`), true);
+    assert.match(script, /"--target", args.target/);
+    assert.match(script, /"--pack", args.pack/);
+    assert.match(script, /"--probe", PYOCD_PROBES\[args.probe\]/);
+    assert.match(script, /"stlink": "stlink"/);
+    assert.match(script, /"daplink": "cmsis-dap"/);
+    await assertPythonSyntax(script);
+  });
+});
+
+test('rejects pyOCD pack paths that are not real existing files', () => {
+  assert.throws(
+    () => generateFlashScript(
+      'demo',
+      getFlashTargetProfile('stm32f1xx'),
+      getFlashProbeProfile('stlink'),
+      'openocd',
+      'pyocd',
+      { ...importedDevice, packFile: 'C:/missing/does-not-exist.pack' },
+      { pyocd: 'pyocd' }
+    ),
+    /pyOCD pack file.*does not exist/
+  );
 });
 
 test('rejects backend and probe combinations that cannot work', () => {
@@ -133,42 +163,54 @@ test('rejects backend and probe combinations that cannot work', () => {
 });
 
 test('generates Cortex-Debug configurations for the J-Link and pyOCD backends', () => {
-  const jlink = generateCortexDebugLaunchJson(undefined, {
-    openocdPath: 'openocd',
-    target: getFlashTargetProfile('stm32f1xx'),
-    probe: getFlashProbeProfile('jlink'),
-    backend: 'jlink',
-    device: importedDevice
-  });
-  const jlinkConfig = JSON.parse(jlink).configurations[0];
-  assert.equal(jlinkConfig.servertype, 'jlink');
-  assert.equal(jlinkConfig.device, 'Cortex-M0');
-  assert.equal(jlinkConfig.interface, 'swd');
-  assert.equal(jlinkConfig.configFiles, undefined);
-  assert.equal(jlinkConfig.executable, '${command:cmake.launchTargetPath}');
+  return withPackFile(async (packFile) => {
+    const jlink = generateCortexDebugLaunchJson(undefined, {
+      openocdPath: 'openocd',
+      target: getFlashTargetProfile('stm32f1xx'),
+      probe: getFlashProbeProfile('jlink'),
+      backend: 'jlink',
+      device: { ...importedDevice, packFile }
+    });
+    const jlinkConfig = JSON.parse(jlink).configurations[0];
+    assert.equal(jlinkConfig.servertype, 'jlink');
+    assert.equal(jlinkConfig.device, 'Cortex-M0');
+    assert.equal(jlinkConfig.interface, 'swd');
+    assert.equal(jlinkConfig.configFiles, undefined);
+    assert.equal(jlinkConfig.executable, '${command:cmake.launchTargetPath}');
 
-  const pyocd = generateCortexDebugLaunchJson(undefined, {
-    openocdPath: 'openocd',
-    target: getFlashTargetProfile('stm32f1xx'),
-    probe: getFlashProbeProfile('stlink'),
-    backend: 'pyocd',
-    device: importedDevice
-  });
-  const pyocdConfig = JSON.parse(pyocd).configurations[0];
-  assert.equal(pyocdConfig.servertype, 'pyocd');
-  assert.equal(pyocdConfig.target, 'ms32f031a6a0zw');
-  assert.deepEqual(pyocdConfig.serverArgs, ['--pack', importedDevice.packFile]);
-  assert.equal(pyocdConfig.configFiles, undefined);
+    const pyocd = generateCortexDebugLaunchJson(undefined, {
+      openocdPath: 'openocd',
+      target: getFlashTargetProfile('stm32f1xx'),
+      probe: getFlashProbeProfile('stlink'),
+      backend: 'pyocd',
+      device: { ...importedDevice, packFile }
+    });
+    const pyocdConfig = JSON.parse(pyocd).configurations[0];
+    assert.equal(pyocdConfig.servertype, 'pyocd');
+    assert.equal(pyocdConfig.target, 'ms32f031a6a0zw');
+    assert.deepEqual(pyocdConfig.serverArgs, ['--pack', packFile]);
+    assert.equal(pyocdConfig.configFiles, undefined);
+    assert.throws(
+      () => generateCortexDebugLaunchJson(undefined, {
+        openocdPath: 'openocd',
+        target: getFlashTargetProfile('stm32f1xx'),
+        probe: getFlashProbeProfile('stlink'),
+        backend: 'pyocd',
+        device: { ...importedDevice, packFile: 'C:/missing/does-not-exist.pack' }
+      }),
+      /pyOCD pack file.*does not exist/
+    );
 
-  const openocd = generateCortexDebugLaunchJson(undefined, {
-    openocdPath: 'openocd',
-    target: getFlashTargetProfile('stm32f1xx'),
-    probe: getFlashProbeProfile('stlink'),
-    backend: 'openocd'
+    const openocd = generateCortexDebugLaunchJson(undefined, {
+      openocdPath: 'openocd',
+      target: getFlashTargetProfile('stm32f1xx'),
+      probe: getFlashProbeProfile('stlink'),
+      backend: 'openocd'
+    });
+    const openocdConfig = JSON.parse(openocd).configurations[0];
+    assert.equal(openocdConfig.servertype, 'openocd');
+    assert.deepEqual(openocdConfig.configFiles, ['interface/stlink.cfg', 'target/stm32f1x.cfg']);
   });
-  const openocdConfig = JSON.parse(openocd).configurations[0];
-  assert.equal(openocdConfig.servertype, 'openocd');
-  assert.deepEqual(openocdConfig.configFiles, ['interface/stlink.cfg', 'target/stm32f1x.cfg']);
 });
 
 test('keeps builtin parts recognizable for J-Link and pyOCD without packs', () => {

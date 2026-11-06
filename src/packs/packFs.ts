@@ -84,3 +84,30 @@ export async function findDirectoryPacks(packRoots: string[]): Promise<Directory
   }
   return results.sort((left, right) => left.pdscPath.localeCompare(right.pdscPath));
 }
+
+/** Finds a .pack archive beside or above the extracted pack directory. */
+export async function findAdjacentPackArchive(root: string): Promise<string | undefined> {
+  const names = await safeReaddir(root);
+  const local = names
+    .filter((name) => name.toLowerCase().endsWith('.pack'))
+    .map((name) => join(root, name))
+    .sort();
+  for (const candidate of local) {
+    if (await isFile(candidate)) {
+      return candidate;
+    }
+  }
+  const parent = join(root, '..');
+  const parentNames = await safeReaddir(parent);
+  const name = root.replace(/\\/g, '/').split('/').pop();
+  const candidates = parentNames
+    .filter((entry) => name && entry.startsWith(`${name}.`) && entry.toLowerCase().endsWith('.pack'))
+    .map((entry) => join(parent, entry))
+    .sort();
+  for (const candidate of candidates) {
+    if (await isFile(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}

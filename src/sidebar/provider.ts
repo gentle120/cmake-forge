@@ -3,7 +3,11 @@ import type { BuildRunResult } from '../generation/buildRunner';
 import { armGccExecutablePath, inspectArmToolchainPath, normalizeArmToolchainPath } from '../env/armToolchain';
 import type { CommandResult } from '../shared/commandResult';
 import { randomBytes } from 'node:crypto';
-import { getDeviceProfile, listDeviceProfiles } from '../devices/deviceProfiles';
+import {
+  getDeviceProfile,
+  isRuntimeDeviceProfile,
+  listDeviceProfiles
+} from '../devices/deviceProfiles';
 import { listDeviceProfilesForSeries, listDeviceSeries } from '../devices/deviceSelection';
 import { getFlashProbeProfile } from '../flash/probeProfiles';
 import { getFlashTargetProfile } from '../flash/targets/targetProfiles';
@@ -240,7 +244,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     const device: FlashDeviceContext = {
       part: profile.part,
       core: profile.core,
-      packFile: this.dependencies.packFileForPart?.(profile.part)
+      packFile: isRuntimeDeviceProfile(profile.part)
+        ? this.dependencies.packFileForPart?.(profile.part)
+        : undefined
     };
     return {
       target: getFlashTargetProfile(selection.targetId),
