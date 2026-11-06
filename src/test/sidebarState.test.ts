@@ -245,3 +245,77 @@ test('uses the selected project label and exposes project discovery state', () =
   assert.equal(state.discoveringProjects, true);
   assert.deepEqual(state.projects.map((project) => project.label), ['work/firmware', 'work/desktop']);
 });
+
+test('switching to another imported Pack of the same vendor also switches its profile owner', () => {
+  const f1 = getDeviceProfile('STM32F103C8T6');
+  const f4 = getDeviceProfile('STM32F407VGT6');
+  registerDeviceProfiles([f1], 'packs/STM/A_DFP.pack');
+  registerDeviceProfiles([f4], 'packs/STM/B_DFP.pack');
+  const packOptions = [
+    {
+      packId: 'STM:A_DFP', vendorId: 'STM', name: 'A_DFP', version: '1.0.0',
+      origin: 'imported' as const, packFile: 'packs/STM/A_DFP.pack'
+    },
+    {
+      packId: 'STM:B_DFP', vendorId: 'STM', name: 'B_DFP', version: '1.0.0',
+      origin: 'imported' as const, packFile: 'packs/STM/B_DFP.pack'
+    }
+  ];
+  const current = sanitizeSidebarSelection({
+    ...defaultSidebarSelection(),
+    mcu: {
+      vendor: 'STM',
+      packId: 'STM:A_DFP',
+      version: '1.0.0',
+      sourcePack: 'packs/STM/A_DFP.pack',
+      series: 'F1x',
+      part: 'STM32F103C8T6'
+    }
+  }, defaultSidebarSelection(), packOptions);
+
+  try {
+    const switched = sanitizeSidebarSelection(
+      nextMcuSelection(current, { packId: 'STM:B_DFP', version: '1.0.0' }, packOptions),
+      current,
+      packOptions
+    );
+
+    assert.equal(switched.mcu.packId, 'STM:B_DFP');
+    assert.equal(switched.mcu.sourcePack, 'packs/STM/B_DFP.pack');
+    assert.equal(switched.mcu.series, 'F4x');
+    assert.equal(switched.mcu.part, 'STM32F407VGT6');
+  } finally {
+    unregisterDeviceProfilesByPack('packs/STM/A_DFP.pack');
+    unregisterDeviceProfilesByPack('packs/STM/B_DFP.pack');
+  }
+});
+
+test('a persisted profile owner that contradicts the selected Pack is corrected', () => {
+  const f4 = getDeviceProfile('STM32F407VGT6');
+  registerDeviceProfiles([f4], 'packs/STM/B_DFP.pack');
+  const packOptions = [{
+    packId: 'STM:B_DFP', vendorId: 'STM', name: 'B_DFP', version: '1.0.0',
+    origin: 'imported' as const, packFile: 'packs/STM/B_DFP.pack'
+  }];
+  const stale = {
+    ...defaultSidebarSelection(),
+    mcu: {
+      vendor: 'STM',
+      packId: 'STM:B_DFP',
+      version: '1.0.0',
+      sourcePack: 'packs/STM/Old_DFP.pack',
+      series: 'F4x',
+      part: 'STM32F407VGT6'
+    }
+  };
+
+  try {
+    const healed = sanitizeSidebarSelection(stale, defaultSidebarSelection(), packOptions);
+
+    assert.equal(healed.mcu.packId, 'STM:B_DFP');
+    assert.equal(healed.mcu.sourcePack, 'packs/STM/B_DFP.pack');
+    assert.equal(healed.mcu.part, 'STM32F407VGT6');
+  } finally {
+    unregisterDeviceProfilesByPack('packs/STM/B_DFP.pack');
+  }
+});

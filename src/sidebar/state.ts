@@ -198,6 +198,11 @@ export function sanitizeSidebarSelection(
     : typeof mcu?.version === 'string' && mcu.version.trim()
       ? mcu.version
       : packOptions.find((option) => option.packId === packId)?.version ?? '';
+  // Persist the owner that actually supplied the profiles: the catalog entry
+  // wins once loaded, so a stale key from another Pack cannot survive.
+  const sourcePack = packId === `builtin:${vendor}`
+    ? undefined
+    : profileOwner(packId, version, packOptions, selectedSourcePack);
   const series = isSeries(mcu?.series) && seriesBelongsToVendor(mcu.series, vendor, profiles)
     ? mcu.series
     : firstSeriesForVendor(vendor, profiles);
@@ -222,7 +227,7 @@ export function sanitizeSidebarSelection(
       vendor,
       packId,
       version,
-      ...(packId === `builtin:${vendor}` ? {} : { sourcePack: selectedSourcePack }),
+      ...(sourcePack === undefined ? {} : { sourcePack }),
       series,
       part: partFor(profiles, vendor, series, mcu?.part)
     },
@@ -277,6 +282,27 @@ function seriesBelongsToVendor(
   );
 }
 
+/**
+ * Resolves the profile ownership key of a selected Pack version.
+ *
+ * A catalog entry for an imported Pack carries that key in `packFile` and is
+ * authoritative once loaded. An installed or downloadable entry carries an
+ * installation path or nothing, so the persisted key remains the only owner
+ * candidate — including right after an activation that has not been re-listed
+ * as `imported` yet.
+ */
+function profileOwner(
+  packId: string,
+  version: unknown,
+  packOptions: DevicePackOption[],
+  sourcePack?: string
+): string | undefined {
+  const option = packOptions.find((candidate) =>
+    candidate.packId === packId && candidate.version === version
+  );
+  return option?.origin === 'imported' && option.packFile ? option.packFile : sourcePack;
+}
+
 function packProfiles(
   vendor: DeviceVendor,
   packId: string,
@@ -287,18 +313,8 @@ function packProfiles(
   if (packId === `builtin:${vendor}`) {
     return listDeviceProfilesForPack(packId);
   }
-  // The persisted `sourcePack` is the imported-profile ownership key. An
-  // installed Pack's catalog `packFile` is a Keil installation path, so it only
-  // owns profiles once it has been imported and its storage key is known.
-  if (sourcePack) {
-    return listDeviceProfilesForPack(sourcePack);
-  }
-  const option = packOptions.find((candidate) =>
-    candidate.packId === packId && candidate.version === version
-  );
-  return option?.origin === 'imported' && option.packFile
-    ? listDeviceProfilesForPack(option.packFile)
-    : [];
+  const owner = profileOwner(packId, version, packOptions, sourcePack);
+  return owner ? listDeviceProfilesForPack(owner) : [];
 }
 
 export function nextMcuSelection(
@@ -319,13 +335,18 @@ export function nextMcuSelection(
   const version = change.version ?? (
     packId === `builtin:${vendor}` ? 'builtin' : (vendorChanged ? '' : selection.mcu.version)
   );
-  const sourcePack = change.sourcePack ?? (
+  const requestedSourcePack = change.sourcePack ?? (
     vendorChanged && packId === `builtin:${vendor}` ? undefined : selection.mcu.sourcePack
   );
-  const profiles = packProfiles(vendor, packId, version, packOptions, sourcePack);
   const packChanged = vendorChanged
     || packId !== selection.mcu.packId
     || version !== selection.mcu.version;
+  // Switching Pack or version must switch the profile owner too; otherwise the
+  // previous Pack's parts stay visible under the new Pack.
+  const owner = packChanged && change.sourcePack === undefined
+    ? profileOwner(packId, version, packOptions, undefined)
+    : requestedSourcePack;
+  const profiles = packProfiles(vendor, packId, version, packOptions, owner);
   const series = change.series ?? (packChanged
     ? firstSeriesForVendor(vendor, profiles)
     : selection.mcu.series);
@@ -343,7 +364,7 @@ export function nextMcuSelection(
       vendor,
       packId,
       version,
-      ...(packId === `builtin:${vendor}` ? {} : { sourcePack }),
+      ...(packId === `builtin:${vendor}` || owner === undefined ? {} : { sourcePack: owner }),
       series,
       part
     }
