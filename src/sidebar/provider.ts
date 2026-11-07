@@ -9,7 +9,7 @@ import {
 import type { DevicePackOption } from '../devices/deviceSelection';
 import { comparePackVersions } from '../shared/packVersion';
 import { getVendorMetadata, hasVendor } from '../devices/vendorRegistry';
-import { findCatalogSeries } from '../devices/seriesCatalog';
+import { canonicalSeriesId, findCatalogSeries, seriesServesProfile } from '../devices/seriesCatalog';
 import { getFlashProbeProfile } from '../flash/probeProfiles';
 import { getFlashTargetProfile } from '../flash/targets/targetProfiles';
 import {
@@ -75,6 +75,11 @@ export interface SidebarProviderDependencies {
   ): Promise<{ vendorId: string; packId: string; version: string; sourcePack: string; message: string }>;
   /** Sidebar copy describing the installed ARM CMSIS core pack. */
   describeCorePack?(): Promise<string>;
+  /**
+   * External include directories for a generated MCU project. `includeCorePack`
+   * is false when the user turned the core-pack switch off.
+   */
+  coreIncludeDirs?(includeCorePack: boolean): Promise<string[]>;
 }
 
 function workspaceName(): string {
@@ -297,14 +302,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     series: string
   ): { packId: string; version: string } | undefined {
     const catalog = findCatalogSeries(vendor, series);
-    const prefix = catalog?.partPrefix.toUpperCase();
     for (const option of this.packOptions) {
       if (option.origin === 'imported' && option.packFile) {
         const profiles = listDeviceProfilesForPack(option.packFile);
-        if (profiles.some((profile) =>
-          profile.series === series
-          || (prefix !== undefined && profile.part.toUpperCase().startsWith(prefix))
-        )) {
+        if (profiles.some((profile) => seriesServesProfile(vendor, series, profile))) {
           return { packId: option.packId, version: option.version };
         }
       } else if (option.origin === 'installed' && catalog && option.name === catalog.packName) {
@@ -492,22 +493,26 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         throw new Error('此 Pack 版本没有可用于生成的芯片。');
       }
       // The series-first flow keeps the user's chosen series when the activated
-      // pack serves it (by series id or catalog part prefix).
+      // pack serves it. The persisted id is the curated one (`F1x`), while a
+      // vendor pack names the same series differently (`STM32F1 Series`), so the
+      // match is by series or catalog part prefix — never by exact string alone,
+      // or the selection would snap to the pack's text and stop responding.
       const chosenSeries = this.selectionValue.mcu.series;
-      const catalog = findCatalogSeries(vendor, chosenSeries);
-      const prefix = catalog?.partPrefix.toUpperCase();
-      const pool = prefix !== undefined
-        ? profiles.filter((profile) => profile.part.toUpperCase().startsWith(prefix))
-        : profiles.filter((profile) => profile.series === chosenSeries);
-      const candidates = pool.length > 0 ? pool : profiles;
-      const series = [...new Set(candidates.map((profile) => profile.series))]
-        .sort((left, right) => left.localeCompare(right))[0];
-      const profile = candidates
-        .filter((candidate) => candidate.series === series)
+      // Match against the vendor the Pack actually belongs to: activating the
+      // first Pack of a vendor happens before the selection carries that vendor.
+      const pool = profiles.filter((profile) =>
+        seriesServesProfile(activatedVendor, chosenSeries, profile)
+      );
+      // The chosen series is kept even when this Pack does not serve it: the
+      // pack still activates (so its versions are selectable) and the empty part
+      // list plus the catalog notice point at the DFP that does serve it.
+      const series = chosenSeries !== ''
+        ? chosenSeries
+        : canonicalSeriesId(activatedVendor, profiles)
+          ?? [...new Set(profiles.map((profile) => profile.series))]
+            .sort((left, right) => left.localeCompare(right))[0];
+      const profile = pool
         .sort((left, right) => left.part.localeCompare(right.part))[0];
-      if (!profile) {
-        throw new Error('此 Pack 版本没有可用于生成的芯片。');
-      }
       this.selectionValue = sanitizeSidebarSelection(
         nextMcuSelection(this.selectionValue, {
           vendor: activatedVendor,
@@ -515,7 +520,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           version: activated.version,
           sourcePack,
           series,
-          part: profile.part
+          part: profile?.part ?? ''
         }, this.packOptions),
         this.selectionValue,
         this.packOptions
@@ -857,7 +862,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         const flash = this.selectionValue.flash.enabled
           ? this.flashGenerationOptions()
           : undefined;
-        const project = await generateMcuWorkflow(this.workflowHost(), profile, { flash });
+        const project = await generateMcuWorkflow(this.workflowHost(), profile, {
+          flash,
+          externalIncludeDirs: this.dependencies.coreIncludeDirs
+            ? await this.dependencies.coreIncludeDirs(this.selectionValue.corePackInclude !== false)
+            : undefined
+        });
         if (!project.ok || !this.selectionValue.debugEnabled || !flash) {
           return project;
         }

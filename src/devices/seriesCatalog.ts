@@ -99,3 +99,64 @@ export function seriesDownloadPage(vendorId: string, series: string): string | u
 export function findCatalogSeries(vendorId: string, series: string): CuratedSeries | undefined {
   return seriesCatalogFor(vendorId).find((entry) => entry.series === series);
 }
+
+/**
+ * True when a device profile belongs to a selected series.
+ *
+ * Two naming systems meet here: the curated series id (`F1x`) that the sidebar
+ * persists, and the PDSC text a vendor pack uses (`STM32F1 Series`, or a
+ * `<subFamily Dname>`). A pack serves the series when either the profile's own
+ * series string matches exactly or the catalog's part prefix does — without the
+ * prefix branch, activating a Pack would replace the persisted `F1x` with
+ * `STM32F1 Series` and no further series switch could ever match again.
+ */
+export function seriesServesProfile(
+  vendorId: string,
+  series: string,
+  profile: { part: string; series: string }
+): boolean {
+  if (profile.series === series) {
+    return true;
+  }
+  const catalog = findCatalogSeries(vendorId, series);
+  return catalog !== undefined
+    && profile.part.toUpperCase().startsWith(catalog.partPrefix.toUpperCase());
+}
+
+/**
+ * Maps a vendor pack's own series text back to the curated series id.
+ *
+ * Older sidebar versions persisted the PDSC text (`STM32F1 Series`) instead of
+ * the curated id (`F1x`); without this, such a persisted value would keep the
+ * dropdown empty and unselectable, exactly the state that looked "stuck".
+ */
+export function catalogSeriesIdForText(
+  vendorId: string,
+  vendorSeries: string,
+  profiles: Array<{ part: string; series: string }>
+): string | undefined {
+  const vendor = seriesCatalog.find((entry) => entry.vendorId === vendorId);
+  return vendor?.series.find((entry) =>
+    profiles.some((profile) =>
+      profile.series === vendorSeries
+      && profile.part.toUpperCase().startsWith(entry.partPrefix.toUpperCase())
+    )
+  )?.series;
+}
+
+/**
+ * Maps a PDSC series name back to a curated series id serving it.
+ *
+ * Adopting a pack's raw series name would add a second entry next to the
+ * curated one (`STM32F1` and `STM32F1 Series`), so a series the catalog covers
+ * is reported under its curated id.
+ */
+export function canonicalSeriesId(
+  vendorId: string,
+  profiles: Array<{ part: string }>
+): string | undefined {
+  const vendor = seriesCatalog.find((entry) => entry.vendorId === vendorId);
+  return vendor?.series.find((entry) => profiles.some(
+    (profile) => profile.part.toUpperCase().startsWith(entry.partPrefix.toUpperCase())
+  ))?.series;
+}

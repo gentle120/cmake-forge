@@ -746,7 +746,10 @@ async function pickOnlinePack(): Promise<{
  * project is still generated — the missing headers would break the build either
  * way, and blocking generation would also block the user from fixing it.
  */
-async function mcuExternalIncludeDirs(): Promise<string[]> {
+async function mcuExternalIncludeDirs(includeCorePack = true): Promise<string[]> {
+  if (!includeCorePack) {
+    return [];
+  }
   const core = await installedCoreIncludeDir(packStorageRoot);
   if (core) {
     return [core];
@@ -1191,7 +1194,9 @@ async function generateProject(): Promise<void> {
       executables: executablePaths()
     };
   }
-  const externalIncludeDirs = await mcuExternalIncludeDirs();
+  const externalIncludeDirs = await mcuExternalIncludeDirs(
+    activeSidebar?.selection().corePackInclude !== false
+  );
   reportWorkflowResult(await generateMcuWorkflow(
     createWorkflowHost(root),
     profile,
@@ -1282,6 +1287,7 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     discoverPackVendors: () => discoverPackVendorOptions(),
     describeCorePack: async () => (await describeCorePack(packStorageRoot)).notice,
+    coreIncludeDirs: (includeCorePack) => mcuExternalIncludeDirs(includeCorePack),
     loadPackCatalog: (vendor) => loadDevicePackCatalog(vendor),
     activatePack: (vendor, packId, version) => activateDevicePack(vendor, packId, version)
   });

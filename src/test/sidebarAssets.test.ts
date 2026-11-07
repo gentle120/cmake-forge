@@ -49,7 +49,7 @@ interface SidebarState {
   linuxToolchains: Array<{ value: string; label: string }>;
   packCatalogNotice: string;
   corePackNotice: string;
-  selection: SidebarSelection;
+  selection: SidebarSelection & { corePackInclude: boolean };
 }
 
 function baseState(overrides: Partial<SidebarState> = {}): SidebarState {
@@ -85,6 +85,7 @@ function baseState(overrides: Partial<SidebarState> = {}): SidebarState {
       linux: { toolchainFamily: 'loongson' },
       native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
       debugEnabled: false,
+      corePackInclude: true,
       flash: { enabled: false, targetId: 'stm32f1xx', probeId: 'stlink', openocdPath: 'openocd', backend: 'openocd' }
     },
     ...overrides
@@ -369,6 +370,30 @@ test('shows the CMSIS core pack state and its install action', () => {
     state: baseState({ corePackNotice: '已安装 ARM CMSIS 内核包 6.4.0（64 个头文件）。' })
   });
   assert.match(notice.textContent, /已安装 ARM CMSIS 内核包 6\.4\.0/);
+});
+
+test('the core pack include switch persists the user choice', () => {
+  const harness = startSidebar(baseState());
+  const toggle = harness.element('toggle-core-pack');
+  // The headers are required to build, so the switch starts on.
+  assert.equal(toggle.checked, true);
+
+  toggle.checked = false;
+  toggle.dispatch('change', { target: toggle });
+  const saved = harness.posted.at(-1) as
+    | { type: string; selection: SidebarState['selection'] }
+    | undefined;
+  assert.equal(saved?.type, 'saveSelection');
+  assert.equal(saved?.selection.corePackInclude, false);
+  // Unrelated selections must keep their previous values while the switch flips.
+  assert.equal(saved?.selection.debugEnabled, false);
+  assert.equal(saved?.selection.flash.enabled, false);
+
+  harness.send({
+    type: 'state',
+    state: baseState({ selection: { ...baseState().selection, corePackInclude: false } })
+  });
+  assert.equal(toggle.checked, false);
 });
 
 test('download progress replaces the busy badge text and clears on finish', () => {

@@ -45,6 +45,8 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - 下载必须报告进度：通知显示「已下载 / 总大小（百分比）」，侧栏状态徽标同步同一文案（`operationProgress`），完成或失败后回到常规状态。总大小来自 `Content-Range` 或 `Content-Length`；无法获知总量时只报已下载字节且不显示百分比，不得伪造进度。
 - 大包（≥2 MB 且服务端支持 `Range`）按 1 MB 分段并发下载（最多 8 路），每段独立重试、独立失败；小包与不支持 Range 的主机仍走单次请求（`200` 响应视为完整归档，不得当作分片）。重组后必须校验总长度与分段齐全，缺段即失败。
 - 侧栏 MCU 选择为 vendor → series → pack → version → part：series 可在激活 Pack 前选择，来源为精选厂商系列目录（`src/devices/seriesCatalog.ts`，含各系列的 DFP 名与型号前缀）与本地包系列；选定系列后自动解析并激活本地对应 Pack（imported 按档案系列/型号前缀匹配，installed 按 DFP 名匹配），无匹配时提示确定性安装途径；part 按目录型号前缀或系列过滤；不保留跨 vendor 残留。
+- 系列有两套命名：侧栏持久化的精选 id（`F1x`）与 PDSC 的 `Dfamily` 文本（`STM32F1 Series`）。匹配必须接受两者之一（同系列或型号前缀命中），选中系列不得因激活 Pack 而回弹到 Pack 自己的文本；下拉选项按精选 id 去重，同一系列不得出现两行；旧版本持久化的 Pack 文本 id 在渲染时归一为精选 id。切换系列后若当前 Pack 不含该系列，part 为空并给出「需要哪个 DFP」的提示，而不是把系列改回原值。
+- 生成的工程是否写入内核包 include 目录由侧栏「生成内核包 include」开关决定（持久化，默认开）：关闭时不写该目录、也不再提示内核包缺失，用于用户自行提供 core 头文件的场景；该开关只影响生成，不改变内核包的安装状态。
 - Pack 目录条目按身份区分：`installed`、`imported`、`downloadable`；同一 packId+version 只展示一个条目，已安装/已导入优先于可下载。
 - 已安装 Pack 的身份取自 PDSC（`Dvendor`、包名、`release version`）；Keil 安装目录名或归档文件名不是最终身份，PDSC 无法解析的条目被跳过。
 - 目录选项的 `packFile` 是安装位置，不是导入档案的所有权键；导入档案的所有权键固定为 `packs/<vendor>/<file>.pack` 形式的扩展存储相对路径。切换 Pack 或版本时所有权键随之切换，目录中已加载的 `imported` 条目优先于持久化键，目录未加载时沿用持久化键。

@@ -2,6 +2,15 @@
 
 ## 2.1.3
 
+- Fix the frozen series dropdown: vendor packs name their series their own way
+  (`Dfamily="STM32F1 Series"`) while the sidebar persists the curated id (`F1x`),
+  so an exact-match comparison snapped the selection back to the pack text and
+  every further switch bounced. Both names now match, catalog ids are deduplicated,
+  a legacy persisted pack text is normalized, and a series without a matching pack
+  stays selected with a note naming the DFP to install.
+- Add the "生成内核包 include" switch to the sidebar: it decides whether the
+  installed ARM CMSIS include directory is written into generated projects
+  (default on) and persists with the rest of the selection.
 - Add the ARM CMSIS core pack: device packs include `core_cm*.h` but do not ship
   it, so the sidebar gains "安装内核包…" (and the `Install ARM CMSIS Core Pack`
   command) to download or import `ARM.CMSIS`, install only its Core include

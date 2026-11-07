@@ -8,7 +8,13 @@ import {
   type DevicePackOption,
   listDeviceVendors
 } from '../devices/deviceSelection';
-import { findCatalogSeries, seriesCatalogFor } from '../devices/seriesCatalog';
+import {
+  canonicalSeriesId,
+  catalogSeriesIdForText,
+  findCatalogSeries,
+  seriesCatalogFor,
+  seriesServesProfile
+} from '../devices/seriesCatalog';
 import { listFlashProbeProfiles, type FlashProbeId } from '../flash/probeProfiles';
 import { listFlashTargetProfiles } from '../flash/targets/targetProfiles';
 import { buildLinuxToolchainChoices } from '../linux/toolchainChoices';
@@ -51,6 +57,8 @@ export interface SidebarSelection {
     cxxStandard: 14 | 17 | 20 | 23;
   };
   debugEnabled: boolean;
+  /** Adds the installed CMSIS core pack include directory to generated projects. */
+  corePackInclude: boolean;
   flash: SidebarFlashSelection;
 }
 
@@ -117,10 +125,9 @@ function seriesPool(
   vendor: DeviceVendor,
   series: DeviceSeries
 ): ReturnType<typeof listDeviceProfiles> {
-  const catalog = findCatalogSeries(vendor, series);
-  const pool = catalog
-    ? profiles.filter((profile) => profile.part.toUpperCase().startsWith(catalog.partPrefix.toUpperCase()))
-    : profiles.filter((profile) => profile.vendor === vendor && profile.series === series);
+  const pool = profiles.filter((profile) =>
+    profile.vendor === vendor && seriesServesProfile(vendor, series, profile)
+  );
   return [...pool].sort((left, right) => left.part.localeCompare(right.part));
 }
 
@@ -175,6 +182,7 @@ export function defaultSidebarSelection(): SidebarSelection {
       cxxStandard: 17
     },
     debugEnabled: false,
+    corePackInclude: true,
     flash: {
       enabled: false,
       targetId: defaultFlashTarget,
@@ -218,9 +226,17 @@ export function sanitizeSidebarSelection(
   const sourcePack = packId === ''
     ? undefined
     : profileOwner(packId, version, packOptions, selectedSourcePack);
-  const series = isKnownSeries(vendor, mcu?.series)
+  // Persisted series from an older build may be the pack's own Dfamily text;
+  // normalize it to the curated id so the dropdown keeps a matching entry.
+  const persistedSeries = isKnownSeries(vendor, mcu?.series)
     ? (mcu!.series as string).trim()
-    : firstSeriesForVendor(vendor);
+    : '';
+  const rawSeries = persistedSeries === '' || findCatalogSeries(vendor, persistedSeries) !== undefined
+    ? ''
+    : catalogSeriesIdForText(vendor, persistedSeries, listDeviceProfiles()) ?? '';
+  const series = persistedSeries === ''
+    ? firstSeriesForVendor(vendor)
+    : rawSeries !== '' ? rawSeries : persistedSeries;
   const family = typeof linux?.toolchainFamily === 'string'
     && isLinuxToolchainFamily(linux.toolchainFamily)
     ? linux.toolchainFamily
@@ -263,6 +279,10 @@ export function sanitizeSidebarSelection(
     debugEnabled: typeof record?.debugEnabled === 'boolean'
       ? record.debugEnabled
       : false,
+    // Defaults to on: without the core headers a generated project cannot build.
+    corePackInclude: typeof record?.corePackInclude === 'boolean'
+      ? record.corePackInclude
+      : true,
     flash: {
       // Flash details are meaningful only while the option is enabled.
       enabled: typeof flash?.enabled === 'boolean' && validTarget(flash.targetId) === flash.targetId
@@ -285,14 +305,46 @@ function firstSeriesForVendor(vendor: DeviceVendor): DeviceSeries {
     ?? '';
 }
 
-/** Series dropdown entries: catalog series first, then local pack series. */
+/** Guidance shown when the selected series has no part to show. */
+function missingSeriesNotice(
+  vendor: DeviceVendor,
+  series: DeviceSeries,
+  hasPack: boolean
+): string {
+  const catalog = findCatalogSeries(vendor, series);
+  const label = catalog?.label ?? series;
+  const pack = catalog?.packName;
+  if (hasPack) {
+    return pack
+      ? `当前 Pack 不含「${label}」系列：需要 ${pack}，点「在线安装 Pack…」可下载导入。`
+      : `当前 Pack 不含「${label}」系列：请选择其它系列，或安装该系列对应的器件包。`;
+  }
+  return pack
+    ? `「${label}」系列还没有芯片支持包：点「在线安装 Pack…」下载 ${pack}。`
+    : `「${label}」系列还没有芯片支持包：请点「在线安装 Pack…」或「导入 Pack 包…」。`;
+}
+
+/**
+ * Series dropdown entries: catalog series first, then local pack series.
+ *
+ * A vendor pack names its series in its own words (`STM32F1 Series`), which is
+ * the same series as the curated `F1x`. Showing both would put two rows for one
+ * series in the dropdown, so a pack series covered by the catalog is dropped.
+ */
 function vendorSeriesOptions(vendor: DeviceVendor): SidebarOption[] {
   const options = new Map<string, SidebarOption>();
-  for (const entry of seriesCatalogFor(vendor)) {
+  const catalog = seriesCatalogFor(vendor);
+  for (const entry of catalog) {
     options.set(entry.series, { value: entry.series, label: entry.label });
   }
   for (const profile of listDeviceProfiles()) {
-    if (profile.vendor === vendor && !options.has(profile.series)) {
+    if (profile.vendor !== vendor || options.has(profile.series)) {
+      continue;
+    }
+    const covered = catalog.some((entry) =>
+      profile.part.toUpperCase().startsWith(entry.partPrefix.toUpperCase())
+    );
+    if (!covered) {
       options.set(profile.series, { value: profile.series, label: profile.series });
     }
   }
@@ -376,10 +428,18 @@ export function nextMcuSelection(
   const chosenSeries = change.series ?? (isKnownSeries(vendor, selection.mcu.series)
     ? selection.mcu.series
     : firstSeriesForVendor(vendor));
-  const series = profiles.length === 0 || profiles.some((profile) => profile.series === chosenSeries)
+  // Changing the series must never be undone by the activated Pack: a Pack that
+  // serves another series is the normal state right before the user installs the
+  // right one, and snapping back to the Pack's own text made the dropdown look
+  // stuck. Only an explicit Pack switch adopts that Pack's series, so its parts
+  // are visible instead of an empty list.
+  const packServesSeries = profiles.length === 0
+    || profiles.some((profile) => seriesServesProfile(vendor, chosenSeries, profile));
+  const series = packServesSeries || !packChanged
     ? chosenSeries
-    : [...new Set(profiles.map((profile) => profile.series))]
-      .sort((left, right) => left.localeCompare(right))[0];
+    : canonicalSeriesId(vendor, profiles)
+      ?? [...new Set(profiles.map((profile) => profile.series))]
+        .sort((left, right) => left.localeCompare(right))[0];
   const seriesChanged = series !== selection.mcu.series;
   const part = change.part
     ? partFor(profiles, vendor, series, change.part)
@@ -479,6 +539,15 @@ export function buildSidebarState(
   const choices = buildLinuxToolchainChoices(hits, selection.linux.toolchainFamily);
   const safeSelection = sanitizeSidebarSelection(selection, selection, packOptions);
   const mcuOptions = optionsForPackSelection(safeSelection, packOptions);
+  // An empty part list is unreachable without a reason: either the activated
+  // Pack serves another series, or no Pack for the series is installed at all.
+  const seriesNotice = mcuOptions.devices.length === 0 && safeSelection.mcu.series !== ''
+    ? missingSeriesNotice(
+        safeSelection.mcu.vendor,
+        safeSelection.mcu.series,
+        safeSelection.mcu.packId !== ''
+      )
+    : '';
 
   return {
     workspaceName: selectedProjectLabel(workspaceName, projects, projectRoot),
@@ -498,7 +567,7 @@ export function buildSidebarState(
         description: option.origin
       })),
     pendingPackId,
-    packCatalogNotice,
+    packCatalogNotice: packCatalogNotice || seriesNotice,
     corePackNotice,
     series: mcuOptions.series,
     devices: mcuOptions.devices,
@@ -524,7 +593,12 @@ export function buildSidebarState(
       description: choice.description,
       detail: choice.detail
     })),
-    selection
+    selection: {
+      ...selection,
+      // The dropdown renders this value; a series the option list cannot match
+      // (a legacy pack-text id) would silently show the first entry instead.
+      mcu: { ...selection.mcu, series: safeSelection.mcu.series }
+    }
   };
 }
 

@@ -92,6 +92,7 @@ function latestState(messages: Array<Record<string, unknown>>) {
         series: string;
         part: string;
       };
+      corePackInclude: boolean;
     };
     vendors: Array<{ value: string }>;
     packCatalogNotice: string;
@@ -732,6 +733,135 @@ test('switching to a vendor without packs drops the previous vendor Pack', async
     assert.equal(state?.selection.mcu.packId, '');
     assert.equal(state?.selection.mcu.version, '');
     assert.equal(state?.selection.mcu.part, '');
+  } finally {
+    provider.dispose();
+    unregisterDeviceProfilesByPack(sourcePack);
+  }
+});
+
+test('a Pack whose PDSC series names differ from the catalog ids does not freeze the series', async () => {
+  const writes: unknown[] = [];
+  const sourcePack = 'packs/STMicroelectronics/Keil.STM32F1xx_DFP.pack';
+  if (!hasVendor('STMicroelectronics')) {
+    registerVendor({
+      id: 'STMicroelectronics', label: 'STM32', definePrefixes: ['STM32'], order: 100
+    });
+  }
+  // Real Keil STM32 packs carry Dfamily="STM32F1 Series"; the sidebar persists
+  // the curated id "F1x", so an exact-match-only comparison never matches.
+  registerDeviceProfiles([{
+    ...fixtureDeviceProfile({
+      vendor: 'STMicroelectronics',
+      series: 'STM32F1 Series',
+      family: 'STM32F1 Series'
+    })
+  }], sourcePack);
+  const activations: Array<[string, string, string]> = [];
+  const provider = startProvider(undefined, {
+    loadPackCatalog: async () => ({
+      options: [{
+        packId: 'STMicroelectronics:Keil.STM32F1xx_DFP',
+        vendorId: 'STMicroelectronics',
+        name: 'Keil.STM32F1xx_DFP',
+        version: '2.4.1',
+        origin: 'imported',
+        packFile: sourcePack
+      }]
+    }),
+    activatePack: async (vendor: string, packId: string, version: string) => {
+      activations.push([vendor, packId, version]);
+      return { vendorId: 'STMicroelectronics', packId, version, sourcePack, message: 'ok' };
+    }
+  }, writes);
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const base = latestState(provider.messages)?.selection;
+    assert.ok(base);
+    provider.receive({
+      type: 'saveSelection',
+      selection: { ...base, mcu: { ...base.mcu, vendor: 'STMicroelectronics' } }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    provider.receive({
+      type: 'activatePack',
+      packId: 'STMicroelectronics:Keil.STM32F1xx_DFP',
+      version: '2.4.1'
+    });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const activated = latestState(provider.messages)?.selection;
+    assert.ok(activated?.mcu.part, 'expected a part after activation');
+    // The curated id survives activation instead of snapping to the PDSC text.
+    assert.equal(activated?.mcu.series, 'F1x');
+
+    // Switching to another curated series must take effect, not bounce back.
+    provider.receive({
+      type: 'saveSelection',
+      selection: { ...activated, mcu: { ...activated.mcu, series: 'F4x' } }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const switched = latestState(provider.messages);
+    assert.equal(switched?.selection.mcu.series, 'F4x');
+    // The activated Pack serves no F4 part, so the notice explains the next step.
+    assert.equal(switched?.selection.mcu.part, '');
+    assert.match(switched?.packCatalogNotice ?? '', /STM32F4xx_DFP/);
+
+    // And switching back re-populates the F1 parts.
+    provider.receive({
+      type: 'saveSelection',
+      selection: { ...switched!.selection, mcu: { ...switched!.selection.mcu, series: 'F1x' } }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const back = latestState(provider.messages);
+    assert.equal(back?.selection.mcu.series, 'F1x');
+    assert.equal(back?.selection.mcu.part, 'STM32F103C8T6');
+  } finally {
+    provider.dispose();
+    unregisterDeviceProfilesByPack(sourcePack);
+  }
+});
+
+test('MCU generation passes the core-pack include only when the switch is on', async () => {
+  const sourcePack = 'packs/STM/Fixture_DFP.pack';
+  registerDeviceProfiles([fixtureDeviceProfile()], sourcePack);
+  const coreDir = 'C:/extension/cores/ARM.CMSIS.6.4.0/CMSIS/Core/Include';
+  const requests: boolean[] = [];
+  const provider = startProvider({
+    ...{
+      mode: 'mcu', projectRoot: '',
+      mcu: { vendor: 'STM', packId: 'STM:Fixture_DFP', version: '1.0.0', sourcePack, series: 'F1x', part: 'STM32F103C8T6' },
+      linux: { toolchainFamily: 'loongson' },
+      native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
+      debugEnabled: false, corePackInclude: true,
+      flash: { enabled: false, targetId: 'stm32f1xx', probeId: 'stlink', openocdPath: 'openocd', backend: 'openocd' }
+    }
+  }, {
+    coreIncludeDirs: async (includeCorePack: boolean) => {
+      requests.push(includeCorePack);
+      return includeCorePack ? [coreDir] : [];
+    }
+  });
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    provider.receive({ type: 'generateProject' });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.deepEqual(requests, [true]);
+
+    const state = latestState(provider.messages);
+    assert.ok(state);
+    provider.receive({
+      type: 'saveSelection',
+      selection: { ...state.selection, corePackInclude: false }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(latestState(provider.messages)?.selection.corePackInclude, false);
+
+    provider.receive({ type: 'generateProject' });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    // The switch is read at generation time, not cached at save time.
+    assert.deepEqual(requests, [true, false]);
   } finally {
     provider.dispose();
     unregisterDeviceProfilesByPack(sourcePack);

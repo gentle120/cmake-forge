@@ -10,6 +10,7 @@ import {
   nextMcuSelection,
   sanitizeSidebarSelection
 } from '../sidebar/state';
+import { hasVendor, registerVendor } from '../devices/vendorRegistry';
 import {
   fixtureDeviceProfile,
   registerFixtureVendors
@@ -115,6 +116,57 @@ test('replaces stale MCU values with empty fields when no Pack owns the selectio
   assert.equal(selection.flash.enabled, false);
   assert.equal(selection.flash.probeId, 'stlink');
   assert.equal(selection.flash.openocdPath, 'openocd');
+});
+
+test('a series persisted as the pack Dfamily text renders under its catalog id', () => {
+  // The previous build stored the pack's own text ("STM32F1 Series") for the
+  // STM32 series; the dropdown has no such option, so it showed the first entry
+  // and the user could not switch back — the reported "series is stuck" state.
+  // The curated series catalog is keyed by the real PDSC vendor name.
+  if (!hasVendor('STMicroelectronics')) {
+    registerVendor({
+      id: 'STMicroelectronics', label: 'STM32', definePrefixes: ['STM32'], order: 100
+    });
+  }
+  const packFile = 'packs/STMicroelectronics/Keil.STM32F1xx_DFP.pack';
+  registerDeviceProfiles([fixtureDeviceProfile({
+    vendor: 'STMicroelectronics', series: 'STM32F1 Series', family: 'STM32F1 Series'
+  })], packFile);
+  const packOptions = [{
+    packId: 'STMicroelectronics:Keil.STM32F1xx_DFP',
+    vendorId: 'STMicroelectronics',
+    name: 'Keil.STM32F1xx_DFP',
+    version: '2.4.1',
+    origin: 'imported' as const,
+    packFile
+  }];
+  try {
+    const selection = sanitizeSidebarSelection({
+      mcu: {
+        vendor: 'STMicroelectronics',
+        packId: 'STMicroelectronics:Keil.STM32F1xx_DFP',
+        version: '2.4.1',
+        sourcePack: packFile,
+        series: 'STM32F1 Series',
+        part: 'STM32F103C8T6'
+      }
+    }, defaultSidebarSelection(), packOptions);
+    assert.equal(selection.mcu.series, 'F1x');
+    assert.equal(selection.mcu.part, 'STM32F103C8T6');
+
+    // The rendered state must agree with the option list, or the select shows
+    // its first entry while the rest of the panel talks about another series.
+    const state = buildSidebarState('demo', selection, [], [], '', false, packOptions, selection.mcu.packId);
+    assert.equal(state.selection.mcu.series, 'F1x');
+    assert.ok(state.series.some((option) => option.value === state.selection.mcu.series));
+    assert.deepEqual(state.series.map((option) => option.label), [
+      'STM32F0', 'STM32F1', 'STM32F2', 'STM32F3', 'STM32F4', 'STM32F7',
+      'STM32G0', 'STM32G4', 'STM32H7', 'STM32L0', 'STM32L1', 'STM32L4',
+      'STM32L5', 'STM32U5', 'STM32WB', 'STM32WL'
+    ]);
+  } finally {
+    unregisterDeviceProfilesByPack(packFile);
+  }
 });
 
 test('changing MCU fields keeps the sidebar mode of the input selection', () => {

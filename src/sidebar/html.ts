@@ -110,6 +110,20 @@ export function renderSidebarHtml(
         </div>
         <p id="pack-catalog-notice" class="field-detail" role="status" aria-live="polite" hidden></p>
         <p id="core-pack-notice" class="field-detail" role="status" aria-live="polite" hidden></p>
+        <div class="toggle-list">
+          <label class="toggle-row">
+            <span class="toggle-leading">
+              <span class="ui-icon" data-icon="chip" aria-hidden="true"></span>
+              <span class="toggle-copy">
+                <span class="toggle-title">生成内核包 include</span>
+                <small class="field-detail">把已安装的 ARM CMSIS 头文件目录写入工程</small>
+              </span>
+            </span>
+            <span class="switch-track">
+              <input id="toggle-core-pack" class="switch-input" type="checkbox"><span></span>
+            </span>
+          </label>
+        </div>
       </section>
 
       <section class="control-section flash-section" aria-labelledby="flash-title">

@@ -9,22 +9,11 @@ This file is a compact relay ledger, not a history log. Stable facts belong in `
 
 ## Current Batch
 
-- Objective: 支持导入/在线下载 ARM CMSIS 内核包（core_cm*.h）。器件 DFP 的芯片头文件会 #include core_cm*.h，但 DFP 不含这些文件，生成的工程目前无法编译；内核包独立于器件包管理，安装后生成工程自动带上其 include 目录。
+- Objective: 修复侧栏「系列」被卡死（PDSC 的 Dfamily 与精选系列 id 是两套命名，选中后回弹），并新增「生成内核包 include」开关。
+- Scope: `src/devices/seriesCatalog.ts`、`src/sidebar/{state.ts,provider.ts,html.ts,webview/main.js}`、`src/extension.ts`、`src/test/**`、`docs/contracts.md`。
+- Acceptance criteria: 激活 Pack 后仍能用精选系列 id 切换（F1x/F4x…）且不回弹；未匹配到 Pack 的系列保留选择并给出安装提示；侧栏新增「生成内核包 include」开关，关闭后生成的 CMakeLists.txt 不含内核包目录、不再提示缺失；开关随选择持久化；`tsc --noUnusedLocals --noUnusedParameters` 无告警；`npm test` 全绿。
 - Status: `idle`
 
 ## Next Batch
 
 - Objective: None scheduled.
-
-## Maintenance Rules
-
-- Keep only these four sections.
-- Use only `idle`, `ready`, `in progress`, or `blocked` for Current Batch status.
-- At the start of every implementation batch, rewrite Current Batch before editing code: set the actual objective, bounded scope, observable acceptance criteria, and status to `in progress`.
-- Before every closeout and commit, reconcile this file again. Remove completed work, promote the known Next Batch into Current Batch with status `ready`, or mark Current Batch as `idle` when nothing else is scheduled. Clear or replace Next Batch from established direction.
-- Populate Next Batch only from established project direction or an explicit request. Write `None scheduled` instead of inventing work.
-- If a required gate is blocked, keep the attempted work in Current Batch, set status to `blocked`, and name the unmet acceptance condition concisely.
-- Roadmap reconciliation is required for every implementation batch even when architecture and contracts do not change. A stale roadmap blocks commit.
-- Replace stale current-batch text; do not append a timeline or retain completed work.
-- Do not paste command output, test logs, commit lists, or file inventories.
-- Keep this file under 100 lines.

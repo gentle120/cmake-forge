@@ -24,6 +24,7 @@
   const generatedFiles = document.getElementById('generated-files');
   const toggleFlash = document.getElementById('toggle-flash');
   const toggleDebug = document.getElementById('toggle-debug');
+  const toggleCorePack = document.getElementById('toggle-core-pack');
   const backendHint = document.getElementById('backend-hint');
 
   function post(message) {
@@ -284,6 +285,7 @@
     packCatalogNotice.hidden = !packCatalogNotice.textContent;
     corePackNotice.textContent = state.corePackNotice || '';
     corePackNotice.hidden = !corePackNotice.textContent;
+    toggleCorePack.checked = state.selection.corePackInclude !== false;
     packCatalogBusy.hidden = !state.packCatalogLoading;
   }
 
@@ -606,6 +608,11 @@
   projectRootSelect.addEventListener('change', () => {
     if (!state || busy || !projectRootSelect.value) return;
     post({ type: 'setProjectRoot', root: projectRootSelect.value });
+  });
+
+  toggleCorePack.addEventListener('change', () => {
+    if (!state || busy) return;
+    saveSelection({ ...state.selection, corePackInclude: toggleCorePack.checked });
   });
 
   toggleDebug.addEventListener('change', () => {

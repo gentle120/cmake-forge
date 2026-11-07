@@ -132,6 +132,9 @@ OpenOCD 烧录 target 独立选择，因此也可以给已有自定义 CMake 工
 烧录脚本。GD32 F1/F4 target 使用兼容的 STM32 F1/F4 OpenOCD target。
 
 侧栏按 **厂商 → 系列 → 芯片支持包（Pack）→ 版本 → 型号** 的顺序选择。
+系列用精选目录里的短名（STM32F1、STM32F4…），器件包自己的 `Dfamily` 文本
+（`STM32F1 Series`）与之等价；切换系列后若当前 Pack 不含该系列，型号列表会空出
+并提示需要安装哪个 DFP，而不是把系列改回原值。
 厂商列表固定包含 STM32、CH32、GD32 三家（已在本地安装/导入器件包的厂商
 排在前面）。插件不内置芯片数据：所有芯片档案都来自 CMSIS Pack 解析。
 先选厂商与芯片系列，插件据此确定对应的器件包——本地已有则自动激活；
@@ -143,7 +146,9 @@ OpenOCD 烧录 target 独立选择，因此也可以给已有自定义 CMake 工
 文件在 ARM 的 CMSIS 内核包里，不在 DFP 中。侧栏的「安装内核包…」或命令
 `CMake-Embedded: Install ARM CMSIS Core Pack` 会从同一索引下载 `ARM.CMSIS`
 （也可选本地 .pack），只解出 `CMSIS/Core/Include` 存入扩展存储；之后生成的
-工程会自动把该目录加进 `target_include_directories`。没装内核包时工程照常生成，
+工程会自动把该目录加进 `target_include_directories`。该行为由侧栏
+「生成内核包 include」开关控制（默认开，随选择持久化）：关掉后生成的工程不含该
+目录、也不再提示缺失，适合自己提供 core 头文件的工程。没装内核包时工程照常生成，
 但会提示缺失 —— 否则编译必然在 `core_cm*.h` 处失败。
 
 「在线安装 Pack…」对 STM32 与 GD32 都是插件内一步完成：STM32 系列下载
