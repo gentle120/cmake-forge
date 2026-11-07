@@ -280,7 +280,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.packCatalogNotice = catalogResult.notice || vendorResult?.notice || '';
       if (this.packOptions.length === 0 && this.packCatalogNotice === '') {
         this.packCatalogNotice =
-          '未找到该厂商的 Pack：请点击上方「导入 Pack 包」选择本地 .pack 文件，或先用 Keil Pack Installer 安装器件包。';
+          '未找到该厂商的 Pack：请点上方「在线安装 Pack」或「导入 Pack 包」获取器件包，也可以先用 Keil Pack Installer 安装。';
       }
 
       const selected = this.packOptions.find((option) =>

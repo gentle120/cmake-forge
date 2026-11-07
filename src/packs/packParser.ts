@@ -206,8 +206,14 @@ function isImportableDevice(
 }
 
 /** Parses a .pack (ZIP) archive. */
-export function parsePack(buffer: Buffer): ParsedPack {
-  return parsePackEntries(readZipEntries(buffer));
+/**
+ * Parses a .pack (ZIP) archive. Pass `select` (typically
+ * `isPackDeviceSourceEntry`) so unrelated archive entries are never
+ * decompressed — real DFPs ship hundreds of megabytes of SVD, PDF and source
+ * files the parser never reads.
+ */
+export function parsePack(buffer: Buffer, select?: (name: string) => boolean): ParsedPack {
+  return parsePackEntries(readZipEntries(buffer, select));
 }
 
 /** Parses already-collected pack entries: a .pack archive or an extracted pack directory. */

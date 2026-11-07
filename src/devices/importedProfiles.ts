@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve, sep } from 'node:path';
-import { parsePack, parsePackEntries, type PackDeviceCandidate } from '../packs/packParser';
+import { parsePack, parsePackEntries, isPackDeviceSourceEntry, type PackDeviceCandidate } from '../packs/packParser';
 import { findAdjacentPackArchive, readDirectoryEntries } from '../packs/packFs';
 import {
   packNameFromFileName,
@@ -71,7 +71,7 @@ export async function importPack(
   metadata?: PackIdentityMetadata
 ): Promise<ImportPackResult> {
   return queueStoreWrite(storageRoot, async () => {
-    const { vendorName, devices } = parsePack(buffer);
+    const { vendorName, devices } = parsePack(buffer, isPackDeviceSourceEntry);
     return importParsedPack(
       devices,
       vendorName,
@@ -98,7 +98,7 @@ export async function importPackDirectory(
   metadata?: PackIdentityMetadata
 ): Promise<ImportPackResult> {
   return queueStoreWrite(storageRoot, async () => {
-    const entries = await readDirectoryEntries(root);
+    const entries = await readDirectoryEntries(root, isPackDeviceSourceEntry);
     const { vendorName, devices } = parsePackEntries(entries);
     const fileName = basename(pdscPath).replace(/\.pdsc$/i, '.pack');
     return importParsedPack(devices, vendorName, fileName, storageRoot, SOURCE_DIRECTORY, async () => {

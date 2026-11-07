@@ -25,6 +25,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 ## Data And Persistence
 
 - Pack 导入持久化在扩展 globalStorage：归档来源保存到 `packs/<vendor>/<file>.pack`，`packs.json`（version 2）记录 `source`、真实 `archiveFile` 和序列化 DeviceProfile；同 part 重复导入覆盖旧版。
+- Pack 导入只解压/读取 PDSC、SVD 与启动文件条目（`isPackDeviceSourceEntry`）；文档、示例等无关条目不进入解析、不读入内存（真实 DFP 达数百 MB）。
 - 同一 globalStorage 的 Pack 写入串行执行；`packs.json` 先写临时文件、校验后原子替换，损坏的现有文件报错且不得被静默清空。
 - Keil 安装目录中的已解压 Pack 以目录引用方式导入（`packs.json` 记录元数据但不复制目录）；目录旁存在 `.pack` 时记录其绝对路径，删除导入记录不触碰原目录。
 - `CMAKE_EMBEDDED_SKIP_FIRMWARE_BUILDS=1` 跳过真实固件编译用例；CI（release.yml）默认置位。
