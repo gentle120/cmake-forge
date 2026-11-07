@@ -25,7 +25,6 @@ import {
   importPackDirectory,
   listImportedPacks,
   loadImportedProfiles,
-  packVendorIdFromName,
   removePack,
   type ImportPackResult
 } from './devices/importedProfiles';
@@ -40,13 +39,11 @@ import {
 import { buildPackVendorOptions } from './packs/vendorOptions';
 import {
   downloadPack,
-  listPackIndexPacks,
-  listPackVendors,
   searchPacks,
   type FetchLike,
-  type PackSearchCacheEntry,
-  type PackIndexEntry
+  type PackSearchCacheEntry
 } from './packs/packIndex';
+import { curatedVendors } from './devices/curatedVendors';
 import { existsSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import * as os from 'node:os';
@@ -309,10 +306,6 @@ const packFileByPart = new Map<string, string>();
 const packArchiveBySource = new Map<string, string>();
 const packSearchCache = new Map<string, PackSearchCacheEntry>();
 
-async function onlinePackVendors(): Promise<PackIndexEntry[]> {
-  return listPackVendors(fetchWithTimeout, packSearchCache);
-}
-
 function ensureCatalogVendor(id: string, label: string): void {
   if (hasVendor(id)) {
     return;
@@ -330,26 +323,16 @@ async function installedPackIdentities(): Promise<InstalledPackIdentity[]> {
 }
 
 /**
- * Vendor options for the sidebar: local sources (imported profiles and
- * installed Packs with importable devices) first, then the keil.com index
- * vendors so every chip family stays browsable. Online entries are marked in
- * their label and only download when the user activates one of their Pack
- * versions.
+ * Vendor options for the sidebar: locally usable vendors (imported profiles
+ * and installed Packs with importable devices) first, then the curated
+ * mainstream chip vendors so the dropdown always reads like a product menu.
+ * The keil.com pack index is deliberately not a vendor source — it only lists
+ * Keil-hosted packs and would bury real chip vendors under publisher noise.
  */
 async function discoverPackVendorOptions(): Promise<{
   vendors: Array<{ value: string; label: string; description?: string }>;
   notice?: string;
 }> {
-  let online: Array<{ vendorId: string; vendorName: string }> = [];
-  let notice: string | undefined;
-  try {
-    online = (await onlinePackVendors()).map((entry) => ({
-      vendorId: packVendorIdFromName(entry.vendorName),
-      vendorName: entry.vendorName
-    }));
-  } catch (error) {
-    notice = `在线 Pack 索引暂不可用：${error instanceof Error ? error.message : String(error)}`;
-  }
   const vendors = buildPackVendorOptions({
     registered: listDeviceVendors(listDeviceProfiles()).map((vendor) => ({
       id: vendor,
@@ -365,12 +348,12 @@ async function discoverPackVendorOptions(): Promise<{
       vendorName: pack.vendorName,
       hasDevices: pack.hasDevices
     })),
-    online
+    curated: curatedVendors
   });
   for (const vendor of vendors) {
-    ensureCatalogVendor(vendor.value, vendor.label.replace(/（在线）$/, ''));
+    ensureCatalogVendor(vendor.value, vendor.label);
   }
-  return { vendors, notice };
+  return { vendors };
 }
 
 async function loadDevicePackCatalog(vendorId: string): Promise<{
@@ -394,22 +377,13 @@ async function loadDevicePackCatalog(vendorId: string): Promise<{
       source: pack.source,
       hasDevices: pack.hasDevices
     }));
-  let online: Awaited<ReturnType<typeof listPackIndexPacks>> = [];
-  let notice: string | undefined;
-  try {
-    const indexPacks = await listPackIndexPacks(fetchWithTimeout, packSearchCache);
-    online = indexPacks.filter((pack) => packVendorIdFromName(pack.vendorName) === vendorId);
-  } catch (error) {
-    notice = `在线 Pack 列表暂不可用：${error instanceof Error ? error.message : String(error)}`;
-  }
   return {
     options: buildDevicePackOptions({
       vendorId,
       imported: importedInVendor,
       installed,
-      online
-    }),
-    notice
+      online: []
+    })
   };
 }
 

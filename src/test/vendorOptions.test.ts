@@ -2,29 +2,35 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildPackVendorOptions } from '../packs/vendorOptions';
 
-test('only device-backed pack sources become vendor options', () => {
+const NO_LOCAL_PACK_HINT = '本地暂无此厂商的 Pack';
+
+test('curated vendors fill the list behind local sources and reuse curated labels', () => {
   const options = buildPackVendorOptions({
-    registered: [
-      { id: 'STM', label: 'STM32' },
-      { id: 'GD', label: 'GD32' }
-    ],
+    registered: [],
     imported: [
-      { vendorId: 'Sinomcu', vendorName: 'Sinomcu', hasDevices: true },
-      { vendorId: 'Empty', vendorName: 'Empty', hasDevices: false }
+      { vendorId: 'GigaDevice', vendorName: 'GigaDevice', hasDevices: true },
+      { vendorId: 'Sinomcu', vendorName: 'Sinomcu', hasDevices: true }
     ],
     installed: [
-      { vendorId: 'ARM', vendorName: 'ARM', hasDevices: true },
-      { vendorId: 'Keil', vendorName: 'Keil', hasDevices: false },
       { vendorId: 'NXP', vendorName: 'NXP', hasDevices: false }
     ],
-    online: []
+    curated: [
+      { id: 'STMicroelectronics', label: 'STM32' },
+      { id: 'GigaDevice', label: 'GD32' },
+      { id: 'WCH', label: 'CH32' },
+      { id: 'NXP', label: 'NXP' }
+    ]
   });
 
   assert.deepEqual(options, [
-    { value: 'STM', label: 'STM32' },
-    { value: 'GD', label: 'GD32' },
+    // Local sources come first; a curated vendor locally present keeps its
+    // friendly curated label instead of the raw PDSC vendor name.
+    { value: 'GigaDevice', label: 'GD32' },
     { value: 'Sinomcu', label: 'Sinomcu' },
-    { value: 'ARM', label: 'ARM' }
+    // Curated vendors without local packs follow with an install hint.
+    { value: 'STMicroelectronics', label: 'STM32', description: `${NO_LOCAL_PACK_HINT}：请用 Keil Pack Installer 安装器件包，或导入本地 .pack` },
+    { value: 'WCH', label: 'CH32', description: `${NO_LOCAL_PACK_HINT}：请用 Keil Pack Installer 安装器件包，或导入本地 .pack` },
+    { value: 'NXP', label: 'NXP', description: `${NO_LOCAL_PACK_HINT}：请用 Keil Pack Installer 安装器件包，或导入本地 .pack` }
   ]);
 });
 
@@ -33,35 +39,25 @@ test('a vendor is listed once no matter how many of its packs are installed', ()
     registered: [],
     imported: [],
     installed: [
-      { vendorId: 'ARM', vendorName: 'ARM', hasDevices: false },
-      { vendorId: 'ARM', vendorName: 'ARM', hasDevices: true }
+      { vendorId: 'GigaDevice', vendorName: 'GigaDevice', hasDevices: false },
+      { vendorId: 'GigaDevice', vendorName: 'GigaDevice', hasDevices: true }
     ],
-    online: []
+    curated: []
   });
 
-  assert.deepEqual(options, [{ value: 'ARM', label: 'ARM' }]);
+  assert.deepEqual(options, [{ value: 'GigaDevice', label: 'GigaDevice' }]);
 });
 
-test('online index vendors are listed after local sources and marked in the label', () => {
+test('device-less pack sources never create vendor entries', () => {
   const options = buildPackVendorOptions({
-    registered: [{ id: 'STM', label: 'STM32' }],
-    imported: [{ vendorId: 'GD', vendorName: 'GD32', hasDevices: true }],
+    registered: [],
+    imported: [{ vendorId: 'Empty', vendorName: 'Empty', hasDevices: false }],
     installed: [
-      { vendorId: 'ARM', vendorName: 'ARM', hasDevices: true },
-      { vendorId: 'Keil', vendorName: 'Keil', hasDevices: false }
+      { vendorId: 'Keil', vendorName: 'Keil', hasDevices: false },
+      { vendorId: 'ARM', vendorName: 'ARM', hasDevices: false }
     ],
-    online: [
-      { vendorId: 'STMicroelectronics', vendorName: 'STMicroelectronics' },
-      { vendorId: 'ARM', vendorName: 'ARM' },
-      { vendorId: 'WCH', vendorName: 'WCH' }
-    ]
+    curated: []
   });
 
-  assert.deepEqual(options, [
-    { value: 'STM', label: 'STM32' },
-    { value: 'GD', label: 'GD32' },
-    { value: 'ARM', label: 'ARM' },
-    { value: 'STMicroelectronics', label: 'STMicroelectronics（在线）', description: '在线索引厂商：激活其 Pack 版本时下载导入' },
-    { value: 'WCH', label: 'WCH（在线）', description: '在线索引厂商：激活其 Pack 版本时下载导入' }
-  ]);
+  assert.deepEqual(options, []);
 });

@@ -114,6 +114,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private pendingPackId: string;
   private packCatalogNotice = '';
   private packCatalogRequest = 0;
+  private lastBusyHintAt = 0;
   private readonly viewDisposables: vscode.Disposable[] = [];
 
   constructor(
@@ -184,7 +185,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
 
   private state() {
     // The sidebar loader contract is optional for old host fixtures.
-    const state = buildSidebarState(
+    return buildSidebarState(
       workspaceName(),
       this.selectionValue,
       this.dependencies.discoverToolchains(),
@@ -201,13 +202,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.vendorOptions,
       this.packCatalogNotice
     );
-    if (state.vendors.length === 0 && state.packCatalogNotice === '') {
-      return {
-        ...state,
-        packCatalogNotice: '没有可用芯片：请先在 Keil 中安装器件包，或通过 Import CMSIS Pack 导入。'
-      };
-    }
-    return state;
   }
 
   private postState(): void {
@@ -284,6 +278,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       }
       this.packOptions = catalogResult.options;
       this.packCatalogNotice = catalogResult.notice || vendorResult?.notice || '';
+      if (this.packOptions.length === 0 && this.packCatalogNotice === '') {
+        this.packCatalogNotice =
+          '未找到该厂商的 Pack：请先用 Keil Pack Installer 安装器件包，或通过 Import CMSIS Pack 导入本地 .pack。';
+      }
 
       const selected = this.packOptions.find((option) =>
         option.packId === this.selectionValue.mcu.packId
@@ -602,6 +600,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       return;
     }
     if (this.busy && message.type !== 'ready' && message.type !== 'openSettings') {
+      // Clicks during a running operation must never feel dead: answer with a
+      // throttled wait hint instead of silently dropping the message.
+      const now = Date.now();
+      if (now - this.lastBusyHintAt > 1500) {
+        this.lastBusyHintAt = now;
+        this.post({ type: 'notification', level: 'info', message: '正在处理上一个操作，请稍候。' });
+      }
       return;
     }
     if (message.type === 'ready') {

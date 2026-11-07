@@ -96,7 +96,7 @@ function latestState(messages: Array<Record<string, unknown>>) {
   } | undefined;
 }
 
-test('sidebar shows the import hint while no Pack provides any vendor', async () => {
+test('sidebar shows the install hint when the selected vendor has no packs', async () => {
   const provider = startProvider(undefined, {
     loadPackCatalog: async () => ({ options: [] })
   });
@@ -104,8 +104,48 @@ test('sidebar shows the import hint while no Pack provides any vendor', async ()
     provider.receive({ type: 'ready' });
     await new Promise((resolve) => setTimeout(resolve, 30));
     const state = latestState(provider.messages);
-    assert.deepEqual(state?.vendors ?? [], []);
-    assert.match(state?.packCatalogNotice ?? '', /没有可用芯片/);
+    assert.match(state?.packCatalogNotice ?? '', /Keil Pack Installer/);
+    assert.equal(state?.packs.length ?? 0, 0);
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('clicks during a busy operation tell the user to wait instead of vanishing', async () => {
+  const provider = startProvider({
+    mode: 'mcu',
+    projectRoot: 'C:/workspace',
+    mcu: { vendor: '', packId: '', version: '', series: '', part: '' },
+    linux: { toolchainFamily: 'loongson' },
+    native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
+    debugEnabled: false,
+    flash: {
+      enabled: false,
+      targetId: 'stm32f1xx',
+      probeId: 'stlink',
+      openocdPath: 'openocd',
+      backend: 'openocd'
+    }
+  }, {
+    discoverProjects: async () => [{ root: 'C:/workspace', relativePath: '', label: 'workspace', markers: [] }],
+    scanProject: () => new Promise(() => {
+      // A hanging workspace scan keeps the provider busy.
+    })
+  });
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    provider.receive({ type: 'scanWorkspace' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    provider.receive({ type: 'saveSelection', selection: { mode: 'linux' } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const notices = provider.messages
+      .filter((message) => message.type === 'notification')
+      .map((message) => (message as { message?: string }).message ?? '');
+    assert.ok(
+      notices.some((text) => /请稍候|等待/.test(text)),
+      `expected a busy hint, got ${JSON.stringify(notices)}`
+    );
   } finally {
     provider.dispose();
   }
