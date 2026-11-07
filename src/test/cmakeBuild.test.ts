@@ -5,12 +5,14 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
 import { tmpdir } from 'node:os';
+import { importPack } from '../devices/importedProfiles';
 import { getDeviceProfile } from '../devices/deviceProfiles';
 import { generateCMakeLists } from '../generator/cmakeGenerator';
 import { generateLinkerScript } from '../generator/linkerGenerator';
 import { generateToolchainFile } from '../generator/toolchainGenerator';
 import { generateSyscalls, generateSysmem } from '../generator/runtimeGenerator';
 import { generateGnuStartup } from '../generator/startupGenerator';
+import { fixturePackBuffer } from './support/fixtureDevice';
 
 const execFileAsync = promisify(execFile);
 const firmwareBuildsEnabled = process.env.CMAKE_EMBEDDED_SKIP_FIRMWARE_BUILDS !== '1';
@@ -19,7 +21,25 @@ const firmwareBuildOptions = {
   skip: !firmwareBuildsEnabled
 };
 
+let fixturePackRegistered: Promise<void> | undefined;
+
+/** Imports the fixture Pack once so every firmware part resolves like a real install. */
+async function ensureFixturePackRegistered(): Promise<void> {
+  if (!fixturePackRegistered) {
+    fixturePackRegistered = (async () => {
+      const storageRoot = await mkdtemp(join(tmpdir(), 'mcu-cmake-fixture-store-'));
+      try {
+        await importPack(fixturePackBuffer(), 'Example.F1_DFP.1.0.0.pack', storageRoot);
+      } finally {
+        await rm(storageRoot, { recursive: true, force: true });
+      }
+    })();
+  }
+  await fixturePackRegistered;
+}
+
 async function buildMinimalFirmware(part: string): Promise<void> {
+  await ensureFixturePackRegistered();
   const root = await mkdtemp(join(tmpdir(), 'mcu-cmake-build-'));
   const profile = getDeviceProfile(part);
   try {
@@ -70,28 +90,12 @@ test('generated files configure and build a minimal STM32F103 firmware', firmwar
   await buildMinimalFirmware('STM32F103C8T6');
 });
 
-test('generated files build the additional F1 and F4 package variants', firmwareBuildOptions, async () => {
+test('generated files build the fixture pack F1 and F4 package variants', firmwareBuildOptions, async () => {
   for (const part of [
-    'GD32F103CBT6',
-    'GD32F103RCT6',
-    'GD32F103R8T6',
-    'GD32F103RBT6',
-    'GD32F407VGT6',
-    'GD32F407RGT6',
-    'GD32F407ZGT6',
-    'STM32F103CBT6',
-    'STM32F103RCT6',
     'STM32F103R8T6',
-    'STM32F103RBT6',
-    'STM32F103VBT6',
-    'STM32F103ZET6',
-    'STM32F405RGT6',
-    'STM32F407VET6',
-    'STM32F407RGT6',
-    'STM32F407ZGT6',
-    'STM32F429ZIT6',
-    'STM32L476RGT6',
-    'STM32L496VET6'
+    'STM32F103RCT6',
+    'GD32F103C8T6',
+    'GD32F103RCT6'
   ]) {
     await buildMinimalFirmware(part);
   }

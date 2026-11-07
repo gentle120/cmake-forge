@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getDeviceProfile } from '../devices/deviceProfiles';
 import { generateGnuStartup } from '../generator/startupGenerator';
+import { fixtureDeviceProfile, registerFixtureVendors } from './support/fixtureDevice';
+
+registerFixtureVendors();
 
 function vectorWords(startup: string): string[] {
   return startup
@@ -11,7 +13,12 @@ function vectorWords(startup: string): string[] {
 }
 
 test('ARMv6-M cores keep words 4-10 reserved without MemManage or DebugMon', () => {
-  const startup = generateGnuStartup(getDeviceProfile('STM32F030C8T6'));
+  const startup = generateGnuStartup(fixtureDeviceProfile({
+    part: 'STM32F030C8T6',
+    core: 'cortex-m0',
+    linkerFileName: 'STM32F030C8T6.ld',
+    gnuStartupFileName: 'startup_stm32f030.S'
+  }));
   const words = vectorWords(startup);
 
   assert.deepEqual(words.slice(0, 16), [
@@ -36,7 +43,9 @@ test('ARMv6-M cores keep words 4-10 reserved without MemManage or DebugMon', () 
 });
 
 test('ARMv7-M cores keep four reserved words after UsageFault', () => {
-  const startup = generateGnuStartup(getDeviceProfile('STM32F103C8T6'));
+  const startup = generateGnuStartup(fixtureDeviceProfile({
+    core: 'cortex-m3'
+  }));
   const words = vectorWords(startup);
 
   assert.deepEqual(words.slice(0, 16), [
@@ -60,7 +69,13 @@ test('ARMv7-M cores keep four reserved words after UsageFault', () => {
 });
 
 test('ARMv8-M mainline cores expose SecureFault in the first reserved slot', () => {
-  const startup = generateGnuStartup(getDeviceProfile('STM32L552RCT6'));
+  const startup = generateGnuStartup(fixtureDeviceProfile({
+    part: 'STM32L552RCT6',
+    series: 'L5x',
+    core: 'cortex-m33',
+    linkerFileName: 'STM32L552RCT6.ld',
+    gnuStartupFileName: 'startup_stm32l552xx.S'
+  }));
   const words = vectorWords(startup);
 
   assert.deepEqual(words.slice(0, 16), [

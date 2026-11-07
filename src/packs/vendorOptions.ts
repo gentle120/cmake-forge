@@ -17,12 +17,12 @@ export interface PackVendorOption {
 }
 
 export function buildPackVendorOptions(input: {
-  builtin: Array<{ id: string; label: string }>;
+  registered: Array<{ id: string; label: string }>;
   imported: PackVendorCandidate[];
   installed: PackVendorCandidate[];
 }): PackVendorOption[] {
   const vendors = new Map<string, string>();
-  for (const vendor of input.builtin) {
+  for (const vendor of input.registered) {
     if (!vendors.has(vendor.id)) {
       vendors.set(vendor.id, vendor.label);
     }

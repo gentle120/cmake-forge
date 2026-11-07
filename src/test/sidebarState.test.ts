@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  getDeviceProfile,
   registerDeviceProfiles,
   unregisterDeviceProfilesByPack
 } from '../devices/deviceProfiles';
@@ -11,8 +10,29 @@ import {
   nextMcuSelection,
   sanitizeSidebarSelection
 } from '../sidebar/state';
+import {
+  fixtureDeviceProfile,
+  registerFixtureVendors
+} from './support/fixtureDevice';
 
-test('defaults to the first STM32 F1 device', () => {
+registerFixtureVendors();
+
+const fixturePackOptions = [{
+  packId: 'STM:Fixture_DFP',
+  vendorId: 'STM',
+  name: 'Fixture_DFP',
+  version: '1.0.0',
+  origin: 'imported' as const,
+  packFile: 'packs/STM/Fixture_DFP.pack'
+}];
+
+function registerFixturePack(parts: Array<Parameters<typeof fixtureDeviceProfile>[0]> = [undefined]): string {
+  const packFile = 'packs/STM/Fixture_DFP.pack';
+  registerDeviceProfiles(parts.map((overrides) => fixtureDeviceProfile(overrides)), packFile);
+  return packFile;
+}
+
+test('defaults to an empty MCU selection until a Pack provides devices', () => {
   const selection = defaultSidebarSelection() as unknown as {
     mode: string;
     mcu: { vendor: string; packId: string; version: string; series: string; part: string };
@@ -20,82 +40,50 @@ test('defaults to the first STM32 F1 device', () => {
   };
 
   assert.equal(selection.mode, 'mcu');
-  assert.equal(selection.mcu.vendor, 'STM');
-  assert.equal(selection.mcu.packId, 'builtin:STM');
-  assert.equal(selection.mcu.version, 'builtin');
-  assert.equal(selection.mcu.series, 'F1x');
-  assert.equal(selection.mcu.part, 'STM32F103C8T6');
+  assert.equal(selection.mcu.vendor, '');
+  assert.equal(selection.mcu.packId, '');
+  assert.equal(selection.mcu.version, '');
+  assert.equal(selection.mcu.series, '');
+  assert.equal(selection.mcu.part, '');
   assert.equal(selection.flash.enabled, false);
 });
 
-test('filters series and devices to the selected Pack version', () => {
-  const stateApi = {
-    sanitizeSidebarSelection,
-    buildSidebarState
-  } as unknown as {
-    sanitizeSidebarSelection(
-      value: unknown,
-      fallback: ReturnType<typeof defaultSidebarSelection>,
-      packOptions: Array<{
-        packId: string;
-        vendorId: string;
-        name: string;
-        version: string;
-        origin: 'imported';
-        packFile: string;
-      }>
-    ): ReturnType<typeof defaultSidebarSelection>;
-    buildSidebarState(
-      workspaceName: string,
-      selection: ReturnType<typeof defaultSidebarSelection>,
-      discoveredToolchains: unknown[],
-      projects: unknown[],
-      projectRoot: string,
-      discoveringProjects: boolean,
-      packOptions: Array<{
-        packId: string;
-        vendorId: string;
-        name: string;
-        version: string;
-        origin: 'imported';
-        packFile: string;
-      }>
-    ): ReturnType<typeof buildSidebarState>;
-  };
-  const original = getDeviceProfile('STM32F103C8T6');
-  const oldVersion = {
-    ...original,
-    ram: { ...original.ram, length: 16 * 1024 }
-  };
-  registerDeviceProfiles([oldVersion], 'packs/STM/STM32F1xx_DFP.1.0.0.pack');
-  const packOptions = [{
-    packId: 'STM:STM32F1xx_DFP',
-    vendorId: 'STM',
-    name: 'STM32F1xx_DFP',
-    version: '1.0.0',
-    origin: 'imported' as const,
-    packFile: 'packs/STM/STM32F1xx_DFP.1.0.0.pack'
-  }];
+test('a persisted builtin selection collapses to an empty MCU column', () => {
+  // The vendor survives (it is still a registered vendor); every Pack-owned
+  // column collapses because no Pack owns the selection anymore.
+  const selection = sanitizeSidebarSelection({
+    mode: 'mcu',
+    mcu: { vendor: 'STM', packId: 'builtin:STM', version: 'builtin', series: 'F1x', part: 'STM32F103C8T6' }
+  });
 
+  assert.equal(selection.mcu.vendor, 'STM');
+  assert.equal(selection.mcu.packId, '');
+  assert.equal(selection.mcu.version, '');
+  assert.equal(selection.mcu.series, '');
+  assert.equal(selection.mcu.part, '');
+});
+
+test('filters series and devices to the selected Pack version', () => {
+  const packFile = registerFixturePack();
   try {
-    const selection = stateApi.sanitizeSidebarSelection({
+    const selection = sanitizeSidebarSelection({
       ...defaultSidebarSelection(),
       mcu: {
         vendor: 'STM',
-        packId: 'STM:STM32F1xx_DFP',
+        packId: 'STM:Fixture_DFP',
         version: '1.0.0',
         series: 'F1x',
         part: 'STM32F103C8T6'
       }
-    }, defaultSidebarSelection(), packOptions);
-    const state = stateApi.buildSidebarState(
+    }, defaultSidebarSelection(), fixturePackOptions);
+    const state = buildSidebarState(
       'firmware',
       selection,
       [],
       [],
       '',
       false,
-      packOptions
+      fixturePackOptions
     );
 
     assert.deepEqual(state.devices.map((device) => device.value), ['STM32F103C8T6']);
@@ -104,36 +92,29 @@ test('filters series and devices to the selected Pack version', () => {
       '1.0.0'
     );
   } finally {
-    unregisterDeviceProfilesByPack('packs/STM/STM32F1xx_DFP.1.0.0.pack');
+    unregisterDeviceProfilesByPack(packFile);
   }
 });
 
-test('replaces stale values with current registry defaults', () => {
+test('replaces stale MCU values with empty fields when no Pack owns the selection', () => {
   const selection = sanitizeSidebarSelection({
     mode: 'linux',
-    mcu: { vendor: 'bad', series: 'bad', part: 'bad' },
+    mcu: { vendor: 'bad', packId: 'bad', series: 'bad', part: 'bad' },
     linux: { toolchainFamily: 'bad' },
     debugEnabled: 'yes',
     flash: { enabled: true, targetId: 'bad', probeId: 'bad', openocdPath: '  ' }
   });
 
   assert.equal(selection.mode, 'linux');
-  assert.equal(selection.mcu.series, 'F0x');
-  assert.equal(selection.mcu.part, 'STM32F030C8T6');
+  assert.equal(selection.mcu.vendor, '');
+  assert.equal(selection.mcu.packId, '');
+  assert.equal(selection.mcu.series, '');
+  assert.equal(selection.mcu.part, '');
   assert.equal(selection.linux.toolchainFamily, 'loongson');
   assert.equal(selection.debugEnabled, false);
   assert.equal(selection.flash.enabled, false);
   assert.equal(selection.flash.probeId, 'stlink');
   assert.equal(selection.flash.openocdPath, 'openocd');
-});
-
-test('changing vendor selects its first series and part', () => {
-  const updated = nextMcuSelection(defaultSidebarSelection(), { vendor: 'GD' });
-
-  assert.equal(updated.mode, 'mcu');
-  assert.equal(updated.mcu.vendor, 'GD');
-  assert.equal(updated.mcu.series, 'F1x');
-  assert.equal(updated.mcu.part, 'GD32F103C8T6');
 });
 
 test('changing MCU fields keeps the sidebar mode of the input selection', () => {
@@ -144,35 +125,70 @@ test('changing MCU fields keeps the sidebar mode of the input selection', () => 
   assert.equal(updated.mcu.vendor, 'GD');
 });
 
-test('changing series selects its first part', () => {
-  const updated = nextMcuSelection(defaultSidebarSelection(), { series: 'F4x' });
-
-  assert.equal(updated.mcu.series, 'F4x');
-  assert.match(updated.mcu.part, /^STM32F4/);
-});
-
 test('a stored series from another vendor falls back to the vendor first series', () => {
-  // Stale state after a pack import: vendor switched to GD but the stored
-  // series belongs to STM32; the series must not survive the vendor change.
-  const selection = sanitizeSidebarSelection({
-    mcu: { vendor: 'GD', series: 'F1x', part: 'STM32F103C8T6' }
-  });
+  // Stale state after a pack import: the persisted series belongs to another
+  // vendor; the series must not survive the vendor change.
+  const gdPackFile = 'packs/GD/GD32F1_DFP.pack';
+  registerDeviceProfiles([
+    fixtureDeviceProfile({ vendor: 'GD', part: 'GD32F103C8T6', family: 'GD32F10x', defines: ['GD32F10X_MD'] })
+  ], gdPackFile);
+  const gdPackOptions = [{
+    packId: 'GD:GD32F1_DFP',
+    vendorId: 'GD',
+    name: 'GD32F1_DFP',
+    version: '1.0.0',
+    origin: 'imported' as const,
+    packFile: gdPackFile
+  }];
+  try {
+    const selection = sanitizeSidebarSelection({
+      mcu: {
+        vendor: 'GD',
+        packId: 'GD:GD32F1_DFP',
+        version: '1.0.0',
+        sourcePack: 'packs/GD/Stale_DFP.pack',
+        series: 'F4x',
+        part: 'STM32F103C8T6'
+      }
+    }, defaultSidebarSelection(), gdPackOptions);
 
-  assert.equal(selection.mcu.vendor, 'GD');
-  assert.equal(selection.mcu.series, 'F1x');
-  assert.equal(selection.mcu.part, 'GD32F103C8T6');
+    assert.equal(selection.mcu.vendor, 'GD');
+    assert.equal(selection.mcu.series, 'F1x');
+    assert.equal(selection.mcu.part, 'GD32F103C8T6');
+  } finally {
+    unregisterDeviceProfilesByPack(gdPackFile);
+  }
 });
 
 test('bootstrap filters parts and annotates detected toolchains', () => {
-  const state = buildSidebarState(
-    'firmware',
-    defaultSidebarSelection(),
-    [{ family: 'arm', verified: true, binDir: 'C:\\Tools\\arm\\bin', source: 'path' }]
-  );
+  const packFile = registerFixturePack();
+  try {
+    const selection = sanitizeSidebarSelection({
+      ...defaultSidebarSelection(),
+      mcu: {
+        vendor: 'STM',
+        packId: 'STM:Fixture_DFP',
+        version: '1.0.0',
+        series: 'F1x',
+        part: 'STM32F103C8T6'
+      }
+    }, defaultSidebarSelection(), fixturePackOptions);
+    const state = buildSidebarState(
+      'firmware',
+      selection,
+      [{ family: 'arm', verified: true, binDir: 'C:\\Tools\\arm\\bin', source: 'path' }],
+      [],
+      '',
+      false,
+      fixturePackOptions
+    );
 
-  assert.ok(state.devices.every((device) => device.value.startsWith('STM32F1')));
-  assert.ok(state.linuxToolchains.some((toolchain) => toolchain.value === 'arm'));
-  assert.match(state.linuxToolchains.find((toolchain) => toolchain.value === 'arm')?.detail ?? '', /PATH/);
+    assert.ok(state.devices.every((device) => device.value.startsWith('STM32F1')));
+    assert.ok(state.linuxToolchains.some((toolchain) => toolchain.value === 'arm'));
+    assert.match(state.linuxToolchains.find((toolchain) => toolchain.value === 'arm')?.detail ?? '', /PATH/);
+  } finally {
+    unregisterDeviceProfilesByPack(packFile);
+  }
 });
 
 test('normalizes incompatible probes and only offers probes supported by the selected backend', () => {
@@ -255,8 +271,16 @@ test('uses the selected project label and exposes project discovery state', () =
 });
 
 test('switching to another imported Pack of the same vendor also switches its profile owner', () => {
-  const f1 = getDeviceProfile('STM32F103C8T6');
-  const f4 = getDeviceProfile('STM32F407VGT6');
+  const f1 = fixtureDeviceProfile();
+  const f4 = fixtureDeviceProfile({
+    part: 'STM32F407VGT6',
+    series: 'F4x',
+    defines: ['STM32F407xx'],
+    compilerFlags: ['-mcpu=cortex-m4', '-mthumb', '-mfpu=fpv4-sp-d16', '-mfloat-abi=hard'],
+    flash: { origin: 0x08000000, length: 1024 * 1024 },
+    ram: { origin: 0x20000000, length: 128 * 1024 },
+    debugTarget: 'stm32f4x'
+  });
   registerDeviceProfiles([f1], 'packs/STM/A_DFP.pack');
   registerDeviceProfiles([f4], 'packs/STM/B_DFP.pack');
   const packOptions = [
@@ -299,7 +323,15 @@ test('switching to another imported Pack of the same vendor also switches its pr
 });
 
 test('a persisted profile owner that contradicts the selected Pack is corrected', () => {
-  const f4 = getDeviceProfile('STM32F407VGT6');
+  const f4 = fixtureDeviceProfile({
+    part: 'STM32F407VGT6',
+    series: 'F4x',
+    defines: ['STM32F407xx'],
+    compilerFlags: ['-mcpu=cortex-m4', '-mthumb', '-mfpu=fpv4-sp-d16', '-mfloat-abi=hard'],
+    flash: { origin: 0x08000000, length: 1024 * 1024 },
+    ram: { origin: 0x20000000, length: 128 * 1024 },
+    debugTarget: 'stm32f4x'
+  });
   registerDeviceProfiles([f4], 'packs/STM/B_DFP.pack');
   const packOptions = [{
     packId: 'STM:B_DFP', vendorId: 'STM', name: 'B_DFP', version: '1.0.0',

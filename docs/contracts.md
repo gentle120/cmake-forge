@@ -13,7 +13,8 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 ## Public Interfaces
 
 - `DeviceProfile`（`src/devices/deviceProfiles.ts`）是生成器的唯一芯片契约；`part` 在注册表内唯一（大写归一化），未知 part 抛 `Unsupported MCU: <part>`。
-- `registerDeviceProfiles()` 允许运行时追加档案；`unregisterDeviceProfilesByPack()` 按来源移除并恢复前一个来源或内置档案；`listDeviceProfiles()/getDeviceProfile()` 签名稳定，返回防御性拷贝。
+- `registerDeviceProfiles()` 允许运行时追加档案；`unregisterDeviceProfilesByPack()` 按来源移除并恢复前一个来源，无前序来源时移除该型号；`listDeviceProfiles()/getDeviceProfile()` 签名稳定，返回防御性拷贝。
+- 注册表无内置芯片数据：所有 DeviceProfile 由 Pack 导入注入；无任何 Pack 时注册表与厂商列表为空，持久化的 `builtin:` 选择落空为空选择。
 - 厂商必须先在 `vendorRegistry` 注册（id 唯一，`getVendorMetadata` 未知 id 抛错）。
 - 命令 ID：`cmakeEmbedded.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/importPack/removePack`；`package.json` 贡献的命令必须与 `extension.ts` 注册的命令一一对应。
 - 工作区可包含多个工程；扫描、生成、烧录与调试都以当前选中的工程根目录为边界，不跨工程合并源文件。目标工程按工作区持久化；发现结果只有一个时自动选择，多个时保留有效选择或等待用户选择。空工作区根目录仍作为可扫描目标保留；扫描返回零个源文件、头文件目录和宏，并明确提示没有 C/C++ 或汇编源文件。
@@ -38,10 +39,10 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - pyOCD 的 pack 参数必须是真实存在的 `.pack` 文件；导入设备没有归档时省略 `--pack`，不得生成指向虚拟路径的配置。
 - 在线 Pack 搜索可复用 TTL 缓存，限制并发索引请求，并在取消后停止发起后续请求；每个可下载版本都保留为独立条目，不折叠为最新版本。
 - 侧栏 MCU 选择为 vendor → pack → version → series → part 五级；series/part 必须属于当前选中 Pack 的版本，否则回退到该版本首个可用系列与型号，不保留跨 vendor 或跨 Pack 残留。
-- Pack 目录条目按身份区分：`builtin`（每厂商一个虚拟 Pack，单一 `builtin` 版本）、`installed`、`imported`、`downloadable`；同一 packId+version 只展示一个条目，已安装/已导入优先于可下载。
+- Pack 目录条目按身份区分：`installed`、`imported`、`downloadable`；同一 packId+version 只展示一个条目，已安装/已导入优先于可下载。
 - 已安装 Pack 的身份取自 PDSC（`Dvendor`、包名、`release version`）；Keil 安装目录名或归档文件名不是最终身份，PDSC 无法解析的条目被跳过。
 - 目录选项的 `packFile` 是安装位置，不是导入档案的所有权键；导入档案的所有权键固定为 `packs/<vendor>/<file>.pack` 形式的扩展存储相对路径。切换 Pack 或版本时所有权键随之切换，目录中已加载的 `imported` 条目优先于持久化键，目录未加载时沿用持久化键。
-- 侧栏厂商列表只含能提供可用 MCU 设备的来源：内置档案厂商、PDSC 解析出至少一个可导入设备的已安装 Pack、`parts` 非空的已导入记录；在线索引不是厂商来源，其厂商在导入成功后出现。
+- 侧栏厂商列表只含能提供可用 MCU 设备的来源：已导入档案的厂商、PDSC 解析出至少一个可导入设备的已安装 Pack、`parts` 非空的已导入记录；在线索引不是厂商来源，其厂商在导入成功后出现。
 - 显式切换厂商时自动激活该厂商最新的可用版本（`imported`/`installed`，同版本 `imported` 优先）；`downloadable` 版本不自动下载，启动时的目录刷新不自动激活。
 - 仅切换侧栏模式（mcu/linux/native）的保存按消息保留模式；MCU 字段重算不改写模式。
 - 侧栏调试器列表仅提供当前烧录后端支持的探针；切换后端时不保留不兼容探针。

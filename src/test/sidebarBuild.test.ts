@@ -2,13 +2,15 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import test from 'node:test';
 import {
-  getDeviceProfile,
   registerDeviceProfiles,
   unregisterDeviceProfilesByPack
 } from '../devices/deviceProfiles';
 import { ScanCancelledError } from '../scanner/projectScanner';
 import { WorkspaceProjectsCancelledError } from '../scanner/workspaceProjects';
 import { loadHostModule } from './support/hostModule';
+import { fixtureDeviceProfile, registerFixtureVendors } from './support/fixtureDevice';
+
+registerFixtureVendors();
 
 interface ProviderHarness {
   messages: Array<Record<string, unknown>>;
@@ -86,11 +88,28 @@ function latestState(messages: Array<Record<string, unknown>>) {
         part: string;
       };
     };
+    vendors: Array<{ value: string }>;
+    packCatalogNotice: string;
     pendingPackId: string;
     packs: Array<{ value: string; description?: string }>;
     versions: Array<{ value: string; description?: string }>;
   } | undefined;
 }
+
+test('sidebar shows the import hint while no Pack provides any vendor', async () => {
+  const provider = startProvider(undefined, {
+    loadPackCatalog: async () => ({ options: [] })
+  });
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const state = latestState(provider.messages);
+    assert.deepEqual(state?.vendors ?? [], []);
+    assert.match(state?.packCatalogNotice ?? '', /没有可用芯片/);
+  } finally {
+    provider.dispose();
+  }
+});
 
 test('sidebar loads Pack catalog for the newly selected vendor and ignores a stale catalog response', async () => {
   const catalogCalls: string[] = [];
@@ -107,11 +126,13 @@ test('sidebar loads Pack catalog for the newly selected vendor and ignores a sta
       catalogCalls.push(vendor);
       return vendor === 'GD' ? gdCatalog.promise : Promise.resolve({
         options: [{
-          packId: 'builtin:STM',
+          packId: 'STM:STM32F1_DFP',
           vendorId: 'STM',
-          name: '内置芯片支持',
-          version: 'builtin',
-          origin: 'builtin'
+          name: 'STM32F1_DFP',
+          version: '1.0.0',
+          origin: 'installed',
+          packFile: 'C:/Keil/STM/STM32F1_DFP/1.0.0',
+          source: 'directory'
         }],
         notice: 'STM index unavailable'
       });
@@ -135,11 +156,13 @@ test('sidebar loads Pack catalog for the newly selected vendor and ignores a sta
 
     stmCatalog.resolve({
       options: [{
-        packId: 'builtin:STM',
+        packId: 'STM:STM32F1_DFP',
         vendorId: 'STM',
-        name: '内置芯片支持',
-        version: 'builtin',
-        origin: 'builtin'
+        name: 'STM32F1_DFP',
+        version: '1.0.0',
+        origin: 'installed',
+        packFile: 'C:/Keil/STM/STM32F1_DFP/1.0.0',
+        source: 'directory'
       }],
       notice: 'STM index unavailable'
     });
@@ -153,12 +176,6 @@ test('sidebar loads Pack catalog for the newly selected vendor and ignores a sta
 
     gdCatalog.resolve({
       options: [{
-        packId: 'builtin:GD',
-        vendorId: 'GD',
-        name: '内置芯片支持',
-        version: 'builtin',
-        origin: 'builtin'
-      }, {
         packId: 'GD:GD32F1_DFP',
         vendorId: 'GD',
         name: 'GD32F1_DFP',
@@ -181,7 +198,7 @@ test('sidebar loads Pack catalog for the newly selected vendor and ignores a sta
       provider.messages.some((message) => (
         message.type === 'packCatalogState'
         && message.vendor === 'GD'
-        && JSON.stringify(message.packs).includes('builtin:STM')
+        && JSON.stringify(message.packs).includes('STM:STM32F1_DFP')
       )),
       false
     );
@@ -222,7 +239,7 @@ test('sidebar persists the exact downloaded Pack identity and selects its first 
     packUrl: 'https://packs.example/STM32F1xx_DFP.1.10.0.pack'
   };
   const sourcePack = 'packs/STM/STM32F1xx_DFP.1.10.0.pack';
-  const builtin = getDeviceProfile('STM32F103C8T6');
+  const builtin = fixtureDeviceProfile();
   registerDeviceProfiles([{
     ...builtin,
     family: 'STM32F1xx custom Pack',
@@ -230,13 +247,7 @@ test('sidebar persists the exact downloaded Pack identity and selects its first 
   }], sourcePack);
   const provider = startProvider(selection, {
     loadPackCatalog: async () => ({
-      options: [{
-        packId: 'builtin:STM',
-        vendorId: 'STM',
-        name: '内置芯片支持',
-        version: 'builtin',
-        origin: 'builtin'
-      }, catalogOption]
+      options: [ catalogOption]
     }),
     activatePack: async () => ({
       vendorId: 'STM',
@@ -296,20 +307,14 @@ test('sidebar activates an installed Pack through its storage key, not the Keil 
   };
   const sourcePack = 'packs/STM/STM32F1xx_DFP.2.4.1.pack';
   const installPath = 'C:/Keil_v5/ARM/PACK/Keil/STM32F1xx_DFP/2.4.1';
-  const builtin = getDeviceProfile('STM32F103C8T6');
+  const builtin = fixtureDeviceProfile();
   registerDeviceProfiles([{
     ...builtin,
     ram: { ...builtin.ram, length: 20 * 1024 }
   }], sourcePack);
   const provider = startProvider(selection, {
     loadPackCatalog: async () => ({
-      options: [{
-        packId: 'builtin:STM',
-        vendorId: 'STM',
-        name: '内置芯片支持',
-        version: 'builtin',
-        origin: 'builtin'
-      }, {
+      options: [ {
         packId: 'STM:STM32F1xx_DFP',
         vendorId: 'STM',
         name: 'STM32F1xx_DFP',
@@ -357,13 +362,7 @@ test('sidebar keeps the requested mode when the selection only changes mode', as
   const writes: unknown[] = [];
   const provider = startProvider(undefined, {
     loadPackCatalog: async () => ({
-      options: [{
-        packId: 'builtin:STM',
-        vendorId: 'STM',
-        name: '内置芯片支持',
-        version: 'builtin',
-        origin: 'builtin'
-      }]
+      options: []
     })
   }, writes);
   try {
@@ -389,7 +388,7 @@ test('selecting a vendor auto-activates its best installed Pack version', async 
   const writes: unknown[] = [];
   const sourcePack = 'packs/GD/GD32F1xx_DFP.pack';
   registerDeviceProfiles([{
-    ...getDeviceProfile('STM32F103C8T6'),
+    ...fixtureDeviceProfile(),
     part: 'GD32F103C8T6',
     vendor: 'GD'
   }], sourcePack);
@@ -416,13 +415,7 @@ test('selecting a vendor auto-activates its best installed Pack version', async 
           }]
         }
       : {
-          options: [{
-            packId: 'builtin:STM',
-            vendorId: 'STM',
-            name: '内置芯片支持',
-            version: 'builtin',
-            origin: 'builtin'
-          }]
+          options: []
         },
     activatePack: async (vendor: string, packId: string, version: string) => {
       activations.push([vendor, packId, version]);
@@ -473,13 +466,7 @@ test('a vendor with only downloadable Packs is not auto-activated', async () => 
           }]
         }
       : {
-          options: [{
-            packId: 'builtin:STM',
-            vendorId: 'STM',
-            name: '内置芯片支持',
-            version: 'builtin',
-            origin: 'builtin'
-          }]
+          options: []
         },
     activatePack: async (vendor: string, packId: string, version: string) => {
       activations.push([vendor, packId, version]);
@@ -550,7 +537,7 @@ test('startup catalog refresh does not auto-activate an installed Pack', async (
     provider.receive({ type: 'ready' });
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal(activations.length, 0);
-    assert.equal(latestState(provider.messages)?.selection.mcu.packId, 'builtin:GD');
+    assert.equal(latestState(provider.messages)?.selection.mcu.packId, '');
     assert.equal(latestState(provider.messages)?.pendingPackId, 'GD:GD32F1xx_DFP');
   } finally {
     provider.dispose();
@@ -581,7 +568,7 @@ test('sidebar keeps the previous valid Pack selection when download or parsing f
       backend: 'openocd'
     }
   };
-  const builtin = getDeviceProfile('STM32F103C8T6');
+  const builtin = fixtureDeviceProfile();
   registerDeviceProfiles([{
     ...builtin,
     ram: { ...builtin.ram, length: 20 * 1024 }

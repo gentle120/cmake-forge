@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getDeviceProfile } from '../devices/deviceProfiles';
 import { generateCMakePresets } from '../generator/presetsGenerator';
+import { fixtureDeviceProfile, registerFixtureVendors } from './support/fixtureDevice';
+
+registerFixtureVendors();
 
 test('generates valid debug and release CMake presets', () => {
-  const presetsText = generateCMakePresets();
+  const presetsText = generateCMakePresets(fixtureDeviceProfile().toolchainFileName);
   const presets = JSON.parse(presetsText) as {
     version: number;
     configurePresets: Array<{ name: string; binaryDir: string; cacheVariables: { CMAKE_BUILD_TYPE: string; CMAKE_TOOLCHAIN_FILE: string } }>;
@@ -17,13 +19,13 @@ test('generates valid debug and release CMake presets', () => {
   assert.equal(presets.configurePresets[0].cacheVariables.CMAKE_BUILD_TYPE, 'Debug');
   assert.equal(
     presets.configurePresets[0].cacheVariables.CMAKE_TOOLCHAIN_FILE,
-    '${sourceDir}/cmake/gd32-toolchain.cmake'
+    '${sourceDir}/cmake/stm32f1-toolchain.cmake'
   );
   assert.equal(presets.configurePresets[1].binaryDir, '${sourceDir}/build/release');
   assert.equal(presets.configurePresets[1].cacheVariables.CMAKE_BUILD_TYPE, 'Release');
   assert.equal(
     presets.configurePresets[1].cacheVariables.CMAKE_TOOLCHAIN_FILE,
-    '${sourceDir}/cmake/gd32-toolchain.cmake'
+    '${sourceDir}/cmake/stm32f1-toolchain.cmake'
   );
   assert.deepEqual(presets.buildPresets, [
     { name: 'debug', configurePreset: 'debug' },
@@ -32,7 +34,9 @@ test('generates valid debug and release CMake presets', () => {
 });
 
 test('uses the selected device toolchain filename in presets', () => {
-  const presets = JSON.parse(generateCMakePresets(getDeviceProfile('STM32F407VGT6').toolchainFileName));
+  const presets = JSON.parse(generateCMakePresets(
+    fixtureDeviceProfile({ part: 'STM32F407VGT6', toolchainFileName: 'stm32f4-toolchain.cmake' }).toolchainFileName
+  ));
 
   assert.equal(
     presets.configurePresets[0].cacheVariables.CMAKE_TOOLCHAIN_FILE,

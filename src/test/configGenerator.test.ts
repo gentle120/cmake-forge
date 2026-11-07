@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getDeviceProfile } from '../devices/deviceProfiles';
+import { gd32F103Profile, stm32F407Profile, registerFixtureVendors } from './support/fixtureDevice';
+
+registerFixtureVendors();
 import { generateProjectConfig } from '../generator/configGenerator';
 
 test('records the selected MCU memory and generated file lists', () => {
   const config = JSON.parse(generateProjectConfig(
     'gd32',
-    getDeviceProfile('GD32F103C8T6'),
+    gd32F103Profile(),
     [
       'CMakeLists.txt',
       'CMakePresets.json',
@@ -60,7 +62,7 @@ test('records the selected MCU memory and generated file lists', () => {
 test('records additional memory regions in the project config', () => {
   const config = JSON.parse(generateProjectConfig(
     'stm32',
-    getDeviceProfile('STM32F407VGT6'),
+    stm32F407Profile(),
     [],
     []
   ));
@@ -79,7 +81,7 @@ test('records additional memory regions in the project config', () => {
 test('records the optional OpenOCD flash configuration', () => {
   const config = JSON.parse(generateProjectConfig(
     'firmware',
-    getDeviceProfile('STM32F407VGT6'),
+    stm32F407Profile(),
     ['flash.py'],
     [],
     {

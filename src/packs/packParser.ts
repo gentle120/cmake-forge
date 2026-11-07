@@ -347,7 +347,7 @@ function collectMemoryRegions(device: XmlNode): {
 } {
   let flash: MemoryRegion = { origin: 0, length: 0 };
   let hasFlash = false;
-  const ramCandidates: MemoryRegion[] = [];
+  const ramCandidates: Array<MemoryRegion & { access: AdditionalMemoryRegion['attributes'] }> = [];
   const additional: AdditionalMemoryRegion[] = [];
 
   for (const memoryNode of asNodeArray(device.memory)) {
@@ -357,6 +357,11 @@ function collectMemoryRegions(device: XmlNode): {
     if (origin === undefined || length === undefined || length <= 0) {
       continue;
     }
+    // CMSIS access codes map onto linker segment flags; unknown values stay
+    // read-write so a malformed attribute never widens permissions.
+    const access = (textOf(memoryNode['@_access']) ?? '').toLowerCase();
+    const attributes: AdditionalMemoryRegion['attributes'] =
+      access === 'rx' || access === 'rwx' ? access : 'rw';
     const upperId = id.toUpperCase();
     if (FLASH_MEMORY_IDS[upperId]) {
       // The first ROM-class region is the boot flash; later banks become extra.
@@ -364,24 +369,27 @@ function collectMemoryRegions(device: XmlNode): {
         flash = { origin, length };
         hasFlash = true;
       } else {
-        additional.push({ name: id, attributes: 'rw', origin, length });
+        additional.push({ name: id, attributes, origin, length });
       }
     } else if (RAM_MEMORY_IDS[upperId]) {
-      ramCandidates.push({ origin, length });
+      ramCandidates.push({ origin, length, access: attributes });
     } else {
-      additional.push({ name: id, attributes: 'rw', origin, length });
+      additional.push({ name: id, attributes, origin, length });
     }
   }
 
-  let ram: MemoryRegion = { origin: 0, length: 0 };
-  for (const candidate of ramCandidates) {
-    if (candidate.length > ram.length) {
-      ram = candidate;
+  let ramIndex = -1;
+  for (let index = 0; index < ramCandidates.length; index += 1) {
+    if (ramIndex === -1 || ramCandidates[index].length > ramCandidates[ramIndex].length) {
+      ramIndex = index;
     }
   }
-  for (const candidate of ramCandidates) {
-    if (candidate !== ram) {
-      additional.push({ name: 'RAM_EXTRA', attributes: 'rw', ...candidate });
+  const ram: MemoryRegion = ramIndex === -1
+    ? { origin: 0, length: 0 }
+    : { origin: ramCandidates[ramIndex].origin, length: ramCandidates[ramIndex].length };
+  for (const [index, candidate] of ramCandidates.entries()) {
+    if (index !== ramIndex) {
+      additional.push({ name: 'RAM_EXTRA', attributes: candidate.access, origin: candidate.origin, length: candidate.length });
     }
   }
   return { flash, ram, additional };

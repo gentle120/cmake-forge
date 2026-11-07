@@ -4,7 +4,7 @@ import { buildPackVendorOptions } from '../packs/vendorOptions';
 
 test('only device-backed pack sources become vendor options', () => {
   const options = buildPackVendorOptions({
-    builtin: [
+    registered: [
       { id: 'STM', label: 'STM32' },
       { id: 'GD', label: 'GD32' }
     ],
@@ -29,7 +29,7 @@ test('only device-backed pack sources become vendor options', () => {
 
 test('a vendor is listed once no matter how many of its packs are installed', () => {
   const options = buildPackVendorOptions({
-    builtin: [],
+    registered: [],
     imported: [],
     installed: [
       { vendorId: 'ARM', vendorName: 'ARM', hasDevices: false },

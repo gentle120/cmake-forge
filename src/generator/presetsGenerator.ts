@@ -1,4 +1,4 @@
-export function generateCMakePresets(toolchainFileName = 'gd32-toolchain.cmake'): string {
+export function generateCMakePresets(toolchainFileName: string): string {
   const configurePreset = (name: string, buildType: string, binaryDir: string): Record<string, unknown> => ({
     name,
     displayName: buildType,

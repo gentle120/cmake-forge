@@ -158,6 +158,10 @@ function reportWorkflowResult(result: WorkflowResult): void {
 
 async function selectDeviceProfile(): Promise<ReturnType<typeof getDeviceProfile> | undefined> {
   const profiles = listDeviceProfiles();
+  if (profiles.length === 0) {
+    void vscode.window.showInformationMessage('没有可用芯片：请先在侧栏选择或在 Keil 安装目录导入 CMSIS Pack。');
+    return undefined;
+  }
   const vendorSelection = await vscode.window.showQuickPick(
     listDeviceVendors(profiles).map((vendor) => ({
       label: getVendorMetadata(vendor).label,
@@ -346,8 +350,8 @@ async function installedPackIdentities(): Promise<InstalledPackIdentity[]> {
 }
 
 /**
- * Vendor options for the sidebar: built-in profile vendors plus installed and
- * imported Packs that actually contain importable MCU devices. The online
+ * Vendor options for the sidebar: vendors of already-imported profiles plus
+ * installed Packs that actually contain importable MCU devices. The online
  * index is not a vendor source — its publishers only become vendors after a
  * successful import, which keeps component packs from polluting the list.
  */
@@ -356,7 +360,7 @@ async function discoverPackVendorOptions(): Promise<{
   notice?: string;
 }> {
   const vendors = buildPackVendorOptions({
-    builtin: listDeviceVendors(listDeviceProfiles()).map((vendor) => ({
+    registered: listDeviceVendors(listDeviceProfiles()).map((vendor) => ({
       id: vendor,
       label: getVendorMetadata(vendor).label
     })),
@@ -422,7 +426,6 @@ async function loadDevicePackCatalog(vendorId: string): Promise<{
   return {
     options: buildDevicePackOptions({
       vendorId,
-      hasBuiltin: listDeviceProfiles().some((profile) => profile.vendor === vendorId),
       imported: importedInVendor,
       installed,
       online
@@ -436,16 +439,6 @@ async function activateDevicePack(
   packId: string,
   version: string
 ): Promise<{ vendorId: string; packId: string; version: string; sourcePack: string; message: string }> {
-  if (packId === `builtin:${vendorId}` && version === 'builtin') {
-    return {
-      vendorId,
-      packId,
-      version,
-      sourcePack: packId,
-      message: '已选择内置芯片支持。'
-    };
-  }
-
   let record = (await listImportedPacks(packStorageRoot))
     .find((pack) => pack.packId === packId && pack.version === version);
   let importedResult: ImportPackResult | undefined;

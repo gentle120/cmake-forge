@@ -49,6 +49,3 @@ export function listVendorMetadata(): VendorMetadata[] {
 export function vendorRegistryVersion(): number {
   return registryVersion;
 }
-
-registerVendor({ id: 'STM', label: 'STM32', definePrefixes: ['STM32'], order: 0 });
-registerVendor({ id: 'GD', label: 'GD32', definePrefixes: ['GD32'], order: 1 });

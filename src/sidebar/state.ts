@@ -83,9 +83,6 @@ export interface SidebarBootstrapState {
 }
 
 const defaultMode: SidebarMode = 'mcu';
-const defaultVendor: DeviceVendor = 'STM';
-const defaultSeries: DeviceSeries = 'F1x';
-const defaultPart = 'STM32F103C8T6';
 const defaultLinuxToolchain: LinuxToolchainFamily = 'loongson';
 const defaultFlashTarget = 'stm32f1xx';
 const defaultFlashProbe = 'stlink';
@@ -144,11 +141,11 @@ export function defaultSidebarSelection(): SidebarSelection {
     mode: defaultMode,
     projectRoot: '',
     mcu: {
-      vendor: defaultVendor,
-      packId: `builtin:${defaultVendor}`,
-      version: 'builtin',
-      series: defaultSeries,
-      part: defaultPart
+      vendor: '',
+      packId: '',
+      version: '',
+      series: '',
+      part: ''
     },
     linux: {
       toolchainFamily: defaultLinuxToolchain
@@ -180,7 +177,7 @@ export function sanitizeSidebarSelection(
   const native = asRecord(record?.native);
   const flash = asRecord(record?.flash);
   const vendor = isVendor(mcu?.vendor) ? mcu.vendor : fallback.mcu.vendor;
-  const selectedPackId = typeof mcu?.packId === 'string' ? mcu.packId : `builtin:${vendor}`;
+  const selectedPackId = typeof mcu?.packId === 'string' ? mcu.packId : '';
   const selectedSourcePack = typeof mcu?.sourcePack === 'string' ? mcu.sourcePack : undefined;
   const vendorProfiles = packProfiles(
     vendor,
@@ -189,23 +186,22 @@ export function sanitizeSidebarSelection(
     packOptions,
     selectedSourcePack
   );
-  const packId = vendorProfiles.length > 0 ? selectedPackId : `builtin:${vendor}`;
-  const profiles = vendorProfiles.length > 0
-    ? vendorProfiles
-    : listDeviceProfilesForPack(`builtin:${vendor}`);
-  const version = packId === `builtin:${vendor}`
-    ? 'builtin'
+  // Without an owning Pack the whole MCU column stays empty; there is no
+  // built-in fallback anymore.
+  const packId = vendorProfiles.length > 0 ? selectedPackId : '';
+  const version = packId === ''
+    ? ''
     : typeof mcu?.version === 'string' && mcu.version.trim()
       ? mcu.version
       : packOptions.find((option) => option.packId === packId)?.version ?? '';
   // Persist the owner that actually supplied the profiles: the catalog entry
   // wins once loaded, so a stale key from another Pack cannot survive.
-  const sourcePack = packId === `builtin:${vendor}`
+  const sourcePack = packId === ''
     ? undefined
     : profileOwner(packId, version, packOptions, selectedSourcePack);
-  const series = isSeries(mcu?.series) && seriesBelongsToVendor(mcu.series, vendor, profiles)
+  const series = packId !== '' && isSeries(mcu?.series) && seriesBelongsToVendor(mcu.series, vendor, vendorProfiles)
     ? mcu.series
-    : firstSeriesForVendor(vendor, profiles);
+    : firstSeriesForVendor(vendor, vendorProfiles);
   const family = typeof linux?.toolchainFamily === 'string'
     && isLinuxToolchainFamily(linux.toolchainFamily)
     ? linux.toolchainFamily
@@ -229,7 +225,7 @@ export function sanitizeSidebarSelection(
       version,
       ...(sourcePack === undefined ? {} : { sourcePack }),
       series,
-      part: partFor(profiles, vendor, series, mcu?.part)
+      part: packId === '' ? '' : partFor(vendorProfiles, vendor, series, mcu?.part)
     },
     linux: {
       toolchainFamily: family
@@ -265,11 +261,9 @@ export function sanitizeSidebarSelection(
 
 function firstSeriesForVendor(
   vendor: DeviceVendor,
-  profiles: ReturnType<typeof listDeviceProfiles> = listDeviceProfilesForPack(`builtin:${vendor}`)
+  profiles: ReturnType<typeof listDeviceProfiles> = listDeviceProfiles()
 ): DeviceSeries {
-  return listDeviceSeries(profiles, vendor)[0]
-    ?? listDeviceProfiles().find((profile) => profile.vendor === vendor)?.series
-    ?? defaultSeries;
+  return listDeviceSeries(profiles, vendor)[0] ?? '';
 }
 
 function seriesBelongsToVendor(
@@ -310,9 +304,6 @@ function packProfiles(
   packOptions: DevicePackOption[],
   sourcePack?: string
 ): ReturnType<typeof listDeviceProfiles> {
-  if (packId === `builtin:${vendor}`) {
-    return listDeviceProfilesForPack(packId);
-  }
   const owner = profileOwner(packId, version, packOptions, sourcePack);
   return owner ? listDeviceProfilesForPack(owner) : [];
 }
@@ -331,12 +322,12 @@ export function nextMcuSelection(
 ): SidebarSelection {
   const vendor = change.vendor ?? selection.mcu.vendor;
   const vendorChanged = vendor !== selection.mcu.vendor;
-  const packId = change.packId ?? (vendorChanged ? `builtin:${vendor}` : selection.mcu.packId);
-  const version = change.version ?? (
-    packId === `builtin:${vendor}` ? 'builtin' : (vendorChanged ? '' : selection.mcu.version)
-  );
+  const packId = change.packId ?? (vendorChanged ? '' : selection.mcu.packId);
+  const version = packId === ''
+    ? ''
+    : change.version ?? (vendorChanged ? '' : selection.mcu.version);
   const requestedSourcePack = change.sourcePack ?? (
-    vendorChanged && packId === `builtin:${vendor}` ? undefined : selection.mcu.sourcePack
+    vendorChanged ? undefined : selection.mcu.sourcePack
   );
   const packChanged = vendorChanged
     || packId !== selection.mcu.packId
@@ -363,7 +354,7 @@ export function nextMcuSelection(
       vendor,
       packId,
       version,
-      ...(packId === `builtin:${vendor}` || owner === undefined ? {} : { sourcePack: owner }),
+      ...(packId === '' || owner === undefined ? {} : { sourcePack: owner }),
       series,
       part
     }
@@ -398,21 +389,10 @@ export function optionsForPackSelection(
     safe.mcu.packId,
     safe.mcu.version,
     packOptions
-  ).length > 0
-    ? packProfiles(safe.mcu.vendor, safe.mcu.packId, safe.mcu.version, packOptions)
-    : listDeviceProfilesForPack(`builtin:${safe.mcu.vendor}`);
-  const choices = packOptions.length > 0
-    ? packOptions
-    : buildDevicePackOptions({
-        vendorId: safe.mcu.vendor,
-        hasBuiltin: listDeviceProfilesForPack(`builtin:${safe.mcu.vendor}`).length > 0,
-        imported: [],
-        installed: [],
-        online: []
-      });
-  const selectedPackChoices = choices.filter((option) => option.packId === safe.mcu.packId);
+  );
+  const selectedPackChoices = packOptions.filter((option) => option.packId === safe.mcu.packId);
   const packMap = new Map<string, DevicePackOption>();
-  choices.forEach((option) => {
+  packOptions.forEach((option) => {
     if (!packMap.has(option.packId)) packMap.set(option.packId, option);
   });
   return {
@@ -423,7 +403,7 @@ export function optionsForPackSelection(
     })),
     versions: selectedPackChoices.map((option) => ({
       value: option.version,
-      label: option.version === 'builtin' ? '内置' : option.version,
+      label: option.version,
       description: option.origin
     })),
     series: listDeviceSeries(profiles, safe.mcu.vendor).map((series) => ({
@@ -462,15 +442,6 @@ export function buildSidebarState(
   const choices = buildLinuxToolchainChoices(hits, selection.linux.toolchainFamily);
   const safeSelection = sanitizeSidebarSelection(selection, selection, packOptions);
   const mcuOptions = optionsForPackSelection(safeSelection, packOptions);
-  const availablePacks = packOptions.length > 0
-    ? packOptions
-    : buildDevicePackOptions({
-        vendorId: safeSelection.mcu.vendor,
-        hasBuiltin: listDeviceProfilesForPack(`builtin:${safeSelection.mcu.vendor}`).length > 0,
-        imported: [],
-        installed: [],
-        online: []
-      });
 
   return {
     workspaceName: selectedProjectLabel(workspaceName, projects, projectRoot),
@@ -482,11 +453,11 @@ export function buildSidebarState(
       label: getVendorMetadata(vendor).label
     })),
     packs: mcuOptions.packs,
-    versions: availablePacks
+    versions: packOptions
       .filter((option) => option.packId === pendingPackId)
       .map((option) => ({
         value: option.version,
-        label: option.version === 'builtin' ? '内置' : option.version,
+        label: option.version,
         description: option.origin
       })),
     pendingPackId,

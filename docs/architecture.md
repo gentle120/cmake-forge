@@ -6,7 +6,7 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 
 ## System Context
 
-- 用户与外部系统：嵌入式开发者在 VS Code 侧边栏/命令面板选择方向与芯片；扩展读写工作区文件并生成 `.vscode/` 配置；配置与编译由 CMake Tools 负责，烧录/调试依赖用户 PATH 或设置中的 OpenOCD、arm-none-eabi、J-Link、pyOCD；CMSIS Pack 来自内置虚拟 Pack、本地文件、Keil 安装库或 keil.com 索引。
+- 用户与外部系统：嵌入式开发者在 VS Code 侧边栏/命令面板选择方向与芯片；扩展读写工作区文件并生成 `.vscode/` 配置；配置与编译由 CMake Tools 负责，烧录/调试依赖用户 PATH 或设置中的 OpenOCD、arm-none-eabi、J-Link、pyOCD；CMSIS Pack 来自本地文件、Keil 安装库或 keil.com 索引。
 - 运行与部署目标：VS Code 扩展宿主（Node，`engines.vscode ^1.85`），`main: ./out/extension.js`，tsc 编译，无打包器。
 - 信任与安全边界：生成文件落盘前有覆盖确认；不执行外部烧录器进程（仅生成脚本供用户执行）；Pack 导入只读 zip 内容并复制到扩展 globalStorage。
 
@@ -31,7 +31,7 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 
 ## Data And Control Flow
 
-MCU 路径：目录加载（vendor→pack→version：内置虚拟 Pack、已安装 PDSC 身份、已导入记录、在线版本）→ 选择版本激活并按其所有权取档案 → `getDeviceProfileForPack` → `generateMcuWorkflow` 生成 CMakeLists/toolchain/linker/startup/presets（flash.py 与 launch.json 经烧录后端 openocd/jlink/pyocd 参数化）→ 覆盖确认 → 写盘。烧录 target 经 `DeviceProfile.debugTarget` 桥接到 OpenOCD cfg；无映射的设备走 jlink/pyocd 后端。Pack 导入：zip 或解压目录→PDSC/SVD→DeviceProfile 合成→globalStorage 持久化→注册表注入；identity 与 profile 所有权都以导入存储路径为准。
+MCU 路径：目录加载（vendor→pack→version：已安装 PDSC 身份、已导入记录、在线版本）→ 选择版本激活并按其所有权取档案 → `getDeviceProfileForPack` → `generateMcuWorkflow` 生成 CMakeLists/toolchain/linker/startup/presets（flash.py 与 launch.json 经烧录后端 openocd/jlink/pyocd 参数化）→ 覆盖确认 → 写盘。烧录 target 经 `DeviceProfile.debugTarget` 桥接到 OpenOCD cfg；无映射的设备走 jlink/pyocd 后端。Pack 导入：zip 或解压目录→PDSC/SVD→DeviceProfile 合成→globalStorage 持久化→注册表注入；identity 与 profile 所有权都以导入存储路径为准。注册表无内置数据：`src/devices/` 只含运行时注册表，档案全部由 Pack 注入。
 
 编译路径：生成的工程文件交给 CMake Tools，由用户在其 UI 或 `cmake --preset` 中配置和编译；插件不启动编译器进程。
 

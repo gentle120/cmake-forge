@@ -8,7 +8,6 @@ import {
 } from '../devices/deviceProfiles';
 import type { DevicePackOption } from '../devices/deviceSelection';
 import {
-  buildDevicePackOptions,
   comparePackVersions,
   listDeviceProfilesForSeries,
   listDeviceSeries
@@ -184,9 +183,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   }
 
   private state() {
-    const loader = this.dependencies.loadPackCatalog;
-    // The sidebar loader contract is optional for old host fixtures. Without
-    // it, build built-in options synchronously so the first state remains usable.
+    // The sidebar loader contract is optional for old host fixtures.
     const state = buildSidebarState(
       workspaceName(),
       this.selectionValue,
@@ -204,32 +201,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.vendorOptions,
       this.packCatalogNotice
     );
-    if (!loader || this.packOptions.length > 0) {
-      return state;
+    if (state.vendors.length === 0 && state.packCatalogNotice === '') {
+      return {
+        ...state,
+        packCatalogNotice: '没有可用芯片：请先在 Keil 中安装器件包，或通过 Import CMSIS Pack 导入。'
+      };
     }
-    const vendor = state.selection.mcu.vendor;
-    const fallback = buildDevicePackOptions({
-      vendorId: vendor,
-      hasBuiltin: listDeviceProfilesForPack(`builtin:${vendor}`).length > 0,
-      imported: [],
-      installed: [],
-      online: []
-    });
-    return {
-      ...state,
-      packs: fallback.map((option) => ({
-        value: option.packId,
-        label: option.name,
-        description: option.origin
-      })),
-      versions: fallback
-        .filter((option) => option.packId === this.selectionValue.mcu.packId)
-        .map((option) => ({
-          value: option.version,
-          label: option.version === 'builtin' ? '内置' : option.version,
-          description: option.origin
-        }))
-    };
+    return state;
   }
 
   private postState(): void {
@@ -282,17 +260,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     this.post({
       type: 'packCatalogLoading',
       vendor,
-      packs: buildDevicePackOptions({
-        vendorId: vendor,
-        hasBuiltin: listDeviceProfilesForPack(`builtin:${vendor}`).length > 0,
-        imported: [],
-        installed: [],
-        online: []
-      }).map((option) => ({
-        value: option.packId,
-        label: option.name,
-        description: option.origin
-      })),
+      packs: [],
       versions: [],
       notice: ''
     });
@@ -321,9 +289,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         option.packId === this.selectionValue.mcu.packId
         && option.version === this.selectionValue.mcu.version
       );
-      const fallback = this.packOptions.find((option) =>
-        option.packId === `builtin:${vendor}`
-      ) ?? this.packOptions[0];
+      const fallback = this.packOptions[0];
       if (!selected && fallback) {
         this.pendingPackId = fallback.packId;
         // An explicit vendor change activates the newest already-available
@@ -342,24 +308,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           this.pendingPackId = autoCandidate.packId;
           await this.activatePack(autoCandidate.packId, autoCandidate.version);
           return;
-        }
-        if (fallback.origin === 'builtin' && (
-          this.selectionValue.mcu.vendor !== vendor
-          || !listDeviceProfilesForPack(`builtin:${vendor}`).some((profile) =>
-            profile.part === this.selectionValue.mcu.part
-          )
-        )) {
-          this.selectionValue = sanitizeSidebarSelection(
-            nextMcuSelection(this.selectionValue, {
-              vendor,
-              packId: fallback.packId,
-              version: fallback.version,
-              sourcePack: undefined
-            }, this.packOptions),
-            this.selectionValue,
-            this.packOptions
-          );
-          await this.context.workspaceState.update(selectionKey, this.selectionValue);
         }
       } else {
         this.pendingPackId = selected?.packId ?? this.selectionValue.mcu.packId;
@@ -394,18 +342,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   }
 
   private optionsForCatalog(): { packs: SidebarOption[]; versions: SidebarOption[] } {
-    const vendor = this.selectionValue.mcu.vendor;
-    const choices = this.packOptions.length > 0
-      ? this.packOptions
-      : buildDevicePackOptions({
-          vendorId: vendor,
-          hasBuiltin: listDeviceProfilesForPack(`builtin:${vendor}`).length > 0,
-          imported: [],
-          installed: [],
-          online: []
-        });
     const packs = new Map<string, DevicePackOption>();
-    for (const option of choices) {
+    for (const option of this.packOptions) {
       if (!packs.has(option.packId)) {
         packs.set(option.packId, option);
       }
@@ -416,11 +354,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         label: option.name,
         description: option.origin
       })),
-      versions: choices
+      versions: this.packOptions
         .filter((option) => option.packId === this.pendingPackId)
         .map((option) => ({
           value: option.version,
-          label: option.version === 'builtin' ? '内置' : option.version,
+          label: option.version,
           description: option.origin
         }))
     };
@@ -460,7 +398,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         ];
       }
       let sourcePack = activated.sourcePack;
-      if (option.origin !== 'builtin' && this.dependencies.loadPackCatalog) {
+      if (this.dependencies.loadPackCatalog) {
         const catalog = await this.dependencies.loadPackCatalog(activatedVendor);
         this.packOptions = catalog.options;
         this.packCatalogNotice = catalog.notice ?? '';
@@ -651,10 +589,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   }
 
   private selectedDeviceProfile() {
-    return getDeviceProfileForPack(
-      this.selectionValue.mcu.part,
-      this.selectionValue.mcu.sourcePack ?? `builtin:${this.selectionValue.mcu.vendor}`
-    );
+    const { part, sourcePack } = this.selectionValue.mcu;
+    if (!part || !sourcePack) {
+      throw new Error('请先选择芯片支持包与型号。');
+    }
+    return getDeviceProfileForPack(part, sourcePack);
   }
 
   private async handleMessage(message: SidebarIncomingMessage): Promise<void> {

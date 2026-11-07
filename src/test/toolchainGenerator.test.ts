@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getDeviceProfile } from '../devices/deviceProfiles';
 import { generateToolchainFile } from '../generator/toolchainGenerator';
+import { fixtureDeviceProfile, registerFixtureVendors } from './support/fixtureDevice';
+
+registerFixtureVendors();
 
 test('generates an arm-none-eabi toolchain file', () => {
-  const toolchain = generateToolchainFile(getDeviceProfile('GD32F103C8T6'));
+  const toolchain = generateToolchainFile(fixtureDeviceProfile());
 
   assert.match(toolchain, /CMAKE_SYSTEM_PROCESSOR arm/);
   assert.match(toolchain, /arm-none-eabi-gcc/);
@@ -20,12 +22,17 @@ test('generates an arm-none-eabi toolchain file', () => {
   assert.match(toolchain, /CMAKE_EXE_LINKER_FLAGS_INIT.*TARGET_FLAGS/);
   assert.match(toolchain, /--specs=nano\.specs/);
   assert.doesNotMatch(toolchain, /--specs=nosys\.specs/);
-  assert.match(toolchain, /GD32F103C8T6\.ld/);
+  assert.match(toolchain, /STM32F103C8T6\.ld/);
   assert.match(toolchain, /-Wl,-Map=.*CMAKE_PROJECT_NAME.*-Wl,--gc-sections/);
 });
 
 test('generates hard-float Cortex-M4 compiler and linker flags', () => {
-  const toolchain = generateToolchainFile(getDeviceProfile('STM32F407VGT6'));
+  const toolchain = generateToolchainFile(fixtureDeviceProfile({
+    part: 'STM32F407VGT6',
+    core: 'cortex-m4',
+    linkerFileName: 'STM32F407VGT6.ld',
+    compilerFlags: ['-mcpu=cortex-m4', '-mthumb', '-mfpu=fpv4-sp-d16', '-mfloat-abi=hard']
+  }));
 
   assert.match(toolchain, /set\(TARGET_FLAGS "-mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard"\)/);
   assert.match(toolchain, /CMAKE_C_FLAGS_INIT.*TARGET_FLAGS/);
@@ -35,7 +42,7 @@ test('generates hard-float Cortex-M4 compiler and linker flags', () => {
 });
 
 test('keeps Cortex-M3 profiles free of floating-point ABI flags', () => {
-  const toolchain = generateToolchainFile(getDeviceProfile('GD32F103C8T6'));
+  const toolchain = generateToolchainFile(fixtureDeviceProfile());
 
   assert.doesNotMatch(toolchain, /-mfpu=|-mfloat-abi=/);
 });

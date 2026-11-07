@@ -4,6 +4,9 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scanProject, ScanCancelledError } from '../scanner/projectScanner';
+import { registerFixtureVendors } from './support/fixtureDevice';
+
+registerFixtureVendors();
 
 test('scans source files, headers, include directories, and defines', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mcu-cmake-'));

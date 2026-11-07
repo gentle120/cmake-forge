@@ -33,19 +33,11 @@ export interface DeviceProfile {
   debugTarget?: string;
 }
 
-import { gd32Profiles } from './gd32';
-import { stm32Profiles } from './stm32';
 import { validateDeviceProfile } from './profileValidation';
 
-const allProfiles = [...gd32Profiles, ...stm32Profiles];
 const profiles: Record<string, DeviceProfile> = {};
-const builtinProfiles = new Map<string, DeviceProfile>();
 const importedProfilesByPart = new Map<string, Map<string, DeviceProfile>>();
 const importedSourceByPart = new Map<string, string>();
-for (const profile of allProfiles) {
-  addProfile(profile, false);
-  builtinProfiles.set(profile.part.toUpperCase(), profile);
-}
 
 function addProfile(profile: DeviceProfile, replace: boolean, sourcePack?: string): void {
   validateDeviceProfile(profile);
@@ -94,12 +86,7 @@ export function unregisterDeviceProfiles(parts: string[], sourcePack?: string): 
     }
     importedProfilesByPart.delete(key);
     importedSourceByPart.delete(key);
-    const builtin = builtinProfiles.get(key);
-    if (builtin) {
-      profiles[key] = builtin;
-    } else {
-      delete profiles[key];
-    }
+    delete profiles[key];
   }
 }
 
@@ -123,12 +110,7 @@ export function unregisterDeviceProfilesByPack(sourcePack: string): void {
     }
     importedProfilesByPart.delete(key);
     importedSourceByPart.delete(key);
-    const builtin = builtinProfiles.get(key);
-    if (builtin) {
-      profiles[key] = builtin;
-    } else {
-      delete profiles[key];
-    }
+    delete profiles[key];
   }
 }
 
@@ -156,14 +138,8 @@ export function getDeviceProfile(part: string): DeviceProfile {
   return copyProfile(profile);
 }
 
-/** Lists only the built-in or imported profiles owned by one selected Pack. */
+/** Lists only the imported profiles owned by one selected Pack. */
 export function listDeviceProfilesForPack(sourcePack: string): DeviceProfile[] {
-  if (sourcePack.startsWith('builtin:')) {
-    const vendor = sourcePack.slice('builtin:'.length);
-    return [...builtinProfiles.values()]
-      .filter((profile) => profile.vendor === vendor)
-      .map(copyProfile);
-  }
   const normalizedSource = sourcePack.replace(/\\/g, '/');
   const owned = [...importedProfilesByPart.values()]
     .map((sources) => sources.get(normalizedSource))

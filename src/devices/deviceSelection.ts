@@ -1,7 +1,7 @@
 import type { DeviceProfile, DeviceSeries, DeviceVendor } from './deviceProfiles';
 import { getVendorMetadata } from './vendorRegistry';
 
-export type DevicePackOrigin = 'builtin' | 'installed' | 'imported' | 'downloadable';
+export type DevicePackOrigin = 'installed' | 'imported' | 'downloadable';
 
 export interface DevicePackOption {
   packId: string;
@@ -22,7 +22,6 @@ export interface DevicePackOption {
 
 export interface DevicePackCatalogInput {
   vendorId: string;
-  hasBuiltin: boolean;
   imported: Array<{
     packId: string;
     vendorId: string;
@@ -54,16 +53,6 @@ export interface DevicePackCatalogInput {
   }>;
 }
 
-const builtinSeriesOrder = [
-  'F0x', 'F1x', 'F2x', 'F3x', 'F4x', 'F7x', 'G0x', 'G4x', 'H7x',
-  'L0x', 'L1x', 'L4x', 'L5x', 'U5x', 'WBx', 'WLx'
-];
-
-function seriesRank(series: DeviceSeries): number {
-  const index = builtinSeriesOrder.indexOf(series);
-  return index === -1 ? builtinSeriesOrder.length : index;
-}
-
 export function listDeviceVendors(profiles: DeviceProfile[]): DeviceVendor[] {
   return [...new Set(profiles.map((profile) => profile.vendor))]
     .sort((left, right) =>
@@ -76,9 +65,7 @@ export function listDeviceSeries(profiles: DeviceProfile[], vendor: DeviceVendor
     profiles
       .filter((profile) => profile.vendor === vendor)
       .map((profile) => profile.series)
-  )].sort((left, right) =>
-    seriesRank(left) - seriesRank(right) || left.localeCompare(right)
-  );
+  )].sort((left, right) => left.localeCompare(right));
 }
 
 export function listDeviceProfilesForSeries(
@@ -96,16 +83,6 @@ export function buildDevicePackOptions(input: DevicePackCatalogInput): DevicePac
   const add = (option: DevicePackOption): void => {
     options.set(`${option.packId}\0${option.version}`, option);
   };
-
-  if (input.hasBuiltin) {
-    add({
-      packId: `builtin:${input.vendorId}`,
-      vendorId: input.vendorId,
-      name: '内置芯片支持',
-      version: 'builtin',
-      origin: 'builtin'
-    });
-  }
 
   for (const pack of input.imported) {
     if (pack.vendorId !== input.vendorId || pack.parts.length === 0) {
@@ -156,13 +133,11 @@ export function buildDevicePackOptions(input: DevicePackCatalogInput): DevicePac
     }
   }
 
-  return [...options.values()].sort((left, right) => {
-    if (left.origin === 'builtin') return -1;
-    if (right.origin === 'builtin') return 1;
-    return left.name.localeCompare(right.name)
-      || comparePackVersions(left.version, right.version)
-      || left.origin.localeCompare(right.origin);
-  });
+  return [...options.values()].sort((left, right) =>
+    left.name.localeCompare(right.name)
+    || comparePackVersions(left.version, right.version)
+    || left.origin.localeCompare(right.origin)
+  );
 }
 
 /** Numeric-aware Pack version ordering for catalog display and defaults. */

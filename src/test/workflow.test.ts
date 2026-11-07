@@ -3,7 +3,9 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { getDeviceProfile } from '../devices/deviceProfiles';
+import { fixtureDeviceProfile, registerFixtureVendors } from './support/fixtureDevice';
+
+registerFixtureVendors();
 import {
   generateLinuxWorkflow,
   generateMcuWorkflow,
@@ -40,7 +42,7 @@ test('MCU workflow writes one startup, one linker, and a relative result list', 
   await withWorkspace(async (root) => {
     const result = await generateMcuWorkflow(
       createHost(root),
-      getDeviceProfile('STM32F103C8T6'),
+      fixtureDeviceProfile(),
       {}
     );
 
@@ -58,7 +60,7 @@ test('MCU workflow preserves an existing user CMake section', async () => {
   await withWorkspace(async (root) => {
     const initial = await generateMcuWorkflow(
       createHost(root),
-      getDeviceProfile('STM32F103C8T6'),
+      fixtureDeviceProfile(),
       {}
     );
     assert.equal(initial.ok, true);
@@ -71,7 +73,7 @@ test('MCU workflow preserves an existing user CMake section', async () => {
 
     const result = await generateMcuWorkflow(
       createHost(root),
-      getDeviceProfile('STM32F103C8T6'),
+      fixtureDeviceProfile(),
       {}
     );
 
@@ -84,7 +86,7 @@ test('declining overwrite leaves generated files untouched', async () => {
   await withWorkspace(async (root) => {
     const first = await generateMcuWorkflow(
       createHost(root),
-      getDeviceProfile('STM32F103C8T6'),
+      fixtureDeviceProfile(),
       {}
     );
     assert.equal(first.ok, true);
@@ -93,7 +95,7 @@ test('declining overwrite leaves generated files untouched', async () => {
 
     const result = await generateMcuWorkflow(
       createHost(root, async () => false),
-      getDeviceProfile('STM32F103C8T6'),
+      fixtureDeviceProfile(),
       {}
     );
 

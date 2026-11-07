@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getDeviceProfile } from '../devices/deviceProfiles';
+import { fixtureDeviceProfile, gd32F103Profile, stm32F407Profile } from './support/fixtureDevice';
 import { generateCMakeLists } from '../generator/cmakeGenerator';
 import type { ProjectDescription } from '../scanner/projectScanner';
 
@@ -11,7 +11,7 @@ test('generates a CMake project for GD32F103C8T6', () => {
     defines: ['GD32F10X_MD', 'VECT_TAB_OFFSET']
   };
 
-  const cmake = generateCMakeLists('firmware', project, getDeviceProfile('GD32F103C8T6'));
+  const cmake = generateCMakeLists('firmware', project, gd32F103Profile());
 
   assert.match(cmake, /project\(\$\{CMAKE_PROJECT_NAME\} C ASM\)/);
   assert.match(cmake, /set\(CMAKE_C_STANDARD 11\)[\s\S]*project\(\$\{CMAKE_PROJECT_NAME\} C ASM\)/);
@@ -36,7 +36,7 @@ test('enables CXX when the project contains C++ sources', () => {
     defines: []
   };
 
-  const cmake = generateCMakeLists('firmware', project, getDeviceProfile('GD32F103C8T6'));
+  const cmake = generateCMakeLists('firmware', project, gd32F103Profile());
 
   assert.match(cmake, /project\(\$\{CMAKE_PROJECT_NAME\} C CXX ASM\)/);
 });
@@ -48,7 +48,7 @@ test('replaces legacy startup sources with the generated GNU startup file', () =
     defines: []
   };
 
-  const cmake = generateCMakeLists('firmware', project, getDeviceProfile('GD32F103C8T6'));
+  const cmake = generateCMakeLists('firmware', project, gd32F103Profile());
 
   assert.doesNotMatch(cmake, /startup_gd32f10x_md\.s/);
   assert.match(cmake, /MCU_PROJECT_ROOT.*startup_gd32f10x_md\.S/s);
@@ -61,7 +61,7 @@ test('uses the selected STM32 startup, linker, and definitions in CMake', () => 
     defines: []
   };
 
-  const cmake = generateCMakeLists('firmware', project, getDeviceProfile('STM32F407VGT6'));
+  const cmake = generateCMakeLists('firmware', project, stm32F407Profile());
 
   assert.match(cmake, /startup_stm32f407xx\.S/);
   assert.doesNotMatch(cmake, /startup_stm32f407xx\.s/);
@@ -81,7 +81,7 @@ test('does not generate the STM32 HAL legacy or clock macros', () => {
     ]
   };
 
-  const cmake = generateCMakeLists('firmware', project, getDeviceProfile('STM32F407VGT6'));
+  const cmake = generateCMakeLists('firmware', project, stm32F407Profile());
 
   assert.match(cmake, /^\s+USE_HAL_DRIVER\s*$/m);
   assert.doesNotMatch(cmake, /^\s+STM32_HAL_LEGACY\s*$/m);
@@ -96,7 +96,7 @@ test('generates an English documented user code section for custom CMake setting
     defines: []
   };
 
-  const cmake = generateCMakeLists('firmware', project, getDeviceProfile('STM32L496VET6'));
+  const cmake = generateCMakeLists('firmware', project, fixtureDeviceProfile({ part: 'STM32L496VET6' }));
 
   assert.match(cmake, /# CMAKE-EMBEDDED USER CODE BEGIN/);
   assert.match(cmake, /# Add user-defined library search paths[\s\S]*target_link_directories\(\$\{CMAKE_PROJECT_NAME\} PRIVATE[\s\S]*\)/);
@@ -119,7 +119,7 @@ test('preserves the user code section when regenerating CMakeLists.txt', () => {
     includeDirs: [],
     defines: []
   };
-  const profile = getDeviceProfile('STM32L496VET6');
+  const profile = fixtureDeviceProfile({ part: 'STM32L496VET6' });
   const initial = generateCMakeLists('firmware', project, profile);
   const userSection = `# CMAKE-EMBEDDED USER CODE BEGIN
 target_compile_definitions(firmware PRIVATE USER_FEATURE=1)
@@ -152,7 +152,7 @@ test('upgrades the previous empty user code section to active CMake blocks', () 
     includeDirs: [],
     defines: []
   };
-  const profile = getDeviceProfile('GD32F103C8T6');
+  const profile = gd32F103Profile();
   const initial = generateCMakeLists('firmware', project, profile);
   const previousEmptySection = `# CMAKE-EMBEDDED USER CODE BEGIN
 # Add custom compiler definitions, include directories, source files,

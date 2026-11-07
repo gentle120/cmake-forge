@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
-import { getDeviceProfile } from '../devices/deviceProfiles';
 import { getFlashProbeProfile, listFlashProbeProfiles } from '../flash/probeProfiles';
 import {
   getFlashTargetProfile,
@@ -12,6 +11,9 @@ import {
   listFlashTargetsForSeries
 } from '../flash/targets/targetProfiles';
 import { generateFlashScript } from '../generator/flashScriptGenerator';
+import { fixtureDeviceProfile, registerFixtureVendors } from './support/fixtureDevice';
+
+registerFixtureVendors();
 
 function assertPythonSyntax(script: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -54,7 +56,6 @@ test('keeps the flash target database independent from build profiles', () => {
 
   assert.ok(targets.length > 13);
   assert.equal(getFlashTargetProfile('stm32g0xx').targetConfig, 'target/stm32g0x.cfg');
-  assert.throws(() => getDeviceProfile('STM32G0XX'), /Unsupported MCU/);
   assert.equal(getFlashTargetProfile('stm32f1xx').targetConfig, 'target/stm32f1x.cfg');
   assert.equal(getFlashTargetProfile('stm32l4xx').targetConfig, 'target/stm32l4x.cfg');
   assert.equal(getFlashTargetProfile('gd32f1xx').targetConfig, 'target/stm32f1x.cfg');
@@ -64,11 +65,15 @@ test('keeps the flash target database independent from build profiles', () => {
 
 test('maps a selected build device to its OpenOCD target for one-click generation', () => {
   assert.equal(
-    getFlashTargetProfileForDevice(getDeviceProfile('GD32F103C8T6')).id,
+    getFlashTargetProfileForDevice(
+      fixtureDeviceProfile({ vendor: 'GD', part: 'GD32F103C8T6', family: 'GD32F10x', defines: ['GD32F10X_MD'] })
+    ).id,
     'gd32f1xx'
   );
   assert.equal(
-    getFlashTargetProfileForDevice(getDeviceProfile('STM32L496VET6')).id,
+    getFlashTargetProfileForDevice(
+      fixtureDeviceProfile({ part: 'STM32L496VET6', series: 'L4x', debugTarget: 'stm32l4x' })
+    ).id,
     'stm32l4xx'
   );
 });

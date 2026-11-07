@@ -238,6 +238,25 @@ test('accepts plus-spelled full-name Dcore values', () => {
   assert.equal(pack.devices[0].error, undefined);
 });
 
+test('maps PDSC memory access attributes onto additional regions', () => {
+  const pdsc = wrapPdsc(`      <device Dname="GD32F450VGT6">
+        <processor Dcore="Cortex-M4"/>
+        <memory id="IROM1" start="0x08000000" size="0x100000"/>
+        <memory id="IRAM1" start="0x20000000" size="0x40000"/>
+        <memory id="TCMSRAM" access="rwx" start="0x10000000" size="0x10000"/>
+        <memory id="QRAM" start="0x10020000" size="0x8000"/>
+        <debug svd="ARMCM0.svd"/>
+      </device>`);
+  const pack = parsePack(
+    buildZip([{ name: 'ARM.Cortex_DFP.pdsc', data: pdsc }, { name: 'ARMCM0.svd', data: cortexSvd }])
+  );
+
+  assert.deepEqual(pack.devices[0].additionalMemory, [
+    { name: 'TCMSRAM', attributes: 'rwx', origin: 0x10000000, length: 0x10000 },
+    { name: 'QRAM', attributes: 'rw', origin: 0x10020000, length: 0x8000 }
+  ]);
+});
+
 test('reports an importable device only when core, memory, and an interrupt source exist', () => {
   const componentPdsc = `<?xml version="1.0" encoding="utf-8"?>
 <package><vendor>ARM</vendor><name>CMSIS</name><release version="6.3.0"/></package>`;
