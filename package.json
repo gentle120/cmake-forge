@@ -105,6 +105,11 @@
           "type": "string",
           "default": "pyocd",
           "description": "pyOCD executable used to flash CMSIS-Pack devices with ST-Link or DAPLink probes."
+        },
+        "cmakeEmbedded.packMirror": {
+          "type": "string",
+          "default": "",
+          "description": "Pack 下载镜像根地址（可选）。形如 https://mirror.example.com/cmsis 的扁平目录，按 <vendor>.<name>.<version>.pack 提供文件。留空时直连官方 CDN。"
         }
       }
     }

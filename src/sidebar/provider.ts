@@ -161,6 +161,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     return sanitizeSidebarSelection(this.selectionValue, this.selectionValue, this.packOptions);
   }
 
+  /**
+   * Mirrors a long-running operation's progress into the sidebar badge, so the
+   * download is visible where the user started it and not only in the corner
+   * notification.
+   */
+  reportProgress(message: string): void {
+    this.post({ type: 'operationProgress', message });
+  }
+
   refresh(): void {
     this.postState();
     // A sidebar operation refreshes the catalog once it has finished; reloading

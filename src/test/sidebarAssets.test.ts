@@ -341,6 +341,40 @@ test('cancelled workspace scans keep the previous count instead of reporting zer
   assert.equal(summary.textContent, previous);
 });
 
+test('download progress replaces the busy badge text and clears on finish', () => {
+  const harness = startSidebar(baseState());
+  const pack = harness.element('install-pack-online');
+  pack.dispatch('click', { target: pack });
+
+  harness.send({ type: 'operationStarted', operation: '正在在线安装 Pack' });
+  const status = harness.element('generation-status');
+  assert.equal(status.textContent, '正在在线安装 Pack');
+
+  // The same percentages the notification reports must reach the sidebar.
+  harness.send({
+    type: 'operationProgress',
+    message: '正在下载 Keil.STM32F1xx_DFP 2.4.1：4.0 MB / 47.9 MB（8%）'
+  });
+  assert.equal(status.textContent, '正在下载 Keil.STM32F1xx_DFP 2.4.1：4.0 MB / 47.9 MB（8%）');
+  assert.match(status.className, /busy/);
+
+  harness.send({
+    type: 'operationFinished',
+    result: { ok: true, message: '在线安装完成', files: [] }
+  });
+  assert.equal(status.textContent, '已完成');
+});
+
+test('an empty progress message leaves the badge untouched', () => {
+  const harness = startSidebar(baseState());
+  const pack = harness.element('install-pack-online');
+  pack.dispatch('click', { target: pack });
+  harness.send({ type: 'operationStarted', operation: '正在在线安装 Pack' });
+
+  harness.send({ type: 'operationProgress', message: '' });
+  assert.equal(harness.element('generation-status').textContent, '正在在线安装 Pack');
+});
+
 test('failure messages stay visible and focus returns to the initiating control', () => {
   const harness = startSidebar(baseState());
   const generate = harness.element('generate-project');

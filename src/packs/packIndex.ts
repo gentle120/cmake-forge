@@ -1,6 +1,10 @@
 import { XMLParser } from 'fast-xml-parser';
 import { packVendorId } from './packIdentity';
 import { comparePackVersions } from '../shared/packVersion';
+import type { FetchLike } from './fetchTypes';
+import { isCancellationError, RequestTimeoutError } from './fetcher';
+
+export type { FetchLike } from './fetchTypes';
 
 export interface PackIndexPack {
   name: string;
@@ -21,29 +25,60 @@ export interface PackSearchCacheEntry {
   expiresAt: number;
 }
 
-/**
- * Minimal subset of the DOM fetch Response consumed here.
- *
- * `signal` is the caller's cancellation signal: the fetcher must abort the
- * request when it fires, so cancelling a progress notification really stops the
- * network work instead of letting it run to completion.
- */
-export type FetchLike = (url: string, signal?: AbortSignal) => Promise<{
-  ok: boolean;
-  status: number;
-  text(): Promise<string>;
-  arrayBuffer(): Promise<ArrayBuffer>;
-}>;
-
 // The complete public CMSIS pack index. The vendor-specific keil.pidx only
 // lists Keil-hosted packs and therefore cannot serve chip vendors such as
 // GigaDevice or STMicroelectronics, whose DFPs are hosted by the vendor.
+//
+// keil.com is a redirect front door: the index it serves is a 302 to this blob.
+// Reading the origin directly saves a TCP+TLS hop to a host that is slow from
+// mainland China; the front-door URL stays as the fallback.
 const packIndexUrl = 'https://www.keil.com/pack/index.pidx';
+const packIndexOrigins = [
+  'https://sadevicepacksdqaus.blob.core.windows.net/idxfile/index.pidx',
+  packIndexUrl
+];
 const indexTtlMs = 5 * 60 * 1000;
 
 type XmlNode = Record<string, unknown>;
 
 const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
+
+/**
+ * Reads the index from the first origin that answers.
+ *
+ * The front door and its origin serve identical bytes, so a failure on one is
+ * retried on the next; cancellation and timeouts stop immediately instead of
+ * burning the remaining origins.
+ */
+async function fetchIndexDocument(
+  fetcher: FetchLike,
+  signal?: AbortSignal
+): Promise<string> {
+  let lastError: unknown;
+  for (const url of packIndexOrigins) {
+    if (signal?.aborted) {
+      throw new Error('Pack search cancelled.');
+    }
+    try {
+      const response = await fetcher(url, { signal });
+      if (!response.ok || response.status < 200 || response.status >= 300) {
+        throw new Error(`Failed to fetch pack index ${url}: HTTP ${response.status}`);
+      }
+      return await respondText(response, signal);
+    } catch (error) {
+      if (isCancellationError(error) || signal?.aborted) {
+        throw error;
+      }
+      if (error instanceof RequestTimeoutError) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Failed to fetch pack index ${packIndexUrl}`);
+}
 
 /**
  * Fetches the CMSIS pack index and flattens its
@@ -65,11 +100,7 @@ export async function listPackIndexPacks(
   if (cached && cached.expiresAt > Date.now()) {
     return cached.packs;
   }
-  const response = await fetcher(packIndexUrl, signal);
-  if (!response.ok || response.status < 200 || response.status >= 300) {
-    throw new Error(`Failed to fetch pack index ${packIndexUrl}: HTTP ${response.status}`);
-  }
-  const document = xmlParser.parse(await respondText(response, signal)) as unknown;
+  const document = xmlParser.parse(await fetchIndexDocument(fetcher, signal)) as unknown;
   const packs: PackIndexPack[] = [];
   const seen = new Set<string>();
   for (const node of collectEntries(document, { pdsc: true })) {
@@ -151,18 +182,6 @@ export async function searchPacks(
     ));
 }
 
-export async function downloadPack(
-  fetcher: FetchLike,
-  packUrl: string,
-  signal?: AbortSignal
-): Promise<Buffer> {
-  const response = await fetcher(packUrl, signal);
-  if (!response.ok || response.status < 200 || response.status >= 300) {
-    throw new Error(`Failed to download pack ${packUrl}: HTTP ${response.status}`);
-  }
-  return Buffer.from(await respondArrayBuffer(response, signal));
-}
-
 /**
  * Reads a response body, rejecting as soon as the caller's signal fires. A
  * fetcher that aborts correctly rejects before this runs, but a body that is
@@ -173,13 +192,6 @@ function respondText(
   signal?: AbortSignal
 ): Promise<string> {
   return guardCancellation(response.text(), signal);
-}
-
-function respondArrayBuffer(
-  response: { arrayBuffer(): Promise<ArrayBuffer> },
-  signal?: AbortSignal
-): Promise<ArrayBuffer> {
-  return guardCancellation(response.arrayBuffer(), signal);
 }
 
 function guardCancellation<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {

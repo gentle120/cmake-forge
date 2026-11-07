@@ -24,6 +24,7 @@ export type SidebarOutgoingMessage =
       notice?: string;
     }
   | { type: 'operationStarted'; operation: string }
+  | { type: 'operationProgress'; message: string }
   | {
       type: 'operationFinished';
       result: {

@@ -655,6 +655,12 @@
       setBusy(true, message.operation);
       return;
     }
+    if (message.type === 'operationProgress') {
+      if (typeof message.message === 'string' && message.message) {
+        setStatusBadge('busy', message.message);
+      }
+      return;
+    }
     if (message.type === 'operationFinished') {
       finishOperation(message.result);
       return;

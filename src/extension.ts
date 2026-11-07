@@ -37,12 +37,12 @@ import {
 } from './packs/installedPacks';
 import { buildPackVendorOptions } from './packs/vendorOptions';
 import {
-  downloadPack,
   listPackIndexPacks,
   searchPacks,
   selectPacksForSelection,
   type PackSearchCacheEntry
 } from './packs/packIndex';
+import { describeDownloadProgress, downloadPack } from './packs/packDownloads';
 import {
   createTimeoutFetcher,
   describeTimeout,
@@ -307,6 +307,17 @@ function getOpenOcdPath(): string {
     .get<string>('openocdPath', 'openocd')?.trim() || 'openocd';
 }
 
+/**
+ * Optional Pack mirror root. Mainland networks reach the Keil CDN slowly enough
+ * that a large DFP can take minutes, so a LAN or domestic mirror can be pointed at
+ * a flat directory of `<vendor>.<name>.<version>.pack` archives instead.
+ */
+function getPackMirror(): string | undefined {
+  const configured = vscode.workspace.getConfiguration('cmakeEmbedded')
+    .get<string>('packMirror', '')?.trim();
+  return configured ? configured : undefined;
+}
+
 let packStorageRoot = '';
 let activeSidebar: SidebarProvider | undefined;
 const packFileByPart = new Map<string, string>();
@@ -490,7 +501,9 @@ async function activateDevicePack(
         );
       }
     } else if (option.origin === 'downloadable' && option.packUrl) {
-      const buffer = await downloadPack(downloadFetcher, option.packUrl);
+      const buffer = await downloadPack(downloadFetcher, option.packUrl, {
+        mirror: getPackMirror()
+      });
       const fileName = option.packUrl.split('/').pop() ?? `${option.name}.${option.version}.pack`;
       importedResult = await importPack(buffer, fileName, packStorageRoot, {
         name: option.name,
@@ -642,11 +655,32 @@ async function downloadIndexedPack(pack: {
       title: `正在下载 ${pack.name} ${pack.version}…`,
       cancellable: true
     },
-    (_progress, token) => {
+    (progress, token) => {
       const controller = new AbortController();
       const cancellation = token.onCancellationRequested(() => controller.abort());
-      return downloadPack(downloadFetcher, pack.packUrl, controller.signal)
-        .finally(() => cancellation.dispose());
+      // The notification bar advances by deltas, so the last reported percentage
+      // is tracked here instead of sending the absolute fraction each time.
+      let reportedPercent = 0;
+      return downloadPack(downloadFetcher, pack.packUrl, {
+        signal: controller.signal,
+        mirror: getPackMirror(),
+        onProgress: (state) => {
+          const described = describeDownloadProgress(state);
+          const percent = described.fraction === undefined
+            ? undefined
+            : Math.floor(described.fraction * 100);
+          const increment = percent === undefined ? 0 : Math.max(0, percent - reportedPercent);
+          if (percent !== undefined) {
+            reportedPercent = percent;
+          }
+          progress.report(increment > 0
+            ? { message: described.message, increment }
+            : { message: described.message });
+          activeSidebar?.reportProgress(
+            `正在下载 ${pack.name} ${pack.version}：${described.message}`
+          );
+        }
+      }).finally(() => cancellation.dispose());
     }
   );
   return {

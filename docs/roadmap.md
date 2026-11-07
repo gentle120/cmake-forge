@@ -9,13 +9,12 @@ This file is a compact relay ledger, not a history log. Stable facts belong in `
 
 ## Current Batch
 
-- Objective: 无正在执行的批次。
-- Status: `idle`
+- Objective: 按同一在线安装模式扩展 CH32/WCH：其器件包不在 CMSIS 公开索引中，需确认官方直链或另一可用索引来源后接入插件内下载。
+- Status: `ready`
 
 ## Next Batch
 
-- Objective: 按同一在线安装模式扩展 CH32/WCH：其器件包不在 CMSIS 公开索引中，需确认官方直链或另一可用索引来源后接入插件内下载。
-- Status: `ready`
+- Objective: None scheduled.
 
 ## Maintenance Rules
 

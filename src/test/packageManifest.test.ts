@@ -28,6 +28,16 @@ test('uses the extension name in command and settings display titles', () => {
   assert.ok(!manifest.extensionDependencies.includes('marus25.cortex-debug'));
 });
 
+test('exposes the Pack mirror as an optional setting', () => {
+  const manifest = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8'));
+  const mirror = manifest.contributes.configuration.properties['cmakeEmbedded.packMirror'];
+
+  // A mirror is an opt-in speedup, never a requirement: the default stays empty
+  // so an install with no configuration still goes straight to the CDN.
+  assert.equal(mirror.type, 'string');
+  assert.equal(mirror.default, '');
+});
+
 test('registers every contributed command in the extension host', () => {
   const manifest = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8'));
   const source = readFileSync(join(__dirname, '..', '..', 'src', 'extension.ts'), 'utf8');

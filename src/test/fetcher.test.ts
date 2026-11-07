@@ -7,6 +7,7 @@ import {
   isTransientNetworkError,
   RequestTimeoutError
 } from '../packs/fetcher';
+import type { FetchLike } from '../packs/fetchTypes';
 
 function networkError(code: string): Error {
   return Object.assign(new Error('fetch failed'), { cause: { code } });
@@ -22,7 +23,7 @@ test('a transient connection failure is retried once', async () => {
     return { ok: true, status: 200, text: async () => '', arrayBuffer: async () => new ArrayBuffer(0) };
   };
 
-  const fetcher = createTimeoutFetcher(1000, fetchImpl as unknown as typeof fetch);
+  const fetcher = createTimeoutFetcher(1000, fetchImpl as unknown as FetchLike);
   const response = await fetcher('https://example.test/index.pidx');
 
   assert.equal(response.status, 200);
@@ -38,8 +39,8 @@ test('a cancellation is never retried', async () => {
   const controller = new AbortController();
   controller.abort();
 
-  const fetcher = createTimeoutFetcher(1000, fetchImpl as unknown as typeof fetch);
-  await assert.rejects(fetcher('https://example.test/pack', controller.signal), /aborted/);
+  const fetcher = createTimeoutFetcher(1000, fetchImpl as unknown as FetchLike);
+  await assert.rejects(fetcher('https://example.test/pack', { signal: controller.signal }), /aborted/);
   assert.equal(attempts, 1);
 });
 
@@ -50,7 +51,7 @@ test('a non-transient failure is not retried', async () => {
     throw networkError('ENOTFOUND');
   };
 
-  const fetcher = createTimeoutFetcher(1000, fetchImpl as unknown as typeof fetch);
+  const fetcher = createTimeoutFetcher(1000, fetchImpl as unknown as FetchLike);
   await assert.rejects(fetcher('https://example.test/pack'), /fetch failed/);
   assert.equal(attempts, 1);
 });
@@ -85,8 +86,8 @@ test('the caller signal aborts the in-flight request', async () => {
     });
   };
 
-  const fetcher = createTimeoutFetcher(60_000, fetchImpl as unknown as typeof fetch);
-  const pending = fetcher('https://example.test/pack', controller.signal);
+  const fetcher = createTimeoutFetcher(60_000, fetchImpl as unknown as FetchLike);
+  const pending = fetcher('https://example.test/pack', { signal: controller.signal });
   controller.abort();
 
   await assert.rejects(pending, /aborted/);
@@ -94,12 +95,12 @@ test('the caller signal aborts the in-flight request', async () => {
 });
 
 /** A fetch that never answers, so only the wrapper's own timer can settle it. */
-function hangingFetch(): typeof fetch {
+function hangingFetch(): FetchLike {
   return ((_url: string, init?: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
     init?.signal?.addEventListener('abort', () => {
       reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' }));
     }, { once: true });
-  })) as unknown as typeof fetch;
+  })) as unknown as FetchLike;
 }
 
 test('the fetcher timeout is a failure, not a user cancellation', async () => {
@@ -123,7 +124,7 @@ test('a timeout is not retried', async () => {
         reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' }));
       }, { once: true });
     });
-  }) as unknown as typeof fetch;
+  }) as unknown as FetchLike;
 
   await assert.rejects(createTimeoutFetcher(20, hanging)('https://example.test/pack'), RequestTimeoutError);
   assert.equal(attempts, 1);
@@ -133,7 +134,7 @@ test('a caller cancellation still aborts and stays a cancellation', async () => 
   const controller = new AbortController();
   const pending = createTimeoutFetcher(60_000, hangingFetch())(
     'https://example.test/pack',
-    controller.signal
+    { signal: controller.signal }
   );
   controller.abort();
 

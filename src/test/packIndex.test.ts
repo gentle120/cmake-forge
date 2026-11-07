@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  downloadPack,
   listPackIndexPacks,
   searchPacks,
   selectPacksForSelection,
@@ -9,12 +8,20 @@ import {
 } from '../packs/packIndex';
 
 const PACK_INDEX_URL = 'https://www.keil.com/pack/index.pidx';
+// The reader prefers the origin host the front door redirects to.
+const INDEX_ORIGIN_URL = 'https://sadevicepacksdqaus.blob.core.windows.net/idxfile/index.pidx';
 
 interface FetchStub {
   ok: boolean;
   status: number;
   textBody?: string;
   binaryBody?: Uint8Array;
+  headers?: Record<string, string>;
+}
+
+function headersOf(source: Record<string, string> = {}): { get(name: string): string | null } {
+  const lowered = new Map(Object.entries(source).map(([key, value]) => [key.toLowerCase(), value]));
+  return { get: (name) => lowered.get(name.toLowerCase()) ?? null };
 }
 
 /** The format keil.com has served since 2026: <pindex> with direct <pdsc> entries. */
@@ -38,28 +45,30 @@ const packIndexXml = `<?xml version="1.0" encoding="UTF-8" ?>
   </pindex>
 </index>`;
 
-const packBytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00]);
+function response(
+  stub: FetchStub | undefined
+): Awaited<ReturnType<FetchLike>> {
+  return {
+    ok: stub?.ok ?? false,
+    status: stub?.status ?? 404,
+    headers: headersOf(stub?.headers),
+    body: null,
+    text: async () => stub?.textBody ?? '',
+    arrayBuffer: async () => (stub?.binaryBody ?? new Uint8Array()).slice().buffer as ArrayBuffer
+  };
+}
 
 function createFetcher(stubs: Record<string, FetchStub>): { fetcher: FetchLike; requestedUrls: string[] } {
   const requestedUrls: string[] = [];
   const fetcher: FetchLike = async (url) => {
     requestedUrls.push(url);
-    const stub = stubs[url];
-    if (!stub) {
-      return { ok: false, status: 404, text: async () => '', arrayBuffer: async () => new ArrayBuffer(0) };
-    }
-    return {
-      ok: stub.ok,
-      status: stub.status,
-      text: async () => stub.textBody ?? '',
-      arrayBuffer: async () => (stub.binaryBody ?? new Uint8Array()).slice().buffer as ArrayBuffer
-    };
+    return response(stubs[url]);
   };
   return { fetcher, requestedUrls };
 }
 
 function indexStubs(): Record<string, FetchStub> {
-  return { [PACK_INDEX_URL]: { ok: true, status: 200, textBody: packIndexXml } };
+  return { [INDEX_ORIGIN_URL]: { ok: true, status: 200, textBody: packIndexXml } };
 }
 
 test('listPackIndexPacks flattens pindex pdsc entries into downloadable packs', async () => {
@@ -67,7 +76,7 @@ test('listPackIndexPacks flattens pindex pdsc entries into downloadable packs', 
   const packs = await listPackIndexPacks(fetcher);
 
   // The complete public index carries vendor-hosted packs, not just Keil's own.
-  assert.deepEqual(requestedUrls, [PACK_INDEX_URL]);
+  assert.deepEqual(requestedUrls, [INDEX_ORIGIN_URL]);
   // The CMSIS naming convention resolves the direct pack download URL, with a
   // slash inserted when the index root lacks one.
   assert.deepEqual(packs.slice(0, 2), [
@@ -154,15 +163,13 @@ test('searchPacks reuses a cached index between calls', async () => {
   await searchPacks(fetcher, 'keil', { cache });
   await searchPacks(fetcher, 'tm4c', { cache });
 
-  assert.deepEqual(requestedUrls, [PACK_INDEX_URL]);
+  assert.deepEqual(requestedUrls, [INDEX_ORIGIN_URL]);
 });
 
 test('searchPacks passes its signal to the fetcher and stops on abort', async () => {
   const signals: Array<AbortSignal | undefined> = [];
-  const fetcher: FetchLike = async (_url, signal) => {
-    signals.push(signal);
-    const controller = new AbortController();
-    controller.abort();
+  const fetcher: FetchLike = async (_url, init) => {
+    signals.push(init?.signal);
     // A fetcher that honours the signal rejects like fetch does.
     throw Object.assign(new Error('This operation was aborted'), { name: 'AbortError' });
   };
@@ -174,6 +181,28 @@ test('searchPacks passes its signal to the fetcher and stops on abort', async ()
   );
   assert.equal(signals.length, 1);
   assert.equal(signals[0], controller.signal);
+});
+
+test('falls back to the front door when the index origin fails', async () => {
+  // Both hosts serve identical bytes, so one dead origin must not fail the search.
+  const { fetcher, requestedUrls } = createFetcher({
+    [INDEX_ORIGIN_URL]: { ok: false, status: 503 },
+    [PACK_INDEX_URL]: { ok: true, status: 200, textBody: packIndexXml }
+  });
+
+  const packs = await listPackIndexPacks(fetcher);
+
+  assert.equal(packs.length > 0, true);
+  assert.deepEqual(requestedUrls, [INDEX_ORIGIN_URL, PACK_INDEX_URL]);
+});
+
+test('a cancelled index read does not try the remaining origin', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const { fetcher, requestedUrls } = createFetcher(indexStubs());
+
+  await assert.rejects(listPackIndexPacks(fetcher, undefined, controller.signal), /cancelled/);
+  assert.deepEqual(requestedUrls, []);
 });
 
 test('searchPacks throws before fetching when already cancelled', async () => {
@@ -192,47 +221,11 @@ test('repeated index entries are collapsed', async () => {
     + 'name="GD32F4xx_DFP" version="3.0.3" />\n  </pindex>'
   );
   const { fetcher } = createFetcher({
-    [PACK_INDEX_URL]: { ok: true, status: 200, textBody: duplicated }
+    [INDEX_ORIGIN_URL]: { ok: true, status: 200, textBody: duplicated }
   });
 
   const packs = await listPackIndexPacks(fetcher);
   const identities = packs.map((pack) => `${pack.vendorName}.${pack.name}.${pack.version}`);
   assert.equal(new Set(identities).size, identities.length);
   assert.equal(packs.filter((pack) => pack.name === 'GD32F4xx_DFP').length, 1);
-});
-
-test('downloadPack returns the raw pack bytes and rejects on non-2xx', async () => {
-  const packUrl = 'https://www.keil.com/pack/Keil.ARM_Compiler.1.7.2.pack';
-  const { fetcher } = createFetcher({
-    [packUrl]: { ok: true, status: 200, binaryBody: packBytes }
-  });
-  const buffer = await downloadPack(fetcher, packUrl);
-  assert.ok(Buffer.isBuffer(buffer));
-  assert.ok(Buffer.from(packBytes).equals(buffer));
-
-  await assert.rejects(downloadPack(fetcher, 'https://www.keil.com/pack/missing.pack'), /HTTP 404/);
-});
-
-test('downloadPack forwards the signal so a cancelled install stops downloading', async () => {
-  const packUrl = 'https://www.keil.com/pack/Keil.STM32F1xx_DFP.2.4.1.pack';
-  let received: AbortSignal | undefined;
-  const fetcher: FetchLike = async (_url, signal) => {
-    received = signal;
-    // Model a response whose body is still streaming when the user cancels.
-    const controller = new AbortController();
-    controller.abort();
-    return {
-      ok: true,
-      status: 200,
-      text: async () => '',
-      arrayBuffer: async () => new Promise<ArrayBuffer>((_resolve, reject) => {
-        controller.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
-      })
-    };
-  };
-  const controller = new AbortController();
-  controller.abort();
-
-  await assert.rejects(downloadPack(fetcher, packUrl, controller.signal), /cancelled/);
-  assert.equal(received, controller.signal);
 });

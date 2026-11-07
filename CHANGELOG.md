@@ -2,6 +2,13 @@
 
 ## 2.1.3
 
+- Show download progress while installing a pack online: the notification and the
+  sidebar badge report transferred size, total size, and percentage.
+- Download packs over a channel suited to mainland networks: Keil-hosted archives
+  skip the slow `www.keil.com` redirect and large archives are fetched in
+  parallel ranges with per-chunk retries, falling back to one streaming request.
+- Add the optional `cmakeEmbedded.packMirror` setting to serve packs from a flat
+  local or domestic mirror directory ahead of the public CDN.
 - Replace the built-in chip tables with CMSIS Pack parsing: every device profile
   comes from a pack's PDSC, so any 32-bit ARM MCU with a pack is supported.
 - Add dynamic vendor and series registries plus curated mainstream chip vendors,

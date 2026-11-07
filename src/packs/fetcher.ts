@@ -1,4 +1,4 @@
-import type { FetchLike } from './packIndex';
+import type { FetchLike } from './fetchTypes';
 
 /**
  * Connection-level failures worth one more attempt. The CMSIS index host and the
@@ -71,17 +71,17 @@ export function isCancellationError(error: unknown): boolean {
 }
 
 /**
- * Fetch wrapper with a fixed per-attempt timeout, an optional caller signal, and
- * one retry for connection-level failures.
+ * Fetch wrapper with a fixed per-attempt timeout, a caller signal, and one retry
+ * for connection-level failures.
  *
  * The caller's signal must abort the in-flight request: cancelling a progress
  * notification otherwise leaves a large pack download running to completion.
  */
 export function createTimeoutFetcher(
   timeoutMs: number,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: FetchLike = defaultFetch
 ): FetchLike {
-  return async (url, signal) => {
+  return async (url, init) => {
     for (let attempt = 0; ; attempt += 1) {
       const controller = new AbortController();
       let timedOut = false;
@@ -90,28 +90,33 @@ export function createTimeoutFetcher(
         controller.abort();
       }, timeoutMs);
       const forwardAbort = (): void => controller.abort();
-      if (signal) {
-        if (signal.aborted) {
+      const callerSignal = init?.signal;
+      if (callerSignal) {
+        if (callerSignal.aborted) {
           controller.abort();
         } else {
-          signal.addEventListener('abort', forwardAbort, { once: true });
+          callerSignal.addEventListener('abort', forwardAbort, { once: true });
         }
       }
       try {
-        return await fetchImpl(url, { signal: controller.signal });
+        return await fetchImpl(url, { ...init, signal: controller.signal });
       } catch (error) {
         // A timeout is a failure, not a user action: convert it before anyone can
         // mistake the shared AbortError for a cancellation.
-        if (timedOut && !signal?.aborted) {
+        if (timedOut && !callerSignal?.aborted) {
           throw new RequestTimeoutError(timeoutMs);
         }
-        if (attempt >= 1 || signal?.aborted || !isTransientNetworkError(error)) {
+        if (attempt >= 1 || callerSignal?.aborted || !isTransientNetworkError(error)) {
           throw error;
         }
       } finally {
         clearTimeout(timer);
-        signal?.removeEventListener('abort', forwardAbort);
+        callerSignal?.removeEventListener('abort', forwardAbort);
       }
     }
   };
 }
+
+/** Adapts the platform `fetch` to the narrow response shape used here. */
+const defaultFetch: FetchLike = (url, init) =>
+  fetch(url, init) as unknown as ReturnType<FetchLike>;

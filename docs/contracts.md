@@ -40,6 +40,9 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - pyOCD 的 pack 参数必须是真实存在的 `.pack` 文件；导入设备没有归档时省略 `--pack`，不得生成指向虚拟路径的配置。
 - 在线 Pack 搜索复用同一 TTL 缓存的索引；取消进度通知必须中断索引读取与 Pack 下载（请求随调用方 signal 中止，不再继续到完成），且取消后不再发起后续请求；连接级失败（连接超时、连接被重置、域名暂不可解析等）自动重试一次，取消与其它错误不重试。每个可下载版本都保留为独立条目，不折叠为最新版本。
 - 「用户取消」与「请求超时」是两种不同结局，不得合并呈现：fetcher 自身计时器到期必须以超时失败告终（`RequestTimeoutError`，并说明等待了多久），不得报告为已取消；用户取消仍返回 `cancelled` 且不弹错误提示。两者在 undici 中都表现为 AbortError，因此判别只能发生在 fetcher 内部（`src/packs/fetcher.ts`）。
+- Pack 下载通道按顺序尝试：配置的镜像（`cmakeEmbedded.packMirror`，扁平目录按 `<vendor>.<name>.<version>.pack` 提供文件）→ 索引发布地址改写后的 CDN 目标 → 索引里发布的原始地址。改写只作用于 `https://www.keil.com/pack/` 前缀（其 302 指向 `keilpack.azureedge.net/pack/`），厂商自托管地址（GD32/ST 等）必须原样请求。任一候选失败换下一个，取消与超时立即结束、不再换候选。
+- 下载必须报告进度：通知显示「已下载 / 总大小（百分比）」，侧栏状态徽标同步同一文案（`operationProgress`），完成或失败后回到常规状态。总大小来自 `Content-Range` 或 `Content-Length`；无法获知总量时只报已下载字节且不显示百分比，不得伪造进度。
+- 大包（≥2 MB 且服务端支持 `Range`）按 1 MB 分段并发下载（最多 8 路），每段独立重试、独立失败；小包与不支持 Range 的主机仍走单次请求（`200` 响应视为完整归档，不得当作分片）。重组后必须校验总长度与分段齐全，缺段即失败。
 - 侧栏 MCU 选择为 vendor → series → pack → version → part：series 可在激活 Pack 前选择，来源为精选厂商系列目录（`src/devices/seriesCatalog.ts`，含各系列的 DFP 名与型号前缀）与本地包系列；选定系列后自动解析并激活本地对应 Pack（imported 按档案系列/型号前缀匹配，installed 按 DFP 名匹配），无匹配时提示确定性安装途径；part 按目录型号前缀或系列过滤；不保留跨 vendor 残留。
 - Pack 目录条目按身份区分：`installed`、`imported`、`downloadable`；同一 packId+version 只展示一个条目，已安装/已导入优先于可下载。
 - 已安装 Pack 的身份取自 PDSC（`Dvendor`、包名、`release version`）；Keil 安装目录名或归档文件名不是最终身份，PDSC 无法解析的条目被跳过。
