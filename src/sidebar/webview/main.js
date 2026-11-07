@@ -560,6 +560,7 @@
   // One delegated dispatcher owns every static command button, so relocated or
   // reused markup cannot register a second listener for the same command.
   const commandLabels = {
+    importPack: '正在导入 Pack',
     scanWorkspace: '正在扫描工作区',
     generateProject: '正在生成工程',
     generateFlashScript: '正在生成 flash.py',

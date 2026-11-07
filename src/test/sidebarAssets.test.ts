@@ -149,6 +149,7 @@ test('sidebar renderer wires every supported command', () => {
     'saveSelection',
     'selectPack',
     'activatePack',
+    'importPack',
     'scanWorkspace',
     'cancelWorkspaceScan',
     'generateProject',
@@ -160,6 +161,17 @@ test('sidebar renderer wires every supported command', () => {
   }
   assert.doesNotMatch(scriptSource, /https?:\/\//);
   assert.doesNotMatch(scriptSource, /innerHTML/);
+});
+
+test('the import button dispatches importPack with its busy label', () => {
+  const harness = startSidebar(baseState());
+  const button = harness.byCommand('importPack')[0];
+  assert.ok(button, 'missing the import button');
+  button.dispatch('click', { target: button });
+  assert.equal(
+    harness.posted.filter((message) => message.type === 'importPack').length,
+    1
+  );
 });
 
 test('project selection sends the selected project root without starting a command', () => {
@@ -233,7 +245,7 @@ test('every command button is unique and its command is dispatched by the render
   assert.deepEqual(
     [...new Set(commands)].sort(),
     ['cancelWorkspaceScan', 'generateDebugConfiguration',
-      'generateFlashScript', 'generateProject', 'scanWorkspace']
+      'generateFlashScript', 'generateProject', 'importPack', 'scanWorkspace']
   );
   // One delegated listener owns the static commands; no per-button wiring remains.
   const catalogListeners = [...scriptSource.matchAll(/app\.addEventListener\('click'/g)];

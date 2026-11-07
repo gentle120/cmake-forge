@@ -21,14 +21,15 @@ interface ProviderHarness {
 function startProvider(
   initialSelection: unknown,
   dependencies: Record<string, unknown>,
-  writes: unknown[] = []
+  writes: unknown[] = [],
+  executeCommand: (id: string) => Promise<unknown> = async () => undefined
 ): ProviderHarness {
   const vscode = {
     workspace: {
       workspaceFolders: [{ name: 'workspace', uri: { fsPath: 'C:/workspace' } }],
       getConfiguration: () => ({ get: (_key: string, fallback: unknown) => fallback })
     },
-    commands: { executeCommand: async () => undefined }
+    commands: { executeCommand }
   };
   const api = loadHostModule<{
     SidebarProvider: new (context: object, dependencies: object) => {
@@ -95,6 +96,55 @@ function latestState(messages: Array<Record<string, unknown>>) {
     versions: Array<{ value: string; description?: string }>;
   } | undefined;
 }
+
+test('importing a Pack refreshes the catalog and auto-activates the best version', async () => {
+  const writes: unknown[] = [];
+  const sourcePack = 'packs/GD/GD32F1xx_DFP.pack';
+  registerDeviceProfiles([{
+    ...fixtureDeviceProfile({ vendor: 'GD', part: 'GD32F103C8T6', family: 'GD32F10x', defines: ['GD32F10X_MD'] })
+  }], sourcePack);
+  const activations: Array<[string, string, string]> = [];
+  const commands: string[] = [];
+  const provider = startProvider(undefined, {
+    loadPackCatalog: async () => ({
+      options: [{
+        packId: 'GD:GD32F1xx_DFP',
+        vendorId: 'GD',
+        name: 'GD32F1xx_DFP',
+        version: '2.4.1',
+        origin: 'installed',
+        packFile: 'C:/Keil/GD/GD32F1xx_DFP/2.4.1',
+        source: 'directory'
+      }]
+    }),
+    activatePack: async (vendor: string, packId: string, version: string) => {
+      activations.push([vendor, packId, version]);
+      return { vendorId: 'GD', packId, version, sourcePack, message: '已载入 GD32F1xx_DFP。' };
+    }
+  }, writes, async (id: string) => {
+    commands.push(id);
+    return { ok: true, message: 'Pack 导入完成' };
+  });
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    provider.receive({ type: 'importPack' });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.deepEqual(commands, ['cmakeEmbedded.importPack']);
+    assert.deepEqual(activations, [['', 'GD:GD32F1xx_DFP', '2.4.1']]);
+    const state = latestState(provider.messages);
+    assert.equal(state?.selection.mcu.vendor, 'GD');
+    assert.equal(state?.selection.mcu.packId, 'GD:GD32F1xx_DFP');
+    assert.equal(state?.selection.mcu.part, 'GD32F103C8T6');
+    assert.equal(
+      (writes.at(-1) as { mcu?: { packId?: string } } | undefined)?.mcu?.packId,
+      'GD:GD32F1xx_DFP'
+    );
+  } finally {
+    provider.dispose();
+    unregisterDeviceProfilesByPack(sourcePack);
+  }
+});
 
 test('sidebar shows the install hint when the selected vendor has no packs', async () => {
   const provider = startProvider(undefined, {

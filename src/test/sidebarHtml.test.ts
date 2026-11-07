@@ -54,12 +54,12 @@ test('does not render the extension-owned ARM path or CMake build controls', () 
   assert.doesNotMatch(html, /id="build-project"|data-command="buildProject"/);
 });
 
-test('presents Pack selection as the MCU target flow instead of a manual import action', () => {
+test('presents Pack selection as the MCU target flow with an inline import action', () => {
   const html = renderSidebarHtml(webview, extensionUri, 'nonce123');
 
   assert.match(html, /id="target-host"/);
   assert.match(html, /id="pack-catalog-notice"/);
-  assert.doesNotMatch(html, /id="import-pack-any"|data-command="importPack"/);
+  assert.match(html, /id="import-pack"|data-command="importPack"/);
 });
 
 test('renders the Chinese default titles', () => {

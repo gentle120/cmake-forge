@@ -1,8 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { curatedVendors } from '../devices/curatedVendors';
 import { buildPackVendorOptions } from '../packs/vendorOptions';
 
 const NO_LOCAL_PACK_HINT = '本地暂无此厂商的 Pack';
+
+test('the curated list starts with the three trial chip vendors', () => {
+  assert.deepEqual(curatedVendors, [
+    { id: 'STMicroelectronics', label: 'STM32' },
+    { id: 'WCH', label: 'CH32' },
+    { id: 'GigaDevice', label: 'GD32' }
+  ]);
+});
 
 test('curated vendors fill the list behind local sources and reuse curated labels', () => {
   const options = buildPackVendorOptions({

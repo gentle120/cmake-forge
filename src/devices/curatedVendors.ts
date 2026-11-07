@@ -14,13 +14,6 @@ export interface CuratedVendor {
 
 export const curatedVendors: CuratedVendor[] = [
   { id: 'STMicroelectronics', label: 'STM32' },
-  { id: 'GigaDevice', label: 'GD32' },
   { id: 'WCH', label: 'CH32' },
-  { id: 'NXP', label: 'NXP' },
-  { id: 'Infineon', label: 'Infineon' },
-  { id: 'Microchip', label: 'Microchip' },
-  { id: 'Texas_Instruments', label: 'TI' },
-  { id: 'Renesas', label: 'Renesas' },
-  { id: 'Silicon_Labs', label: 'Silicon Labs' },
-  { id: 'NordicSemi', label: 'Nordic' }
+  { id: 'GigaDevice', label: 'GD32' }
 ];

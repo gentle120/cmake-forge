@@ -280,7 +280,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.packCatalogNotice = catalogResult.notice || vendorResult?.notice || '';
       if (this.packOptions.length === 0 && this.packCatalogNotice === '') {
         this.packCatalogNotice =
-          '未找到该厂商的 Pack：请先用 Keil Pack Installer 安装器件包，或通过 Import CMSIS Pack 导入本地 .pack。';
+          '未找到该厂商的 Pack：请点击上方「导入 Pack 包」选择本地 .pack 文件，或先用 Keil Pack Installer 安装器件包。';
       }
 
       const selected = this.packOptions.find((option) =>
@@ -521,24 +521,30 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     };
   }
 
-  private async runGeneration(operation: string, run: () => Promise<WorkflowResult>): Promise<void> {
+  private async runGeneration(
+    operation: string,
+    run: () => Promise<WorkflowResult>
+  ): Promise<ReturnType<typeof normalizeResult> | undefined> {
     if (this.busy) {
-      return;
+      return undefined;
     }
     this.busy = true;
     this.post({ type: 'operationStarted', operation });
     try {
       const result = await run();
+      const normalized = normalizeResult(result);
       this.post({
         type: 'operationFinished',
-        result: normalizeResult(result)
+        result: normalized
       });
+      return normalized;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.post({
         type: 'operationFinished',
         result: { ok: false, message, files: [] }
       });
+      return { ok: false, message, files: [] };
     } finally {
       this.busy = false;
     }
@@ -675,10 +681,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       return;
     }
     if (message.type === 'importPack') {
-      await this.runGeneration('正在导入 Pack', async () => {
-        const result = await vscode.commands.executeCommand<CommandResult>('cmakeEmbedded.importPack');
-        return { kind: 'mcu', ...result, files: [] };
+      const result = await this.runGeneration('正在导入 Pack', async () => {
+        const commandResult = await vscode.commands.executeCommand<CommandResult>('cmakeEmbedded.importPack');
+        return { kind: 'mcu' as const, ...commandResult, files: [] };
       });
+      // A successful import must land in front of the user immediately: the
+      // catalog refresh reuses the vendor-change auto-activation so the
+      // imported pack's series and parts become selectable at once.
+      if (result?.ok) {
+        await this.refreshPackCatalog(this.selectionValue.mcu.vendor, true);
+      }
       this.postState();
       return;
     }

@@ -50,11 +50,10 @@ OpenOCD 烧录 target 独立选择，因此也可以给已有的自定义 CMake 
 数据：所有芯片档案都来自 CMSIS Pack 解析。首次使用请先在 Keil 中安装
 器件包、通过 `Import CMSIS Pack` 导入本地 `.pack` 文件，或从侧栏激活
 已安装的 Pack；离线时本地导入与已安装 Pack 仍然可用。
-厂商列表固定包含主流芯片厂商（STM32、GD32、CH32、NXP、Infineon、
-Microchip、TI、Renesas、Silicon Labs、Nordic），其中已在本地安装/导入
-器件包的厂商排在前面；选中本地暂缺的厂商时会提示先在 Keil Pack
-Installer 中安装对应器件包，或通过 `Import CMSIS Pack` 导入本地 `.pack`。
-安装后重新选择厂商即可自动导入，不含设备的组件包不会出现在列表中。
+厂商列表固定包含 STM32、CH32、GD32 三家，已在本地安装/导入器件包的厂商
+排在前面。选中厂商后点「导入 Pack 包…」即可选择本地 `.pack` 导入（导入
+成功后自动激活最新版本，系列与型号立即可选），或先在 Keil Pack
+Installer 中安装器件包后重新选择厂商。不含设备的组件包不会出现在列表中。
 切换到有已安装 Pack 的厂商时，会自动导入并选中其最新可用版本，系列与
 型号无需再手动导入即可选择。已安装目录中的 Pack 身份以 PDSC 的厂商与
 包名为准，Keil 目录名不是最终身份。
