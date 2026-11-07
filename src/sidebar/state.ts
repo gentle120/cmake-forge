@@ -5,7 +5,6 @@ import {
   type DeviceVendor
 } from '../devices/deviceProfiles';
 import {
-  buildDevicePackOptions,
   type DevicePackOption,
   listDeviceVendors
 } from '../devices/deviceSelection';
@@ -412,7 +411,7 @@ function deviceOptions(
   }));
 }
 
-export function optionsForPackSelection(
+function optionsForPackSelection(
   selection: SidebarSelection,
   packOptions: DevicePackOption[]
 ): {

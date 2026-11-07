@@ -12,7 +12,7 @@
  *   3. PATH scan for the supported compiler prefixes
  */
 
-import { accessSync, constants, existsSync, statSync } from 'node:fs';
+import { accessSync, constants, statSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, join } from 'node:path';
 import {
   getLinuxToolchainDefaults,
@@ -77,7 +77,7 @@ interface CrossCompileMatch {
  * Both `loongarch64-linux-gnu-` and `/opt/toolchain/bin/loongarch64-linux-gnu-`
  * are accepted, and a missing trailing dash is tolerated.
  */
-export function matchCrossCompile(value: string): CrossCompileMatch | undefined {
+function matchCrossCompile(value: string): CrossCompileMatch | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
     return undefined;

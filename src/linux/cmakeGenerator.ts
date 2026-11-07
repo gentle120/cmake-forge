@@ -7,12 +7,12 @@
  * no linker script, no startup file and no objcopy step.
  */
 
+import { indented, projectPath } from '../shared/cmakeText';
 import { preserveUserCodeSection, userCodeSection } from '../shared/userCodeSection';
 import type { LinuxProjectStructure } from './types';
 
 function quotedPath(value: string): string {
-  const normalized = value.replace(/\\/g, '/').replace(/"/g, '\\"');
-  return `"\${LINUX_PROJECT_ROOT}/${normalized}"`;
+  return projectPath('LINUX_PROJECT_ROOT', value);
 }
 
 function targetDeclaration(structure: LinuxProjectStructure): string {
@@ -23,10 +23,6 @@ function targetDeclaration(structure: LinuxProjectStructure): string {
     return `add_library(${structure.targetName} SHARED)`;
   }
   return `add_executable(${structure.targetName})`;
-}
-
-function indented(values: string[]): string {
-  return values.map((value) => `    ${value}`).join('\n');
 }
 
 export function generateLinuxCMakeLists(

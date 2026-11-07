@@ -1,12 +1,5 @@
 import type { DeviceProfile } from '../devices/deviceProfiles';
-
-function kilobytes(bytes: number): string {
-  return `${bytes / 1024}K`;
-}
-
-function hexadecimal(value: number): string {
-  return `0x${value.toString(16).toUpperCase().padStart(8, '0')}`;
-}
+import { hexadecimal, kilobytes } from '../shared/cmakeText';
 
 export function generateLinkerScript(profile: DeviceProfile): string {
   const flashOrigin = hexadecimal(profile.flash.origin);

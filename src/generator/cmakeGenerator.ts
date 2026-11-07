@@ -1,15 +1,8 @@
 import type { DeviceProfile } from '../devices/deviceProfiles';
 import { runtimeSourceNames } from './runtimeGenerator';
 import type { ProjectDescription } from '../scanner/projectScanner';
+import { projectPath } from '../shared/cmakeText';
 import { preserveUserCodeSection, userCodeSection } from '../shared/userCodeSection';
-
-function cmakePath(value: string): string {
-  return value.replace(/\\/g, '/').replace(/"/g, '\\"');
-}
-
-function projectPath(value: string): string {
-  return `"\${MCU_PROJECT_ROOT}/${cmakePath(value)}"`;
-}
 
 export function generateCMakeLists(
   projectName: string,
@@ -32,11 +25,13 @@ export function generateCMakeLists(
     .sort();
   const defineBlock = defines.map((define) => `    ${define}`).join('\n');
   const sourceBlock = sources
-    .map((source) => `    ${projectPath(source)}`)
+    .map((source) => `    ${projectPath('MCU_PROJECT_ROOT', source)}`)
     .join('\n');
   const includeBlock = project.includeDirs.length === 0
-    ? `    ${projectPath('.')}`
-    : project.includeDirs.map((directory) => `    ${projectPath(directory)}`).join('\n');
+    ? `    ${projectPath('MCU_PROJECT_ROOT', '.')}`
+    : project.includeDirs
+      .map((directory) => `    ${projectPath('MCU_PROJECT_ROOT', directory)}`)
+      .join('\n');
 
   const generated = `cmake_minimum_required(VERSION 3.22)
 

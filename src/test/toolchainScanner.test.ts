@@ -54,8 +54,21 @@ test('builds win32 scan roots from the environment', () => {
     'D:/Keil5/ARM/PACK'
   ]);
   assert.deepEqual(roots.cltRoots, ['C:/ST', 'C:/']);
-  assert.deepEqual(roots.seggerRoots, ['C:/Program Files/SEGGER']);
+  // J-Link is a 32-bit application, so it can live in either Program Files.
+  assert.deepEqual(roots.seggerRoots, [
+    'C:/Program Files/SEGGER',
+    'C:/Program Files (x86)/SEGGER'
+  ]);
   assert.deepEqual(roots.pathDirs, ['C:/tools/bin', 'C:/segger']);
+});
+
+test('honours a relocated Program Files when looking for SEGGER', () => {
+  const roots = defaultScanRoots('win32', {
+    ProgramFiles: 'D:/Apps',
+    'ProgramFiles(x86)': 'D:/Apps32'
+  }, 'C:/Users/dev');
+
+  assert.deepEqual(roots.seggerRoots, ['D:/Apps/SEGGER', 'D:/Apps32/SEGGER']);
 });
 
 test('includes detected drives without exposing standalone ARM GNU path scanning', () => {

@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import {
   getDeviceProfile,
-  getDeviceProfileForPack,
   isRuntimeDeviceProfile,
   listDeviceProfiles,
   type DeviceSeries,
@@ -42,9 +41,9 @@ import {
   listPackIndexPacks,
   searchPacks,
   selectPacksForSelection,
-  type FetchLike,
   type PackSearchCacheEntry
 } from './packs/packIndex';
+import { createTimeoutFetcher } from './packs/fetcher';
 import { curatedVendors } from './devices/curatedVendors';
 import { findCatalogSeries, seriesDownloadPage } from './devices/seriesCatalog';
 import { existsSync, readdirSync } from 'node:fs';
@@ -321,8 +320,58 @@ function ensureCatalogVendor(id: string, label: string): void {
   });
 }
 
-async function installedPackIdentities(): Promise<InstalledPackIdentity[]> {
-  return listInstalledPackIdentities(listKeilPacks(scanRoots().packRoots, scanFileSystem));
+/**
+ * Installed-Pack identities, memoized for one catalog refresh.
+ *
+ * Resolving identities reads and parses every installed PDSC, which measures at
+ * roughly a second on a real Keil installation. A single vendor switch asks for
+ * them twice (vendor list and pack catalog), so the scan is shared rather than
+ * repeated. Any operation that changes the store drops the entry explicitly; the
+ * short window only covers back-to-back refreshes.
+ */
+const installedIdentitiesTtlMs = 2000;
+let installedIdentitiesCache:
+  { at: number; value: Promise<InstalledPackIdentity[]> } | undefined;
+
+function installedPackIdentities(): Promise<InstalledPackIdentity[]> {
+  const now = Date.now();
+  if (installedIdentitiesCache && now - installedIdentitiesCache.at < installedIdentitiesTtlMs) {
+    return installedIdentitiesCache.value;
+  }
+  const value = listInstalledPackIdentities(listKeilPacks(scanRoots().packRoots, scanFileSystem));
+  installedIdentitiesCache = { at: now, value };
+  // A failed scan must not poison the next refresh.
+  void value.catch(() => {
+    if (installedIdentitiesCache?.value === value) {
+      installedIdentitiesCache = undefined;
+    }
+  });
+  return value;
+}
+
+function invalidateInstalledPackIdentities(): void {
+  installedIdentitiesCache = undefined;
+}
+
+/**
+ * Linux toolchain discovery, memoized briefly.
+ *
+ * Every sidebar state post asks for the toolchain list, and each probe walks the
+ * whole PATH with a stat per entry — measured at ~34 ms on a 41-entry PATH, so a
+ * vendor switch that posts state repeatedly would spend hundreds of milliseconds
+ * on it. The list only changes when the user edits PATH, hence the short TTL.
+ */
+const toolchainCacheTtlMs = 5000;
+let toolchainCache: { at: number; value: ReturnType<typeof discoverLinuxToolchains> } | undefined;
+
+function cachedLinuxToolchains(): ReturnType<typeof discoverLinuxToolchains> {
+  const now = Date.now();
+  if (toolchainCache && now - toolchainCache.at < toolchainCacheTtlMs) {
+    return toolchainCache.value;
+  }
+  const value = discoverLinuxToolchains();
+  toolchainCache = { at: now, value };
+  return value;
 }
 
 /**
@@ -476,6 +525,7 @@ async function activateDevicePack(
 }
 
 async function syncPackFileIndex(): Promise<void> {
+  invalidateInstalledPackIdentities();
   packFileByPart.clear();
   packArchiveBySource.clear();
   for (const record of await listImportedPacks(packStorageRoot)) {
@@ -517,19 +567,11 @@ function scanRoots() {
   return roots;
 }
 
-function fetcherWithTimeout(timeoutMs: number): FetchLike {
-  return (url) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
-  };
-}
-
 // The public CMSIS index is ~240 KB and can answer slowly, while a real DFP runs
 // to tens of megabytes; one shared timeout would either abort the index or cut a
 // large pack download short.
-const indexFetcher = fetcherWithTimeout(30000);
-const downloadFetcher = fetcherWithTimeout(10 * 60 * 1000);
+const indexFetcher = createTimeoutFetcher(30000);
+const downloadFetcher = createTimeoutFetcher(10 * 60 * 1000);
 
 async function pickLocalPack(): Promise<{ buffer: Buffer; fileName: string } | undefined> {
   const picked = await vscode.window.showOpenDialog({
@@ -577,6 +619,38 @@ async function pickKeilPack(): Promise<{ kind: 'buffer'; buffer: Buffer; fileNam
   return { kind: 'buffer', buffer: await readFile(picked.identity.packFile), fileName };
 }
 
+/**
+ * Downloads one pack from the online index.
+ *
+ * The index entry is the authoritative identity: a vendor-hosted archive name is
+ * not a reliable pack name/version pair, so the caller passes the entry's values
+ * to the importer instead of re-parsing the file name.
+ */
+async function downloadIndexedPack(pack: {
+  name: string;
+  version: string;
+  packUrl: string;
+}): Promise<{ buffer: Buffer; fileName: string; identity: { name: string; version: string } }> {
+  const buffer = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `正在下载 ${pack.name} ${pack.version}…`,
+      cancellable: true
+    },
+    (_progress, token) => {
+      const controller = new AbortController();
+      const cancellation = token.onCancellationRequested(() => controller.abort());
+      return downloadPack(downloadFetcher, pack.packUrl, controller.signal)
+        .finally(() => cancellation.dispose());
+    }
+  );
+  return {
+    buffer,
+    fileName: pack.packUrl.split('/').pop() ?? `${pack.name}.${pack.version}.pack`,
+    identity: { name: pack.name, version: pack.version }
+  };
+}
+
 async function pickOnlinePack(): Promise<{
   buffer: Buffer;
   fileName: string;
@@ -616,27 +690,7 @@ async function pickOnlinePack(): Promise<{
     })),
     { placeHolder: `匹配 ${results.length} 个 Pack，选择要下载导入的包` }
   );
-  if (!picked) {
-    return undefined;
-  }
-  const download = await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: `正在下载 ${picked.pack.name} ${picked.pack.version}…`,
-      cancellable: true
-    },
-    (_progress, token) => {
-      const controller = new AbortController();
-      const cancellation = token.onCancellationRequested(() => controller.abort());
-      return downloadPack(downloadFetcher, picked.pack.packUrl)
-        .finally(() => cancellation.dispose());
-    }
-  );
-  return {
-    buffer: download,
-    fileName: picked.pack.packUrl.split('/').pop() ?? 'imported.pack',
-    identity: { name: picked.pack.name, version: picked.pack.version }
-  };
+  return picked ? downloadIndexedPack(picked.pack) : undefined;
 }
 
 async function importPackOnly(): Promise<CommandResult> {
@@ -697,9 +751,20 @@ async function importPackOnly(): Promise<CommandResult> {
 /** Component/board packs fail deep inside the parser; surface product guidance. */
 function describeImportFailure(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
-  return /no devices section|No \.pdsc file found|no family vendor/.test(raw)
-    ? '这个包的 PDSC 没有任何芯片定义（CMSIS 组件包、中间件包或板级包不含可生成的芯片）。请改用芯片厂商的 DFP 器件包。'
-    : raw;
+  if (/no devices section|No \.pdsc file found|no family vendor/.test(raw)) {
+    return '这个包的 PDSC 没有任何芯片定义（CMSIS 组件包、中间件包或板级包不含可生成的芯片）。请改用芯片厂商的 DFP 器件包。';
+  }
+  // "fetch failed" is undici's wrapper; the cause carries the actionable reason.
+  if (/^fetch failed$/i.test(raw.trim())) {
+    const code = (error as { cause?: { code?: string } } | undefined)?.cause?.code;
+    const reason = code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'ETIMEDOUT'
+      ? '连接在线索引或厂商下载站超时'
+      : code === 'ENOTFOUND' || code === 'EAI_AGAIN'
+        ? '无法解析在线索引或厂商下载站的域名'
+        : '网络请求失败';
+    return `${reason}（${code ?? '网络错误'}）。请检查代理/VPN 后重试，或改用「导入 Pack 包」导入本地 .pack。`;
+  }
+  return raw;
 }
 
 /** One-click online install: the selected vendor's DFP, downloaded and imported. */
@@ -714,7 +779,7 @@ async function installPackOnlineOnly(): Promise<CommandResult> {
       (_progress, token) => {
         const controller = new AbortController();
         const cancellation = token.onCancellationRequested(() => controller.abort());
-        return listPackIndexPacks(indexFetcher, packSearchCache)
+        return listPackIndexPacks(indexFetcher, packSearchCache, controller.signal)
           .finally(() => cancellation.dispose());
       }
     );
@@ -773,26 +838,13 @@ async function installPackOnlineOnly(): Promise<CommandResult> {
     if (!picked) {
       return { ok: false, cancelled: true, message: '未执行在线安装。' };
     }
-    const buffer = await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: `正在下载 ${picked.label} ${picked.pack.version}…`,
-        cancellable: true
-      },
-      (_progress, token) => {
-        const controller = new AbortController();
-        const cancellation = token.onCancellationRequested(() => controller.abort());
-        return downloadPack(downloadFetcher, picked.pack.packUrl)
-          .finally(() => cancellation.dispose());
-      }
+    const download = await downloadIndexedPack(picked.pack);
+    const result = await importPack(
+      download.buffer,
+      download.fileName,
+      packStorageRoot,
+      download.identity
     );
-    const fileName = picked.pack.packUrl.split('/').pop() ?? 'online.pack';
-    // The index entry is the authoritative identity: a vendor-hosted archive
-    // name is not a reliable pack name/version pair.
-    const result = await importPack(buffer, fileName, packStorageRoot, {
-      name: picked.pack.name,
-      version: picked.pack.version
-    });
     await syncPackFileIndex();
     activeSidebar?.refresh();
     const skipped = result.skipped.length > 0
@@ -1060,7 +1112,7 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       return action === '覆盖';
     },
-    discoverToolchains: () => discoverLinuxToolchains(),
+    discoverToolchains: () => cachedLinuxToolchains(),
     scanProject: (root, options) => scanProject(root, options),
     discoverProjects: (roots, options) => discoverWorkspaceProjects(roots, options),
     packFileForPart: (part, sourcePack) => (

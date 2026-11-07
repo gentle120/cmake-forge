@@ -2,14 +2,21 @@
 
 ## 2.1.3
 
-- Expose the ARM GNU GCC bin directory in the MCU sidebar with manual entry,
-  folder browsing, validation, and shared build / Cortex-Debug / IntelliSense use.
-- Discover EIDE, standalone Arm GNU, and CubeCLT installations on mounted drives;
-  offer a choice when several GNU ARM toolchains are installed.
-- Explain Windows stack-usage path failures with an actionable message, and
-  report cancellation separately from build failure.
-- Reorganize the MCU sidebar around toolchain, target, flash/debug, workspace,
-  and distinct generate/build actions; add missing icons and narrow-width layout.
+- Replace the built-in chip tables with CMSIS Pack parsing: every device profile
+  comes from a pack's PDSC, so any 32-bit ARM MCU with a pack is supported.
+- Add dynamic vendor and series registries plus curated mainstream chip vendors,
+  and reorder the MCU selection to vendor, series, pack, version, and part.
+- Add "Import CMSIS Pack" for local archives, Keil installations, and the public
+  CMSIS index, and "Install Pack Online" which downloads the selected series'
+  device pack inside the extension, imports it, and activates it.
+- Imported packs persist in extension storage; identity comes from the PDSC, and
+  a broken upgrade never erases the last known-good pack.
+- Add J-Link and pyOCD flash backends next to OpenOCD, driven by the pack's
+  debug target, and generate the matching flash scripts and debug configuration.
+- Extend the sidebar to MCU, Linux / SoC cross-compilation, and desktop C/C++
+  projects with persistent per-workspace selections, workspace and project
+  discovery, and cancellable scans.
+- Add the architecture, contracts, and roadmap governance documents.
 
 ## 2.1.2
 

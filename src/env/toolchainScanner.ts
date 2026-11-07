@@ -308,7 +308,11 @@ export function defaultScanRoots(
     keilDirs,
     packRoots,
     cltRoots: isWindows ? drives.flatMap(drive => [`${drive}/ST`, `${drive}/`]) : ['/opt/st'],
-    seggerRoots: [isWindows ? 'C:/Program Files/SEGGER' : '/opt/SEGGER'],
+    // J-Link installs under Program Files (or its x86 redirect); honouring the
+    // environment keeps a relocated Windows install discoverable.
+    seggerRoots: isWindows
+      ? [...new Set([`${programFiles}/SEGGER`, `${programFilesX86}/SEGGER`])]
+      : ['/opt/SEGGER'],
     pathDirs
   };
 }

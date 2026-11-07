@@ -7,11 +7,7 @@ import {
   listDeviceProfilesForPack
 } from '../devices/deviceProfiles';
 import type { DevicePackOption } from '../devices/deviceSelection';
-import {
-  comparePackVersions,
-  listDeviceProfilesForSeries,
-  listDeviceSeries
-} from '../devices/deviceSelection';
+import { comparePackVersions } from '../shared/packVersion';
 import { getVendorMetadata, hasVendor } from '../devices/vendorRegistry';
 import { findCatalogSeries } from '../devices/seriesCatalog';
 import { getFlashProbeProfile } from '../flash/probeProfiles';
@@ -28,6 +24,7 @@ import {
   generateLinuxWorkflow,
   generateMcuWorkflow,
   generateNativeWorkflow,
+  projectNameFromRoot,
   type ProjectWorkflowHost,
   type WorkflowResult
 } from '../generation/workflow';
@@ -36,7 +33,6 @@ import { createLinuxToolchain } from '../linux/toolchainGenerator';
 import { describeNativeProject } from '../native/projectStructure';
 import { scanProject, ScanCancelledError } from '../scanner/projectScanner';
 import {
-  discoverWorkspaceProjects,
   reconcileProjectRoot,
   WorkspaceProjectsCancelledError,
   type WorkspaceProject,
@@ -167,6 +163,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
 
   refresh(): void {
     this.postState();
+    // A sidebar operation refreshes the catalog once it has finished; reloading
+    // it here would repeat the installed-Pack scan while that operation runs.
+    if (this.busy) {
+      return;
+    }
     void this.refreshPackCatalog(this.selectionValue.mcu.vendor);
   }
 
@@ -803,7 +804,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           }
           const structure = describeNativeProject(
             project,
-            root.replace(/\\/g, '/').split('/').pop()?.replace(/[^A-Za-z0-9_-]/g, '_') || 'app',
+            projectNameFromRoot(root),
             {
               targetType: this.selectionValue.native.targetType,
               cStandard: this.selectionValue.native.cStandard,

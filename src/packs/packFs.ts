@@ -2,17 +2,6 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ZipEntry } from './zipReader';
 
-export interface DirectoryPackEntry {
-  /** Root directory that contained the .pdsc file. */
-  root: string;
-  /** Path of the .pdsc file relative to the root, using forward slashes. */
-  pdscPath: string;
-}
-
-function toPosix(path: string): string {
-  return path.replace(/\\/g, '/');
-}
-
 async function isFile(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isFile();
@@ -61,34 +50,6 @@ export async function readDirectoryEntries(
   };
   await walk(root, '');
   return entries;
-}
-
-/** Finds .pdsc files at the top level of every version directory of a pack root. */
-export async function findDirectoryPacks(packRoots: string[]): Promise<DirectoryPackEntry[]> {
-  const results: DirectoryPackEntry[] = [];
-  const seen = new Set<string>();
-  for (const packRoot of packRoots) {
-    for (const vendor of await safeReaddir(packRoot)) {
-      const vendorDirectory = join(packRoot, vendor);
-      for (const name of await safeReaddir(vendorDirectory)) {
-        const nameDirectory = join(vendorDirectory, name);
-        for (const version of await safeReaddir(nameDirectory)) {
-          const versionDirectory = join(nameDirectory, version);
-          for (const file of await safeReaddir(versionDirectory)) {
-            if (!file.toLowerCase().endsWith('.pdsc')) {
-              continue;
-            }
-            const pdscPath = toPosix(join(versionDirectory, file));
-            if (!seen.has(pdscPath) && await isFile(join(versionDirectory, file))) {
-              seen.add(pdscPath);
-              results.push({ root: toPosix(versionDirectory), pdscPath });
-            }
-          }
-        }
-      }
-    }
-  }
-  return results.sort((left, right) => left.pdscPath.localeCompare(right.pdscPath));
 }
 
 /** Finds a .pack archive beside or above the extracted pack directory. */

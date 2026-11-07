@@ -1,9 +1,6 @@
 import { XMLParser } from 'fast-xml-parser';
 import { packVendorId } from './packIdentity';
-
-export interface PackIndexEntry {
-  vendorName: string;
-}
+import { comparePackVersions } from '../shared/packVersion';
 
 export interface PackIndexPack {
   name: string;
@@ -25,11 +22,13 @@ export interface PackSearchCacheEntry {
 }
 
 /**
- * Minimal subset of the DOM fetch Response consumed here. The extension host
- * wraps its own fetch with an AbortController timeout; this module never
- * cancels requests on its own.
+ * Minimal subset of the DOM fetch Response consumed here.
+ *
+ * `signal` is the caller's cancellation signal: the fetcher must abort the
+ * request when it fires, so cancelling a progress notification really stops the
+ * network work instead of letting it run to completion.
  */
-export type FetchLike = (url: string) => Promise<{
+export type FetchLike = (url: string, signal?: AbortSignal) => Promise<{
   ok: boolean;
   status: number;
   text(): Promise<string>;
@@ -54,22 +53,25 @@ const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: 
  * CDN while vendor-hosted packs point straight at the vendor site. Entries
  * missing any identity field are skipped because there is no download URL to
  * hand to the importer, and deprecated entries are skipped so the catalog never
- * offers a superseded DFP.
+ * offers a superseded DFP. The live index repeats a few entries verbatim, which
+ * would show the same Pack twice in the picker, so identical identities collapse.
  */
 export async function listPackIndexPacks(
   fetcher: FetchLike,
-  cache?: Map<string, PackSearchCacheEntry>
+  cache?: Map<string, PackSearchCacheEntry>,
+  signal?: AbortSignal
 ): Promise<PackIndexPack[]> {
   const cached = cache?.get(packIndexUrl);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.packs;
   }
-  const response = await fetcher(packIndexUrl);
+  const response = await fetcher(packIndexUrl, signal);
   if (!response.ok || response.status < 200 || response.status >= 300) {
     throw new Error(`Failed to fetch pack index ${packIndexUrl}: HTTP ${response.status}`);
   }
-  const document = xmlParser.parse(await response.text()) as unknown;
+  const document = xmlParser.parse(await respondText(response, signal)) as unknown;
   const packs: PackIndexPack[] = [];
+  const seen = new Set<string>();
   for (const node of collectEntries(document, { pdsc: true })) {
     const url = textField(node, 'url');
     const vendor = textField(node, 'vendor');
@@ -78,6 +80,11 @@ export async function listPackIndexPacks(
     if (!url || !vendor || !name || !version || textField(node, 'deprecated')) {
       continue;
     }
+    const identity = `${vendor}\u0000${name}\u0000${version}`;
+    if (seen.has(identity)) {
+      continue;
+    }
+    seen.add(identity);
     const root = url.endsWith('/') ? url : `${url}/`;
     packs.push({
       name,
@@ -112,27 +119,7 @@ export function selectPacksForSelection(
     ? byName
     : packs.filter((pack) => vendorId !== '' && packVendorId(pack.vendorName) === vendorId);
   return [...pool].sort((left, right) =>
-    left.name.localeCompare(right.name) || compareVersions(right.version, left.version)
-  );
-}
-
-/** Lists each vendor of the pack index once, in first-appearance order. */
-export async function listPackVendors(
-  fetcher: FetchLike,
-  cache?: Map<string, PackSearchCacheEntry>
-): Promise<PackIndexEntry[]> {
-  const packs = await listPackIndexPacks(fetcher, cache);
-  return [...new Set(packs.map((pack) => pack.vendorName))].map((vendorName) => ({ vendorName }));
-}
-
-/** Lists every version of one vendor's packs from the index. */
-export async function listPacksForVendor(
-  fetcher: FetchLike,
-  vendorName: string,
-  cache?: Map<string, PackSearchCacheEntry>
-): Promise<PackIndexPack[]> {
-  return (await listPackIndexPacks(fetcher, cache)).filter(
-    (pack) => pack.vendorName === vendorName
+    left.name.localeCompare(right.name) || comparePackVersions(right.version, left.version)
   );
 }
 
@@ -145,7 +132,7 @@ export async function searchPacks(
   if (options.signal?.aborted) {
     throw new Error('Pack search cancelled.');
   }
-  const packs = await listPackIndexPacks(fetcher, options.cache);
+  const packs = await listPackIndexPacks(fetcher, options.cache, options.signal);
   if (options.signal?.aborted) {
     throw new Error('Pack search cancelled.');
   }
@@ -160,29 +147,53 @@ export async function searchPacks(
     .sort((left, right) => (
       left.vendorName.localeCompare(right.vendorName)
       || left.name.localeCompare(right.name)
-      || compareVersions(left.version, right.version)
+      || comparePackVersions(left.version, right.version)
     ));
 }
 
-function compareVersions(left: string, right: string): number {
-  const a = left.split(/[._-]/).map((part) => Number(part) || 0);
-  const b = right.split(/[._-]/).map((part) => Number(part) || 0);
-  const length = Math.max(a.length, b.length);
-  for (let index = 0; index < length; index += 1) {
-    const difference = (a[index] ?? 0) - (b[index] ?? 0);
-    if (difference !== 0) {
-      return difference;
-    }
-  }
-  return 0;
-}
-
-export async function downloadPack(fetcher: FetchLike, packUrl: string): Promise<Buffer> {
-  const response = await fetcher(packUrl);
+export async function downloadPack(
+  fetcher: FetchLike,
+  packUrl: string,
+  signal?: AbortSignal
+): Promise<Buffer> {
+  const response = await fetcher(packUrl, signal);
   if (!response.ok || response.status < 200 || response.status >= 300) {
     throw new Error(`Failed to download pack ${packUrl}: HTTP ${response.status}`);
   }
-  return Buffer.from(await response.arrayBuffer());
+  return Buffer.from(await respondArrayBuffer(response, signal));
+}
+
+/**
+ * Reads a response body, rejecting as soon as the caller's signal fires. A
+ * fetcher that aborts correctly rejects before this runs, but a body that is
+ * still streaming must not keep the command alive after cancellation.
+ */
+function respondText(
+  response: { text(): Promise<string> },
+  signal?: AbortSignal
+): Promise<string> {
+  return guardCancellation(response.text(), signal);
+}
+
+function respondArrayBuffer(
+  response: { arrayBuffer(): Promise<ArrayBuffer> },
+  signal?: AbortSignal
+): Promise<ArrayBuffer> {
+  return guardCancellation(response.arrayBuffer(), signal);
+}
+
+function guardCancellation<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return work;
+  }
+  if (signal.aborted) {
+    return Promise.reject(new Error('Pack request cancelled.'));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(new Error('Pack request cancelled.'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 
 /** Reads a value from attribute (@_key), child element, or #text content. */

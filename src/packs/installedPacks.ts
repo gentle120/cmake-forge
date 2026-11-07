@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import type { KeilPackEntry } from '../env/toolchainScanner';
 import { readDirectoryEntries } from './packFs';
 import { packNameFromFileName, packVendorDisplayName, packVendorId } from './packIdentity';

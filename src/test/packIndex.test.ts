@@ -3,8 +3,6 @@ import test from 'node:test';
 import {
   downloadPack,
   listPackIndexPacks,
-  listPackVendors,
-  listPacksForVendor,
   searchPacks,
   selectPacksForSelection,
   type FetchLike
@@ -103,31 +101,9 @@ test('deprecated index entries are not offered', async () => {
   assert.equal(packs.some((pack) => pack.name === 'MCB1500_BSP'), false);
 });
 
-test('listPackVendors lists each index vendor once', async () => {
-  const { fetcher } = createFetcher(indexStubs());
-  const vendors = await listPackVendors(fetcher);
-
-  assert.deepEqual(
-    vendors.map((vendor) => vendor.vendorName),
-    ['Keil', 'ARM', 'MS32', 'NoSlash', 'GigaDevice']
-  );
-});
-
-test('listPackVendors throws on non-2xx index responses', async () => {
+test('index responses that are not 2xx are rejected', async () => {
   const { fetcher } = createFetcher({});
-  await assert.rejects(listPackVendors(fetcher), /HTTP 404/);
-});
-
-test('listPacksForVendor keeps every version of the selected vendor', async () => {
-  const { fetcher } = createFetcher(indexStubs());
-  const packs = await listPacksForVendor(fetcher, 'Keil');
-
-  assert.deepEqual(packs.map((pack) => [pack.name, pack.version]), [
-    ['ARM_Compiler', '1.7.2'],
-    ['TM4C_DFP', '1.1.0'],
-    ['TM4C_DFP', '1.2.0'],
-    ['STM32F1xx_DFP', '2.4.1']
-  ]);
+  await assert.rejects(listPackIndexPacks(fetcher), /HTTP 404/);
 });
 
 test('selectPacksForSelection prefers the named DFP of the selected series', async () => {
@@ -174,12 +150,55 @@ test('searchPacks matches vendor name, pack name, and version case-insensitively
 test('searchPacks reuses a cached index between calls', async () => {
   const { fetcher, requestedUrls } = createFetcher(indexStubs());
   const cache = new Map();
-  const options = { cache, now: () => 1000 };
 
-  await searchPacks(fetcher, 'keil', options);
-  await searchPacks(fetcher, 'tm4c', options);
+  await searchPacks(fetcher, 'keil', { cache });
+  await searchPacks(fetcher, 'tm4c', { cache });
 
   assert.deepEqual(requestedUrls, [PACK_INDEX_URL]);
+});
+
+test('searchPacks passes its signal to the fetcher and stops on abort', async () => {
+  const signals: Array<AbortSignal | undefined> = [];
+  const fetcher: FetchLike = async (_url, signal) => {
+    signals.push(signal);
+    const controller = new AbortController();
+    controller.abort();
+    // A fetcher that honours the signal rejects like fetch does.
+    throw Object.assign(new Error('This operation was aborted'), { name: 'AbortError' });
+  };
+  const controller = new AbortController();
+
+  await assert.rejects(
+    searchPacks(fetcher, 'keil', { signal: controller.signal }),
+    /aborted/
+  );
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0], controller.signal);
+});
+
+test('searchPacks throws before fetching when already cancelled', async () => {
+  const { fetcher, requestedUrls } = createFetcher(indexStubs());
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(searchPacks(fetcher, 'keil', { signal: controller.signal }), /cancelled/);
+  assert.deepEqual(requestedUrls, []);
+});
+
+test('repeated index entries are collapsed', async () => {
+  const duplicated = packIndexXml.replace(
+    '  </pindex>',
+    '    <pdsc url="https://gd32mcu.com/data/documents/pack/" vendor="GigaDevice" '
+    + 'name="GD32F4xx_DFP" version="3.0.3" />\n  </pindex>'
+  );
+  const { fetcher } = createFetcher({
+    [PACK_INDEX_URL]: { ok: true, status: 200, textBody: duplicated }
+  });
+
+  const packs = await listPackIndexPacks(fetcher);
+  const identities = packs.map((pack) => `${pack.vendorName}.${pack.name}.${pack.version}`);
+  assert.equal(new Set(identities).size, identities.length);
+  assert.equal(packs.filter((pack) => pack.name === 'GD32F4xx_DFP').length, 1);
 });
 
 test('downloadPack returns the raw pack bytes and rejects on non-2xx', async () => {
@@ -192,4 +211,28 @@ test('downloadPack returns the raw pack bytes and rejects on non-2xx', async () 
   assert.ok(Buffer.from(packBytes).equals(buffer));
 
   await assert.rejects(downloadPack(fetcher, 'https://www.keil.com/pack/missing.pack'), /HTTP 404/);
+});
+
+test('downloadPack forwards the signal so a cancelled install stops downloading', async () => {
+  const packUrl = 'https://www.keil.com/pack/Keil.STM32F1xx_DFP.2.4.1.pack';
+  let received: AbortSignal | undefined;
+  const fetcher: FetchLike = async (_url, signal) => {
+    received = signal;
+    // Model a response whose body is still streaming when the user cancels.
+    const controller = new AbortController();
+    controller.abort();
+    return {
+      ok: true,
+      status: 200,
+      text: async () => '',
+      arrayBuffer: async () => new Promise<ArrayBuffer>((_resolve, reject) => {
+        controller.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      })
+    };
+  };
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(downloadPack(fetcher, packUrl, controller.signal), /cancelled/);
+  assert.equal(received, controller.signal);
 });

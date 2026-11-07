@@ -1,13 +1,9 @@
+import { indented, projectPath } from '../shared/cmakeText';
 import { preserveUserCodeSection, userCodeSection } from '../shared/userCodeSection';
 import type { NativeProjectStructure } from './types';
 
 function quotedPath(value: string): string {
-  const normalized = value.replace(/\\/g, '/').replace(/"/g, '\\"');
-  return `"\${NATIVE_PROJECT_ROOT}/${normalized}"`;
-}
-
-function indented(values: string[]): string {
-  return values.map((value) => `    ${value}`).join('\n');
+  return projectPath('NATIVE_PROJECT_ROOT', value);
 }
 
 function targetDeclaration(structure: NativeProjectStructure): string {

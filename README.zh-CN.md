@@ -16,12 +16,13 @@
 
 | 命令 | 方向 | 说明 |
 | --- | --- | --- |
-| `CMake-Embedded: Generate MCU Project` | MCU | 选厂商 → Pack → 版本 → 系列 → 型号，生成裸机工程 |
+| `CMake-Embedded: Generate MCU Project` | MCU | 选厂商 → 系列 → Pack → 版本 → 型号，生成裸机工程 |
 | `CMake-Embedded: Generate Linux Project` | Linux | 选交叉工具链，生成交叉编译工程 |
 | `CMake-Embedded: Generate OpenOCD Flash Script` | MCU | 仅生成 `flash.py` |
 | `CMake-Embedded: Generate Cortex-Debug Configuration` | MCU | 仅生成 `.vscode/launch.json` 调试配置 |
 | `CMake-Embedded: Generate C/C++ Project` | 桌面 | 生成普通 CMake 工程 |
 | `CMake-Embedded: Import CMSIS Pack` | MCU | 从本地归档、Keil 已安装目录或在线索引导入芯片 |
+| `CMake-Embedded: Install Pack Online` | MCU | 按已选系列从 CMSIS 公开索引下载器件包并直接导入 |
 | `CMake-Embedded: Remove Imported CMSIS Pack` | MCU | 删除已导入的 Pack |
 
 ---

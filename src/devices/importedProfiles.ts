@@ -189,7 +189,7 @@ async function importParsedPack(
   const existingPack = store.packs.some((record) => record.packFile === packFilePath);
 
   const firstUsableSeries = devices.find((device) => !device.error)?.series ?? '';
-  const vendor = await ensureVendor(store, vendorId, vendorLabel, firstUsableSeries);
+  await ensureVendor(store, vendorId, vendorLabel, firstUsableSeries);
 
   const result: ImportPackResult = { imported: [], skipped: [] };
   const importedProfiles: StoredProfile[] = [];
@@ -384,7 +384,7 @@ async function ensureVendor(
   vendorId: string,
   vendorName: string,
   series: string
-): Promise<StoredVendor> {
+): Promise<void> {
   if (hasVendor(vendorId)) {
     const metadata = getVendorMetadata(vendorId);
     const existing = {
@@ -396,7 +396,7 @@ async function ensureVendor(
     store.vendors = store.vendors.some((vendor) => vendor.id === vendorId)
       ? store.vendors
       : [...store.vendors, existing];
-    return existing;
+    return;
   }
   const definePrefix = /^[A-Za-z]+\d*/.exec(series)?.[0] ?? vendorId;
   const order = importedVendorBaseOrder + store.vendors.length;
@@ -413,7 +413,6 @@ async function ensureVendor(
     order
   };
   store.vendors.push(vendor);
-  return vendor;
 }
 
 async function readStore(storageRoot: string): Promise<PackStoreFile> {

@@ -1,5 +1,6 @@
 import type { DeviceProfile, DeviceSeries, DeviceVendor } from './deviceProfiles';
 import { getVendorMetadata } from './vendorRegistry';
+import { comparePackVersions } from '../shared/packVersion';
 
 export type DevicePackOrigin = 'installed' | 'imported' | 'downloadable';
 
@@ -138,18 +139,4 @@ export function buildDevicePackOptions(input: DevicePackCatalogInput): DevicePac
     || comparePackVersions(left.version, right.version)
     || left.origin.localeCompare(right.origin)
   );
-}
-
-/** Numeric-aware Pack version ordering for catalog display and defaults. */
-export function comparePackVersions(left: string, right: string): number {
-  const a = left.split(/[._-]/).map((part) => Number(part) || 0);
-  const b = right.split(/[._-]/).map((part) => Number(part) || 0);
-  const length = Math.max(a.length, b.length);
-  for (let index = 0; index < length; index += 1) {
-    const difference = (a[index] ?? 0) - (b[index] ?? 0);
-    if (difference !== 0) {
-      return difference;
-    }
-  }
-  return 0;
 }

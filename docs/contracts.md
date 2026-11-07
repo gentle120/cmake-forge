@@ -38,14 +38,14 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - `Dvendor` 的数字注册号后缀（如 `Sinomcu:985`、`ARM:82`）既不进入厂商显示名也不进入厂商 id；同一厂商的后缀变体解析为同一身份。
 - 烧录后端 `openocd|jlink|pyocd` 与探针兼容矩阵见 `src/flash/backendProfiles.ts`；pyocd 后端不支持 J-Link 探针（硬件限制）。
 - pyOCD 的 pack 参数必须是真实存在的 `.pack` 文件；导入设备没有归档时省略 `--pack`，不得生成指向虚拟路径的配置。
-- 在线 Pack 搜索复用同一 TTL 缓存的索引并在取消后停止发起后续请求；每个可下载版本都保留为独立条目，不折叠为最新版本。
+- 在线 Pack 搜索复用同一 TTL 缓存的索引；取消进度通知必须中断索引读取与 Pack 下载（请求随调用方 signal 中止，不再继续到完成），且取消后不再发起后续请求；连接级失败（连接超时、连接被重置、域名暂不可解析等）自动重试一次，取消与其它错误不重试。每个可下载版本都保留为独立条目，不折叠为最新版本。
 - 侧栏 MCU 选择为 vendor → series → pack → version → part：series 可在激活 Pack 前选择，来源为精选厂商系列目录（`src/devices/seriesCatalog.ts`，含各系列的 DFP 名与型号前缀）与本地包系列；选定系列后自动解析并激活本地对应 Pack（imported 按档案系列/型号前缀匹配，installed 按 DFP 名匹配），无匹配时提示确定性安装途径；part 按目录型号前缀或系列过滤；不保留跨 vendor 残留。
 - Pack 目录条目按身份区分：`installed`、`imported`、`downloadable`；同一 packId+version 只展示一个条目，已安装/已导入优先于可下载。
 - 已安装 Pack 的身份取自 PDSC（`Dvendor`、包名、`release version`）；Keil 安装目录名或归档文件名不是最终身份，PDSC 无法解析的条目被跳过。
 - 目录选项的 `packFile` 是安装位置，不是导入档案的所有权键；导入档案的所有权键固定为 `packs/<vendor>/<file>.pack` 形式的扩展存储相对路径。切换 Pack 或版本时所有权键随之切换，目录中已加载的 `imported` 条目优先于持久化键，目录未加载时沿用持久化键。
 - 侧栏厂商列表按序包含：本地可用厂商（已导入档案、`parts` 非空的已导入记录、PDSC 解析出至少一个可导入设备的已安装 Pack，优先复用精选清单的友好标签），其后是精选芯片厂商清单（`src/devices/curatedVendors.ts`，本地暂缺的厂商带安装提示）；同一厂商本地来源优先且不重复出现；精选清单常驻，厂商下拉永不为空。
 - MCU 面板的「导入 Pack 包」「在线安装 Pack」按钮分别触发 `cmakeEmbedded.importPack` 与 `cmakeEmbedded.installPackOnline`；导入/安装成功后目录按厂商切换自动激活语义刷新（优先激活服务当前所选系列的 imported/installed 版本，否则取最新版本；可下载版本仍不自动下载），失败不改变有效选择。
-- 在线索引用 CMSIS 公开 Pack 索引（`https://www.keil.com/pack/index.pidx`，单次拉取 + TTL 缓存），供「在线安装 Pack」按钮与 `Import CMSIS Pack` 命令使用；其 `<pindex><pdsc url vendor name version/>` 条目按 CMSIS 命名约定派生下载地址 `<root><vendor>.<name>.<version>.pack`，缺失任何身份字段的条目与标为 `deprecated` 的条目跳过。索引同时覆盖 Keil 自托管包与厂商自托管包（如 GigaDevice、STMicroelectronics），因此「在线安装」的候选按已选系列的目录 DFP 名优先、否则按已选厂商 vendorId 过滤，无匹配时给出官方下载页或索引兜底。下载得到的 Pack 以索引条目为身份来源导入（存档文件名不是身份来源），成功后自动激活。
+- 在线索引用 CMSIS 公开 Pack 索引（`https://www.keil.com/pack/index.pidx`，单次拉取 + TTL 缓存），供「在线安装 Pack」按钮与 `Import CMSIS Pack` 命令使用；其 `<pindex><pdsc url vendor name version/>` 条目按 CMSIS 命名约定派生下载地址 `<root><vendor>.<name>.<version>.pack`，缺失任何身份字段的条目、标为 `deprecated` 的条目与完全重复的条目跳过。索引同时覆盖 Keil 自托管包与厂商自托管包（如 GigaDevice、STMicroelectronics），因此「在线安装」的候选按已选系列的目录 DFP 名优先、否则按已选厂商 vendorId 过滤，无匹配时给出官方下载页或索引兜底。下载得到的 Pack 以索引条目为身份来源导入（存档文件名不是身份来源），成功后自动激活。
 - 显式切换厂商时自动激活该厂商服务当前所选系列的可用版本（`imported`/`installed`，同版本 `imported` 优先；无系列匹配时取最新版本）；`downloadable` 版本不自动下载，启动时的目录刷新不自动激活。
 - 仅切换侧栏模式（mcu/linux/native）的保存按消息保留模式；MCU 字段重算不改写模式。
 - 侧栏调试器列表仅提供当前烧录后端支持的探针；切换后端时不保留不兼容探针。

@@ -699,7 +699,7 @@ test('switching to a vendor without packs drops the previous vendor Pack', async
           }],
       notice: ''
     }),
-    activatePack: async (vendor: string, packId: string, version: string) => ({
+    activatePack: async (_vendor: string, packId: string, version: string) => ({
       vendorId: 'GigaDevice',
       packId,
       version,

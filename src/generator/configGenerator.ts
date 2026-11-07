@@ -1,5 +1,6 @@
 import type { DeviceProfile, MemoryRegion } from '../devices/deviceProfiles';
 import { getWorkspaceIntegration } from '../integration/workspaceSettings';
+import { hexadecimal } from '../shared/cmakeText';
 
 export interface ProjectFlashConfiguration {
   script: string;
@@ -8,10 +9,6 @@ export interface ProjectFlashConfiguration {
   openocdPath: string;
   target: string;
   transport: string;
-}
-
-function hexadecimal(value: number): string {
-  return `0x${value.toString(16).toUpperCase().padStart(8, '0')}`;
 }
 
 function memorySummary(region: MemoryRegion): { origin: string; sizeBytes: number; sizeKB: number } {
