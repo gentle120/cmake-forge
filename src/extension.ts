@@ -46,6 +46,7 @@ import {
   type PackSearchCacheEntry
 } from './packs/packIndex';
 import { curatedVendors } from './devices/curatedVendors';
+import { seriesDownloadPage } from './devices/seriesCatalog';
 import { existsSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import * as os from 'node:os';
@@ -696,15 +697,24 @@ async function installPackOnlineOnly(): Promise<CommandResult> {
       return { ok: false, message };
     }
     // The online install is vendor-aware: the packs offered match the vendor
-    // selected in the sidebar; the full index stays reachable as an explicit
-    // fallback because keil.com only hosts its own packs.
+    // selected in the sidebar. Trial vendors (STM32/GD32/CH32) are not on the
+    // keil.com index — for them, open the official DFP download page instead.
     const selectedVendor = activeSidebar?.selection().mcu.vendor ?? '';
+    const selectedSeries = activeSidebar?.selection().mcu.series ?? '';
     const curatedLabel = curatedVendors.find((vendor) => vendor.id === selectedVendor)?.label
       ?? selectedVendor;
     let candidates = packs;
     if (selectedVendor) {
       candidates = packs.filter((pack) => packVendorIdFromName(pack.vendorName) === selectedVendor);
       if (candidates.length === 0) {
+        const downloadPage = seriesDownloadPage(selectedVendor, selectedSeries);
+        if (downloadPage) {
+          void vscode.env.openExternal(vscode.Uri.parse(downloadPage));
+          void vscode.window.showInformationMessage(
+            `已在浏览器打开「${curatedLabel}」的器件包下载页：下载 DFP .pack 文件后，点「导入 Pack 包」完成导入。`
+          );
+          return { ok: false, cancelled: true, message: '已在浏览器打开器件包下载页。' };
+        }
         const fallback = await vscode.window.showQuickPick(
           [
             { label: '浏览在线索引全部厂商的包', value: 'all' as const },

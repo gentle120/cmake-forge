@@ -25,6 +25,12 @@ export interface VendorSeriesCatalog {
   /** Registry-safe vendor id (matches pack vendorId / curated vendor). */
   vendorId: string;
   series: CuratedSeries[];
+  /**
+   * Official DFP download page for this vendor; `{fam2}` is replaced with the
+   * first two characters of the series id (e.g. F1x → GD32F1). Undefined for
+   * vendors without a stable public download page.
+   */
+  downloadPage?: string;
 }
 
 const STM32_SERIES: Array<[string, string]> = [
@@ -43,6 +49,7 @@ const GD32_SERIES: Array<[string, string, string]> = [
 export const seriesCatalog: VendorSeriesCatalog[] = [
   {
     vendorId: 'STMicroelectronics',
+    downloadPage: 'https://www.st.com/en/microcontrollers-microprocessors/stm32-32-bit-arm-mcus.html',
     series: STM32_SERIES.map(([series, label]) => ({
       series,
       label,
@@ -52,6 +59,7 @@ export const seriesCatalog: VendorSeriesCatalog[] = [
   },
   {
     vendorId: 'GigaDevice',
+    downloadPage: 'https://www.gd32mcu.com/en/download/0?kw=GD32{fam2}',
     series: GD32_SERIES.map(([series, label, packName]) => ({
       series,
       label,
@@ -63,6 +71,7 @@ export const seriesCatalog: VendorSeriesCatalog[] = [
     // WCH's DFP naming is not verifiable from public sources; the series is
     // offered but pack determination falls back to installation guidance.
     vendorId: 'WCH',
+    downloadPage: 'https://www.wch.cn/downloads/',
     series: [{ series: 'F1x', label: 'CH32F1', partPrefix: 'CH32F1', packName: '' }]
   }
 ];
@@ -70,6 +79,19 @@ export const seriesCatalog: VendorSeriesCatalog[] = [
 /** Returns the catalog series of one vendor; '' vendor or unknown → []. */
 export function seriesCatalogFor(vendorId: string): CuratedSeries[] {
   return seriesCatalog.find((vendor) => vendor.vendorId === vendorId)?.series ?? [];
+}
+
+/**
+ * The official DFP download page for a selected vendor+series; undefined when
+ * the vendor has no stable public download page.
+ */
+export function seriesDownloadPage(vendorId: string, series: string): string | undefined {
+  const vendor = seriesCatalog.find((vendor) => vendor.vendorId === vendorId);
+  const template = vendor?.downloadPage;
+  if (!template) {
+    return undefined;
+  }
+  return template.replace('{fam2}', series.slice(0, 2));
 }
 
 /** Returns the catalog entry of one persisted series id. */

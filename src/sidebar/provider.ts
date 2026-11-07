@@ -319,7 +319,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       if (this.packOptions.length === 0 && this.packCatalogNotice === '') {
         const catalog = findCatalogSeries(this.selectionValue.mcu.vendor, this.selectionValue.mcu.series);
         this.packCatalogNotice = catalog?.packName
-          ? `「${catalog.label}」系列需要 ${catalog.packName}：请用 Keil Pack Installer 安装该器件包，或点上方「导入 Pack 包」/「在线安装 Pack」获取。`
+          ? `「${catalog.label}」系列需要 ${catalog.packName}：请点上方「在线安装 Pack」打开官方下载页，或用 Keil Pack Installer 安装后重选系列，也可点「导入 Pack 包」导入已下载的 .pack。`
           : '未找到该厂商的 Pack：请点上方「在线安装 Pack」或「导入 Pack 包」获取器件包，也可以先用 Keil Pack Installer 安装。';
       }
 
