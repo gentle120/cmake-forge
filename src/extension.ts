@@ -44,6 +44,11 @@ import {
 } from './packs/packIndex';
 import { describeDownloadProgress, downloadPack } from './packs/packDownloads';
 import {
+  describeCorePack,
+  installCorePack,
+  installedCoreIncludeDir
+} from './packs/corePack';
+import {
   createTimeoutFetcher,
   describeTimeout,
   isCancellationError,
@@ -87,6 +92,7 @@ import { describeNativeProject } from './native/projectStructure';
 import { scanProject, ScanCancelledError, type ProjectDescription } from './scanner/projectScanner';
 import { discoverWorkspaceProjects } from './scanner/workspaceProjects';
 import { SidebarProvider } from './sidebar/provider';
+import { comparePackVersions } from './shared/packVersion';
 import type { CommandResult } from './shared/commandResult';
 
 async function scanWorkspace(root: string): Promise<ProjectDescription | undefined> {
@@ -732,6 +738,25 @@ async function pickOnlinePack(): Promise<{
   return picked ? downloadIndexedPack(picked.pack) : undefined;
 }
 
+/**
+ * External include directories a generated MCU project needs.
+ *
+ * The CMSIS core pack is the only one today: device headers include
+ * \`core_cm*.h\`, which no vendor DFP ships. When it is not installed the
+ * project is still generated — the missing headers would break the build either
+ * way, and blocking generation would also block the user from fixing it.
+ */
+async function mcuExternalIncludeDirs(): Promise<string[]> {
+  const core = await installedCoreIncludeDir(packStorageRoot);
+  if (core) {
+    return [core];
+  }
+  void vscode.window.showWarningMessage(
+    '未安装 ARM CMSIS 内核包：生成的工程缺少 core_cm*.h，编译会失败。请点侧栏「安装内核包…」或运行「CMake-Embedded: Install ARM CMSIS Core Pack」。'
+  );
+  return [];
+}
+
 async function importPackOnly(): Promise<CommandResult> {
   const cancelled: CommandResult = { ok: false, cancelled: true, message: '未执行 Pack 导入。' };
   const source = await vscode.window.showQuickPick(
@@ -785,6 +810,92 @@ async function importPackOnly(): Promise<CommandResult> {
       return { ok: false, cancelled: true, message: '已取消 Pack 导入。' };
     }
     const message = `Pack 导入失败：${describeImportFailure(error)}`;
+    void vscode.window.showErrorMessage(message);
+    return { ok: false, message };
+  }
+}
+
+/**
+ * Downloads or picks a CMSIS Core pack archive.
+ *
+ * The core pack is the one pack that cannot be installed through the device-pack
+ * path: it parses as a package but declares no devices, so \`importPack\` rejects
+ * it by design. It is fetched here and installed by \`installCorePack\`.
+ */
+async function pickCorePackArchive(): Promise<{ buffer: Buffer; fileName: string } | undefined> {
+  const source = await vscode.window.showQuickPick(
+    [
+      { label: '在线下载 ARM CMSIS 内核包（推荐）', value: 'online' as const },
+      { label: '本地 .pack 文件', value: 'local' as const }
+    ],
+    { placeHolder: '选择 ARM CMSIS 内核包来源' }
+  );
+  if (!source) {
+    return undefined;
+  }
+  if (source.value === 'local') {
+    return pickLocalPack();
+  }
+  const packs = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: '正在读取 CMSIS 公开 Pack 索引…',
+      cancellable: true
+    },
+    (_progress, token) => {
+      const controller = new AbortController();
+      const cancellation = token.onCancellationRequested(() => controller.abort());
+      return listPackIndexPacks(indexFetcher, packSearchCache, controller.signal)
+        .finally(() => cancellation.dispose());
+    }
+  );
+  const corePacks = packs
+    .filter((pack) => pack.name.trim().toLowerCase() === 'cmsis')
+    .sort((left, right) => comparePackVersions(right.version, left.version));
+  if (corePacks.length === 0) {
+    const message = 'CMSIS 公开索引中没有 ARM CMSIS 内核包。请改用本地 .pack 文件导入。';
+    void vscode.window.showErrorMessage(message);
+    return undefined;
+  }
+  const picked = await vscode.window.showQuickPick(
+    corePacks.map((pack) => ({
+      label: `ARM CMSIS ${pack.version}`,
+      description: pack.version,
+      detail: pack.packUrl,
+      pack
+    })),
+    { placeHolder: '选择要安装的 ARM CMSIS 内核包版本' }
+  );
+  if (!picked) {
+    return undefined;
+  }
+  const download = await downloadIndexedPack({
+    name: 'ARM.CMSIS',
+    version: picked.pack.version,
+    packUrl: picked.pack.packUrl
+  });
+  return { buffer: download.buffer, fileName: download.fileName };
+}
+
+/** Installs the ARM CMSIS core pack: the \`core_cm*.h\` headers device packs omit. */
+async function installCorePackOnly(): Promise<CommandResult> {
+  try {
+    const picked = await pickCorePackArchive();
+    if (!picked) {
+      return { ok: false, cancelled: true, message: '未安装内核包。' };
+    }
+    const installed = await installCorePack(picked.buffer, picked.fileName, packStorageRoot);
+    const message = installed.replaced
+      ? `已更新 ARM CMSIS 内核包到 ${installed.record.version}（${installed.record.files} 个头文件）。生成工程时会自动包含它。`
+      : `已安装 ARM CMSIS 内核包 ${installed.record.version}（${installed.record.files} 个头文件）。生成工程时会自动包含它。`;
+    void vscode.window.showInformationMessage(message);
+    activeSidebar?.refresh();
+    return { ok: true, message };
+  } catch (error) {
+    if (isCancellationError(error)) {
+      return { ok: false, cancelled: true, message: '已取消内核包安装。' };
+    }
+    const message = `内核包安装失败：${describeImportFailure(error)}`;
     void vscode.window.showErrorMessage(message);
     return { ok: false, message };
   }
@@ -1080,10 +1191,11 @@ async function generateProject(): Promise<void> {
       executables: executablePaths()
     };
   }
+  const externalIncludeDirs = await mcuExternalIncludeDirs();
   reportWorkflowResult(await generateMcuWorkflow(
     createWorkflowHost(root),
     profile,
-    { flash }
+    { flash, externalIncludeDirs }
   ));
 }
 
@@ -1169,6 +1281,7 @@ export function activate(context: vscode.ExtensionContext): void {
       sourcePack ? packArchiveBySource.get(sourcePack) : packFileByPart.get(part)
     ),
     discoverPackVendors: () => discoverPackVendorOptions(),
+    describeCorePack: async () => (await describeCorePack(packStorageRoot)).notice,
     loadPackCatalog: (vendor) => loadDevicePackCatalog(vendor),
     activatePack: (vendor, packId, version) => activateDevicePack(vendor, packId, version)
   });
@@ -1191,6 +1304,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('cmakeEmbedded.importPack', () => importPackOnly()),
     vscode.commands.registerCommand('cmakeEmbedded.installPackOnline', () => installPackOnlineOnly()),
     vscode.commands.registerCommand('cmakeEmbedded.removePack', () => removePackOnly()),
+    vscode.commands.registerCommand('cmakeEmbedded.installCorePack', () => installCorePackOnly()),
     vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebarProvider, {
       webviewOptions: { retainContextWhenHidden: true }
     }),

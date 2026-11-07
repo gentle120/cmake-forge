@@ -48,6 +48,7 @@ interface SidebarState {
   flashBackends: Array<{ value: string; label: string }>;
   linuxToolchains: Array<{ value: string; label: string }>;
   packCatalogNotice: string;
+  corePackNotice: string;
   selection: SidebarSelection;
 }
 
@@ -65,6 +66,7 @@ function baseState(overrides: Partial<SidebarState> = {}): SidebarState {
     versions: [{ value: 'builtin', label: '内置', description: 'builtin' }],
     pendingPackId: 'builtin:STM',
     packCatalogNotice: '',
+    corePackNotice: '',
     series: [{ value: 'F1x', label: 'STM32F1' }],
     devices: [{ value: 'STM32F103C8T6', label: 'STM32F103C8T6', description: 'STM32F1', detail: '64 KB Flash' }],
     flashTargets: [{ value: 'stm32f1xx', label: 'STM32F1' }],
@@ -260,7 +262,7 @@ test('every command button is unique and its command is dispatched by the render
   assert.deepEqual(
     [...new Set(commands)].sort(),
     ['cancelWorkspaceScan', 'generateDebugConfiguration', 'generateFlashScript',
-      'generateProject', 'importPack', 'installPackOnline', 'scanWorkspace']
+      'generateProject', 'importPack', 'installCorePack', 'installPackOnline', 'scanWorkspace']
   );
   // One delegated listener owns the static commands; no per-button wiring remains.
   const catalogListeners = [...scriptSource.matchAll(/app\.addEventListener\('click'/g)];
@@ -339,6 +341,34 @@ test('cancelled workspace scans keep the previous count instead of reporting zer
     result: { ok: true, message: '扫描完成', files: [] }
   });
   assert.equal(summary.textContent, previous);
+});
+
+test('shows the CMSIS core pack state and its install action', () => {
+  const harness = startSidebar(baseState());
+  const notice = harness.element('core-pack-notice');
+  assert.equal(notice.hidden, true);
+
+  harness.send({
+    type: 'state',
+    state: baseState({
+      corePackNotice: '未安装 ARM CMSIS 内核包：器件头文件 #include core_cm*.h 无法编译。'
+    })
+  });
+  assert.equal(notice.hidden, false);
+  assert.match(notice.textContent, /未安装 ARM CMSIS 内核包/);
+
+  const button = harness.element('install-core-pack');
+  button.dispatch('click', { target: button });
+  assert.deepEqual(harness.posted.at(-1), { type: 'installCorePack' });
+  // The busy guard disables the other actions while the install runs.
+  harness.send({ type: 'operationStarted', operation: '正在安装 ARM CMSIS 内核包' });
+  assert.equal(harness.element('install-pack-online').disabled, true);
+
+  harness.send({
+    type: 'state',
+    state: baseState({ corePackNotice: '已安装 ARM CMSIS 内核包 6.4.0（64 个头文件）。' })
+  });
+  assert.match(notice.textContent, /已安装 ARM CMSIS 内核包 6\.4\.0/);
 });
 
 test('download progress replaces the busy badge text and clears on finish', () => {

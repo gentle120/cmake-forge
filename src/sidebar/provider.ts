@@ -73,6 +73,8 @@ export interface SidebarProviderDependencies {
     packId: string,
     version: string
   ): Promise<{ vendorId: string; packId: string; version: string; sourcePack: string; message: string }>;
+  /** Sidebar copy describing the installed ARM CMSIS core pack. */
+  describeCorePack?(): Promise<string>;
 }
 
 function workspaceName(): string {
@@ -110,6 +112,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private vendorOptions?: Array<{ value: string; label: string; description?: string }>;
   private pendingPackId: string;
   private packCatalogNotice = '';
+  private corePackNotice = '';
   private packCatalogRequest = 0;
   private lastBusyHintAt = 0;
   private readonly viewDisposables: vscode.Disposable[] = [];
@@ -166,6 +169,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
    * download is visible where the user started it and not only in the corner
    * notification.
    */
+  private async refreshCorePackNotice(): Promise<void> {
+    if (!this.dependencies.describeCorePack) {
+      return;
+    }
+    try {
+      this.corePackNotice = await this.dependencies.describeCorePack();
+    } catch (error) {
+      this.corePackNotice = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   reportProgress(message: string): void {
     this.post({ type: 'operationProgress', message });
   }
@@ -177,6 +191,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     if (this.busy) {
       return;
     }
+    // The core-pack state changes only on install, but it is cached, so a stale
+    // copy would survive a manual storage cleanup.
+    void this.refreshCorePackNotice().then(() => this.postState());
     void this.refreshPackCatalog(this.selectionValue.mcu.vendor);
   }
 
@@ -211,7 +228,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.packOptions,
       this.pendingPackId,
       this.vendorOptions,
-      this.packCatalogNotice
+      this.packCatalogNotice,
+      this.corePackNotice
     );
   }
 
@@ -760,6 +778,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       if (result?.ok) {
         await this.refreshPackCatalog(this.selectionValue.mcu.vendor, true);
       }
+      this.postState();
+      return;
+    }
+    if (message.type === 'installCorePack') {
+      await this.runGeneration('正在安装 ARM CMSIS 内核包', async () => {
+        const commandResult = await vscode.commands.executeCommand<CommandResult>('cmakeEmbedded.installCorePack');
+        return { kind: 'mcu' as const, ...commandResult, files: [] };
+      });
+      // The include path the next generation writes depends on this result.
+      await this.refreshCorePackNotice();
       this.postState();
       return;
     }

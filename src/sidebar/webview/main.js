@@ -160,6 +160,7 @@
 
   const targetHost = document.getElementById('target-host');
   const packCatalogNotice = document.getElementById('pack-catalog-notice');
+  const corePackNotice = document.getElementById('core-pack-notice');
   const packCatalogBusy = document.createElement('p');
   packCatalogBusy.className = 'field-detail';
   packCatalogBusy.setAttribute('role', 'status');
@@ -281,6 +282,8 @@
     deviceSummary.hidden = !device;
     packCatalogNotice.textContent = state.packCatalogNotice || '';
     packCatalogNotice.hidden = !packCatalogNotice.textContent;
+    corePackNotice.textContent = state.corePackNotice || '';
+    corePackNotice.hidden = !corePackNotice.textContent;
     packCatalogBusy.hidden = !state.packCatalogLoading;
   }
 
@@ -562,6 +565,7 @@
   const commandLabels = {
     importPack: '正在导入 Pack',
     installPackOnline: '正在在线安装 Pack',
+    installCorePack: '正在安装 ARM CMSIS 内核包',
     scanWorkspace: '正在扫描工作区',
     generateProject: '正在生成工程',
     generateFlashScript: '正在生成 flash.py',

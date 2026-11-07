@@ -35,6 +35,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 
 - `architecture` 字段仅 `'arm'`；非 ARM Dcore 的 Pack 设备跳过并报告，不生成半成品档案。
 - PDSC `<processor Dcore>` 在 family/subFamily/device 任一层均有效，device 层缺失时继承上层；`CM0` 缩写与 `Cortex-M0`、`Cortex-M0+` 等全名拼写等价（`+` 归一为 `plus`）。
+- ARM CMSIS 内核包与器件 Pack 分开管理：内核包只取 `CMSIS/Core/Include/**/*.h` 与 PDSC，安装到扩展存储，其身份由 PDSC 的 vendor/name 决定；器件 Pack 的 `<devices>` 解析不得因内核包缺失或存在而改变。厂商器件头文件 `#include core_cm*.h`，而器件 DFP 不含这些文件，因此生成的 MCU 工程 `target_include_directories` 必须同时含工程内 include 目录与内核包的绝对 include 目录；内核包未安装时仍生成工程但提示缺失，不得静默产出一个必然编译失败的工程。
 - `Dvendor` 的数字注册号后缀（如 `Sinomcu:985`、`ARM:82`）既不进入厂商显示名也不进入厂商 id；同一厂商的后缀变体解析为同一身份。
 - 烧录后端 `openocd|jlink|pyocd` 与探针兼容矩阵见 `src/flash/backendProfiles.ts`；pyocd 后端不支持 J-Link 探针（硬件限制）。
 - pyOCD 的 pack 参数必须是真实存在的 `.pack` 文件；导入设备没有归档时省略 `--pack`，不得生成指向虚拟路径的配置。

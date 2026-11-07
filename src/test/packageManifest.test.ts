@@ -15,7 +15,8 @@ test('uses the extension name in command and settings display titles', () => {
       'CMake-Embedded: Generate Cortex-Debug Configuration',
       'CMake-Embedded: Import CMSIS Pack',
       'CMake-Embedded: Install Pack Online',
-      'CMake-Embedded: Remove Imported CMSIS Pack'
+      'CMake-Embedded: Remove Imported CMSIS Pack',
+      'CMake-Embedded: Install ARM CMSIS Core Pack'
     ]
   );
   assert.ok(!manifest.contributes.commands.some((command: { command: string }) =>

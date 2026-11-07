@@ -86,6 +86,10 @@
       {
         "command": "cmakeEmbedded.removePack",
         "title": "CMake-Embedded: Remove Imported CMSIS Pack"
+      },
+      {
+        "command": "cmakeEmbedded.installCorePack",
+        "title": "CMake-Embedded: Install ARM CMSIS Core Pack"
       }
     ],
     "configuration": {

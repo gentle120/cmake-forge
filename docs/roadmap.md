@@ -9,8 +9,8 @@ This file is a compact relay ledger, not a history log. Stable facts belong in `
 
 ## Current Batch
 
-- Objective: 按同一在线安装模式扩展 CH32/WCH：其器件包不在 CMSIS 公开索引中，需确认官方直链或另一可用索引来源后接入插件内下载。
-- Status: `ready`
+- Objective: 支持导入/在线下载 ARM CMSIS 内核包（core_cm*.h）。器件 DFP 的芯片头文件会 #include core_cm*.h，但 DFP 不含这些文件，生成的工程目前无法编译；内核包独立于器件包管理，安装后生成工程自动带上其 include 目录。
+- Status: `idle`
 
 ## Next Batch
 

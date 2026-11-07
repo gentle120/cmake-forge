@@ -71,6 +71,8 @@ export interface SidebarBootstrapState {
   versions: SidebarOption[];
   pendingPackId: string;
   packCatalogNotice: string;
+  /** Installed ARM CMSIS core pack, which device packs rely on for core_cm*.h. */
+  corePackNotice: string;
   series: SidebarOption[];
   devices: SidebarOption[];
   flashTargets: SidebarOption[];
@@ -463,7 +465,8 @@ export function buildSidebarState(
   packOptions: DevicePackOption[] = [],
   pendingPackId = selection.mcu.packId,
   vendorOptions?: SidebarOption[],
-  packCatalogNotice = ''
+  packCatalogNotice = '',
+  corePackNotice = ''
 ): SidebarBootstrapState {
   const profiles = listDeviceProfiles();
   const hits: LinuxToolchainHit[] = discoveredToolchains.map((hit) => ({
@@ -496,6 +499,7 @@ export function buildSidebarState(
       })),
     pendingPackId,
     packCatalogNotice,
+    corePackNotice,
     series: mcuOptions.series,
     devices: mcuOptions.devices,
     flashTargets: listFlashTargetProfiles().map((target) => ({

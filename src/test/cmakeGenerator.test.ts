@@ -29,6 +29,38 @@ test('generates a CMake project for GD32F103C8T6', () => {
   assert.match(cmake, /CMAKE_OBJCOPY.*-O ihex/s);
 });
 
+test('adds the external CMSIS core include directory outside the project root', () => {
+  const project: ProjectDescription = {
+    sources: ['Core/Src/main.c'],
+    includeDirs: ['Core/Inc'],
+    defines: []
+  };
+  const coreDir = 'C:/Users/dev/AppData/Roaming/Code/User/globalStorage/vendor.ext/cores/ARM.CMSIS.6.4.0/CMSIS/Core/Include';
+
+  const cmake = generateCMakeLists('firmware', project, gd32F103Profile(), undefined, {
+    paths: [coreDir]
+  });
+
+  // The core pack lives in extension storage, so it cannot be resolved against
+  // MCU_PROJECT_ROOT and must be absolute, with forward slashes for CMake.
+  assert.match(cmake, /target_include_directories\([\s\S]*Core\/Inc/);
+  assert.match(cmake, /"C:\/Users\/dev\/AppData\/Roaming[^"]*CMSIS\/Core\/Include"/);
+  assert.doesNotMatch(cmake, /\$\{MCU_PROJECT_ROOT\}\/C:\//);
+});
+
+test('generates the same include block when no external directories exist', () => {
+  const project: ProjectDescription = {
+    sources: ['Core/Src/main.c'],
+    includeDirs: ['Core/Inc'],
+    defines: []
+  };
+
+  const withEmpty = generateCMakeLists('firmware', project, gd32F103Profile(), undefined, { paths: [] });
+  const withoutArgument = generateCMakeLists('firmware', project, gd32F103Profile());
+
+  assert.equal(withEmpty, withoutArgument);
+});
+
 test('enables CXX when the project contains C++ sources', () => {
   const project: ProjectDescription = {
     sources: ['Core/Src/main.cpp'],

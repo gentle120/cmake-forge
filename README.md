@@ -139,6 +139,13 @@ OpenOCD 烧录 target 独立选择，因此也可以给已有自定义 CMake 工
 或「在线安装 Pack…」（CMSIS 公开在线索引，按已选系列的器件包/厂商过滤，
 选定版本后插件内直接下载、导入并激活）。不含设备的组件包不会出现在列表中。
 
+器件 Pack 只带厂商自己的器件头文件，而它们都会 `#include "core_cm*.h"` —— 这些
+文件在 ARM 的 CMSIS 内核包里，不在 DFP 中。侧栏的「安装内核包…」或命令
+`CMake-Embedded: Install ARM CMSIS Core Pack` 会从同一索引下载 `ARM.CMSIS`
+（也可选本地 .pack），只解出 `CMSIS/Core/Include` 存入扩展存储；之后生成的
+工程会自动把该目录加进 `target_include_directories`。没装内核包时工程照常生成，
+但会提示缺失 —— 否则编译必然在 `core_cm*.h` 处失败。
+
 「在线安装 Pack…」对 STM32 与 GD32 都是插件内一步完成：STM32 系列下载
 Keil 发布的 `STM32F1xx_DFP` 等器件包，GD32 系列下载 GigaDevice 自托管的
 `GD32F10x_DFP`/`GD32F30x_DFP`/`GD32F4xx_DFP`。索引没有覆盖的厂商（如 CH32）

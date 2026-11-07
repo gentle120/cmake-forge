@@ -104,8 +104,12 @@ export function renderSidebarHtml(
           <button id="install-pack-online" class="secondary-action compact" type="button" data-command="installPackOnline">
             <span class="ui-icon" data-icon="refresh" aria-hidden="true"></span><span>在线安装 Pack…</span>
           </button>
+          <button id="install-core-pack" class="secondary-action compact" type="button" data-command="installCorePack">
+            <span class="ui-icon" data-icon="chip" aria-hidden="true"></span><span>安装内核包…</span>
+          </button>
         </div>
         <p id="pack-catalog-notice" class="field-detail" role="status" aria-live="polite" hidden></p>
+        <p id="core-pack-notice" class="field-detail" role="status" aria-live="polite" hidden></p>
       </section>
 
       <section class="control-section flash-section" aria-labelledby="flash-title">

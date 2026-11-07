@@ -60,6 +60,8 @@ export interface WorkflowResult {
 }
 
 export interface McuWorkflowOptions {
+  /** Absolute include directories outside the workspace, such as the CMSIS core pack. */
+  externalIncludeDirs?: string[];
   flash?: {
     target: FlashTargetProfile;
     probe: FlashProbeProfile;
@@ -90,7 +92,7 @@ function createMcuFiles(
   profile: DeviceProfile,
   project: ProjectDescription,
   existingCMakeContent: string | undefined,
-  flash?: McuWorkflowOptions['flash']
+  options: McuWorkflowOptions
 ): GeneratedFile[] {
   const cmakeDir = join(root, 'cmake');
   const hasSource = (fileName: string): boolean => {
@@ -99,7 +101,9 @@ function createMcuFiles(
   };
   const files: GeneratedFile[] = [{
     path: join(root, 'CMakeLists.txt'),
-    content: generateCMakeLists(projectName, project, profile, existingCMakeContent)
+    content: generateCMakeLists(projectName, project, profile, existingCMakeContent, {
+      paths: options.externalIncludeDirs
+    })
   }];
 
   if (!hasSource(runtimeSourceNames[0])) {
@@ -132,6 +136,7 @@ function createMcuFiles(
       content: generateCMakePresets(profile.toolchainFileName)
     }
   );
+  const flash = options.flash;
   if (flash) {
     files.push({
       path: join(root, 'flash.py'),
@@ -193,7 +198,7 @@ export async function generateMcuWorkflow(
     profile,
     project,
     existingCMakeContent,
-    options.flash
+    options
   );
   const configPath = join(root, '.mcu-cmake.json');
   const settingsPath = join(root, '.vscode', 'settings.json');

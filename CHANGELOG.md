@@ -2,6 +2,10 @@
 
 ## 2.1.3
 
+- Add the ARM CMSIS core pack: device packs include `core_cm*.h` but do not ship
+  it, so the sidebar gains "安装内核包…" (and the `Install ARM CMSIS Core Pack`
+  command) to download or import `ARM.CMSIS`, install only its Core include
+  directory, and add it to every generated project automatically.
 - Show download progress while installing a pack online: the notification and the
   sidebar badge report transferred size, total size, and percentage.
 - Download packs over a channel suited to mainland networks: Keil-hosted archives

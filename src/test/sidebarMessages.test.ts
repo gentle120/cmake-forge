@@ -16,6 +16,8 @@ test('accepts each supported sidebar command', () => {
     type: 'generateDebugConfiguration'
   });
   assert.deepEqual(parseIncomingMessage({ type: 'openSettings' }), { type: 'openSettings' });
+  // The CMSIS core pack installs separately from device packs.
+  assert.deepEqual(parseIncomingMessage({ type: 'installCorePack' }), { type: 'installCorePack' });
   assert.equal(parseIncomingMessage({ type: 'scanEnvironment' }), undefined);
 });
 
