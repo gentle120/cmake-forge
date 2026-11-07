@@ -69,7 +69,7 @@ export interface SidebarProviderDependencies {
   scanProject?(root: string, options?: { signal?: AbortSignal }): ReturnType<typeof scanProject>;
   /** Resolves the stored CMSIS pack path for an imported part, when available. */
   packFileForPart?(part: string, sourcePack?: string): string | undefined;
-  discoverPackVendors?(): Promise<{ vendors: Array<{ value: string; label: string }>; notice?: string }>;
+  discoverPackVendors?(): Promise<{ vendors: Array<{ value: string; label: string; description?: string }>; notice?: string }>;
   loadPackCatalog?(vendor: string): Promise<{ options: DevicePackOption[]; notice?: string }>;
   activatePack?(
     vendor: string,
@@ -110,7 +110,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private workspaceScanController?: AbortController;
   private workspaceScanPromise?: Promise<void>;
   private packOptions: DevicePackOption[] = [];
-  private vendorOptions?: Array<{ value: string; label: string }>;
+  private vendorOptions?: Array<{ value: string; label: string; description?: string }>;
   private pendingPackId: string;
   private packCatalogNotice = '';
   private packCatalogRequest = 0;

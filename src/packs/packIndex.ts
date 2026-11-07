@@ -2,7 +2,6 @@ import { XMLParser } from 'fast-xml-parser';
 
 export interface PackIndexEntry {
   vendorName: string;
-  pdscUrl: string;
 }
 
 export interface PackIndexPack {
@@ -14,25 +13,13 @@ export interface PackIndexPack {
 }
 
 export interface PackSearchOptions {
-  /** Reuses parsed vendor pack indexes between searches. */
+  /** Reuses the parsed pack index between searches. */
   cache?: Map<string, PackSearchCacheEntry>;
-  /** Optional cache for the vendor index itself. */
-  vendorCache?: Map<string, VendorCacheEntry>;
-  /** Limits simultaneous vendor index requests. */
-  concurrency?: number;
   signal?: AbortSignal;
-  /** Cache freshness in milliseconds. */
-  ttlMs?: number;
-  now?: () => number;
 }
 
 export interface PackSearchCacheEntry {
   packs: PackIndexPack[];
-  expiresAt: number;
-}
-
-export interface VendorCacheEntry {
-  vendors: PackIndexEntry[];
   expiresAt: number;
 }
 
@@ -49,64 +36,72 @@ export type FetchLike = (url: string) => Promise<{
 }>;
 
 const packIndexUrl = 'https://www.keil.com/pack/keil.pidx';
+const indexTtlMs = 5 * 60 * 1000;
 
 type XmlNode = Record<string, unknown>;
 
 const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
 
-/** Fetches the keil.com vendor index (keil.pidx). */
-export async function listPackVendors(fetcher: FetchLike): Promise<PackIndexEntry[]> {
+/**
+ * Fetches keil.pidx and flattens its `<pindex><pdsc url vendor name version/>`
+ * entries into direct Pack entries. The CMSIS naming convention resolves the
+ * download URL as `<root><vendor>.<name>.<version>.pack`; keil.com serves
+ * these under a 302 to its CDN. Entries missing any identity field are
+ * skipped because there is no download URL to hand to the importer.
+ */
+export async function listPackIndexPacks(
+  fetcher: FetchLike,
+  cache?: Map<string, PackSearchCacheEntry>
+): Promise<PackIndexPack[]> {
+  const cached = cache?.get(packIndexUrl);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.packs;
+  }
   const response = await fetcher(packIndexUrl);
   if (!response.ok || response.status < 200 || response.status >= 300) {
-    throw new Error(`Failed to fetch pack vendor index ${packIndexUrl}: HTTP ${response.status}`);
-  }
-  const document = xmlParser.parse(await response.text()) as unknown;
-  const entries: PackIndexEntry[] = [];
-  const seen = new Set<string>();
-  walkNodes(document, (node) => {
-    // Vendor entries appear both as child elements (<name>/<url>) and as
-    // attributes (name="..."/url="..."); anything else carrying a .pdidx
-    // link (e.g. schema release notes) is not a vendor index.
-    const pdscUrl = textField(node, 'url');
-    if (!pdscUrl || !pdscUrl.toLowerCase().includes('.pdidx') || seen.has(pdscUrl)) {
-      return;
-    }
-    seen.add(pdscUrl);
-    const vendorName =
-      textField(node, 'name') ?? textField(node, 'vendor') ?? vendorNameFromIndexUrl(pdscUrl);
-    entries.push({ vendorName, pdscUrl });
-  });
-  return entries;
-}
-
-/**
- * Fetches a vendor pdidx. Entries that expose a direct .pack URL become
- * PackIndexPack; entries that only reference a .pdsc file are skipped because
- * there is no pack download link to hand to the importer and deriving one
- * from a directory URL would be guesswork.
- */
-export async function listPacksForVendor(fetcher: FetchLike, entry: PackIndexEntry): Promise<PackIndexPack[]> {
-  const response = await fetcher(entry.pdscUrl);
-  if (!response.ok || response.status < 200 || response.status >= 300) {
-    throw new Error(`Failed to fetch pack index ${entry.pdscUrl}: HTTP ${response.status}`);
+    throw new Error(`Failed to fetch pack index ${packIndexUrl}: HTTP ${response.status}`);
   }
   const document = xmlParser.parse(await response.text()) as unknown;
   const packs: PackIndexPack[] = [];
-  const entryKeys: Record<string, true> = { package: true, pdsc: true };
-  for (const node of collectEntries(document, entryKeys)) {
-    const packUrl = textField(node, 'url');
-    if (!packUrl || !/\.pack$/i.test(packUrl)) {
+  for (const node of collectEntries(document, { pdsc: true })) {
+    const url = textField(node, 'url');
+    const vendor = textField(node, 'vendor');
+    const name = textField(node, 'name');
+    const version = textField(node, 'version');
+    if (!url || !vendor || !name || !version) {
       continue;
     }
+    const root = url.endsWith('/') ? url : `${url}/`;
     packs.push({
-      name: textField(node, 'name') ?? packNameFromUrl(packUrl),
-      version: textField(node, 'version') ?? '',
-      description: textField(node, 'description') ?? '',
-      packUrl,
-      vendorName: textField(node, 'vendor') ?? entry.vendorName
+      name,
+      version,
+      description: '',
+      packUrl: `${root}${vendor}.${name}.${version}.pack`,
+      vendorName: vendor
     });
   }
+  cache?.set(packIndexUrl, { packs, expiresAt: Date.now() + indexTtlMs });
   return packs;
+}
+
+/** Lists each vendor of the pack index once, in first-appearance order. */
+export async function listPackVendors(
+  fetcher: FetchLike,
+  cache?: Map<string, PackSearchCacheEntry>
+): Promise<PackIndexEntry[]> {
+  const packs = await listPackIndexPacks(fetcher, cache);
+  return [...new Set(packs.map((pack) => pack.vendorName))].map((vendorName) => ({ vendorName }));
+}
+
+/** Lists every version of one vendor's packs from the index. */
+export async function listPacksForVendor(
+  fetcher: FetchLike,
+  vendorName: string,
+  cache?: Map<string, PackSearchCacheEntry>
+): Promise<PackIndexPack[]> {
+  return (await listPackIndexPacks(fetcher, cache)).filter(
+    (pack) => pack.vendorName === vendorName
+  );
 }
 
 /** Case-insensitive substring search over vendor name, pack name, and description. */
@@ -118,63 +113,23 @@ export async function searchPacks(
   if (options.signal?.aborted) {
     throw new Error('Pack search cancelled.');
   }
+  const packs = await listPackIndexPacks(fetcher, options.cache);
+  if (options.signal?.aborted) {
+    throw new Error('Pack search cancelled.');
+  }
   const needle = keyword.trim().toLowerCase();
-  const cache = options.cache ?? new Map<string, PackSearchCacheEntry>();
-  const vendorCache = options.vendorCache ?? new Map<string, VendorCacheEntry>();
-  const now = options.now ?? Date.now;
-  const ttlMs = options.ttlMs ?? 5 * 60 * 1000;
-  const vendorCacheKey = '\0vendors';
-  const cachedVendors = vendorCache.get(vendorCacheKey);
-  const vendors = cachedVendors && cachedVendors.expiresAt > now()
-    ? cachedVendors.vendors
-    : await listPackVendors(fetcher);
-  if (!cachedVendors || cachedVendors.expiresAt <= now()) {
-    vendorCache.set(vendorCacheKey, {
-      vendors,
-      expiresAt: now() + ttlMs
-    });
-  }
-  const concurrency = Math.max(1, Math.floor(options.concurrency ?? 6));
-  const results: PromiseSettledResult<PackIndexPack[]>[] = new Array(vendors.length);
-  for (let index = 0; index < vendors.length; index += concurrency) {
-    if (options.signal?.aborted) {
-      throw new Error('Pack search cancelled.');
-    }
-    const batch = vendors.slice(index, index + concurrency);
-    const settled = await Promise.allSettled(batch.map(async (entry) => {
-      const cached = cache.get(entry.pdscUrl);
-      if (cached && cached.expiresAt > now()) {
-        return cached.packs;
-      }
-      const packs = await listPacksForVendor(fetcher, entry);
-      cache.set(entry.pdscUrl, { packs, expiresAt: now() + ttlMs });
-      return packs;
-    }));
-    settled.forEach((result, offset) => {
-      results[index + offset] = result;
-    });
-  }
-  const matches: PackIndexPack[] = [];
-  for (const result of results) {
-    if (result.status !== 'fulfilled') {
-      continue;
-    }
-    for (const pack of result.value) {
-      if (
-        needle.length === 0 ||
-        pack.vendorName.toLowerCase().includes(needle) ||
-        pack.name.toLowerCase().includes(needle) ||
-        pack.description.toLowerCase().includes(needle)
-      ) {
-        matches.push(pack);
-      }
-    }
-  }
-  return matches.sort((left, right) => (
-    left.vendorName.localeCompare(right.vendorName)
-    || left.name.localeCompare(right.name)
-    || compareVersions(left.version, right.version)
-  ));
+  return packs
+    .filter((pack) =>
+      needle.length === 0 ||
+      pack.vendorName.toLowerCase().includes(needle) ||
+      pack.name.toLowerCase().includes(needle) ||
+      pack.description.toLowerCase().includes(needle)
+    )
+    .sort((left, right) => (
+      left.vendorName.localeCompare(right.vendorName)
+      || left.name.localeCompare(right.name)
+      || compareVersions(left.version, right.version)
+    ));
 }
 
 function compareVersions(left: string, right: string): number {
@@ -213,23 +168,6 @@ function textField(node: XmlNode, key: string): string | undefined {
   return String(raw);
 }
 
-function walkNodes(node: unknown, visit: (node: XmlNode) => void): void {
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      walkNodes(item, visit);
-    }
-    return;
-  }
-  if (node === null || typeof node !== 'object') {
-    return;
-  }
-  const record = node as XmlNode;
-  visit(record);
-  for (const value of Object.values(record)) {
-    walkNodes(value, visit);
-  }
-}
-
 function collectEntries(node: unknown, entryKeys: Record<string, true>, out: XmlNode[] = []): XmlNode[] {
   if (Array.isArray(node)) {
     for (const item of node) {
@@ -253,16 +191,4 @@ function collectEntries(node: unknown, entryKeys: Record<string, true>, out: Xml
     collectEntries(value, entryKeys, out);
   }
   return out;
-}
-
-function vendorNameFromIndexUrl(url: string): string {
-  const path = url.split(/[?#]/)[0];
-  const base = path.substring(path.lastIndexOf('/') + 1);
-  return base.replace(/\.pdidx$/i, '');
-}
-
-function packNameFromUrl(url: string): string {
-  const path = url.split(/[?#]/)[0];
-  const base = path.substring(path.lastIndexOf('/') + 1);
-  return base.replace(/\.pack$/i, '');
 }

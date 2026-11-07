@@ -40,13 +40,12 @@ import {
 import { buildPackVendorOptions } from './packs/vendorOptions';
 import {
   downloadPack,
+  listPackIndexPacks,
   listPackVendors,
-  listPacksForVendor,
   searchPacks,
   type FetchLike,
   type PackSearchCacheEntry,
-  type PackIndexEntry,
-  type VendorCacheEntry
+  type PackIndexEntry
 } from './packs/packIndex';
 import { existsSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -309,28 +308,9 @@ let activeSidebar: SidebarProvider | undefined;
 const packFileByPart = new Map<string, string>();
 const packArchiveBySource = new Map<string, string>();
 const packSearchCache = new Map<string, PackSearchCacheEntry>();
-const packVendorCache = new Map<string, VendorCacheEntry>();
-const packVendorsTtlMs = 5 * 60 * 1000;
-const packVendorsCacheKey = '\0vendors';
-let packVendorsRequest: Promise<PackIndexEntry[]> | undefined;
 
 async function onlinePackVendors(): Promise<PackIndexEntry[]> {
-  const cached = packVendorCache.get(packVendorsCacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.vendors;
-  }
-  if (!packVendorsRequest) {
-    packVendorsRequest = listPackVendors(fetchWithTimeout).then((vendors) => {
-      packVendorCache.set(packVendorsCacheKey, {
-        vendors,
-        expiresAt: Date.now() + packVendorsTtlMs
-      });
-      return vendors;
-    }).finally(() => {
-      packVendorsRequest = undefined;
-    });
-  }
-  return packVendorsRequest;
+  return listPackVendors(fetchWithTimeout, packSearchCache);
 }
 
 function ensureCatalogVendor(id: string, label: string): void {
@@ -350,15 +330,26 @@ async function installedPackIdentities(): Promise<InstalledPackIdentity[]> {
 }
 
 /**
- * Vendor options for the sidebar: vendors of already-imported profiles plus
- * installed Packs that actually contain importable MCU devices. The online
- * index is not a vendor source — its publishers only become vendors after a
- * successful import, which keeps component packs from polluting the list.
+ * Vendor options for the sidebar: local sources (imported profiles and
+ * installed Packs with importable devices) first, then the keil.com index
+ * vendors so every chip family stays browsable. Online entries are marked in
+ * their label and only download when the user activates one of their Pack
+ * versions.
  */
 async function discoverPackVendorOptions(): Promise<{
-  vendors: Array<{ value: string; label: string }>;
+  vendors: Array<{ value: string; label: string; description?: string }>;
   notice?: string;
 }> {
+  let online: Array<{ vendorId: string; vendorName: string }> = [];
+  let notice: string | undefined;
+  try {
+    online = (await onlinePackVendors()).map((entry) => ({
+      vendorId: packVendorIdFromName(entry.vendorName),
+      vendorName: entry.vendorName
+    }));
+  } catch (error) {
+    notice = `在线 Pack 索引暂不可用：${error instanceof Error ? error.message : String(error)}`;
+  }
   const vendors = buildPackVendorOptions({
     registered: listDeviceVendors(listDeviceProfiles()).map((vendor) => ({
       id: vendor,
@@ -373,12 +364,13 @@ async function discoverPackVendorOptions(): Promise<{
       vendorId: pack.vendorId,
       vendorName: pack.vendorName,
       hasDevices: pack.hasDevices
-    }))
+    })),
+    online
   });
   for (const vendor of vendors) {
-    ensureCatalogVendor(vendor.value, vendor.label);
+    ensureCatalogVendor(vendor.value, vendor.label.replace(/（在线）$/, ''));
   }
-  return { vendors };
+  return { vendors, notice };
 }
 
 async function loadDevicePackCatalog(vendorId: string): Promise<{
@@ -402,24 +394,11 @@ async function loadDevicePackCatalog(vendorId: string): Promise<{
       source: pack.source,
       hasDevices: pack.hasDevices
     }));
-  let online: Awaited<ReturnType<typeof listPacksForVendor>> = [];
+  let online: Awaited<ReturnType<typeof listPackIndexPacks>> = [];
   let notice: string | undefined;
   try {
-    const entry = (await onlinePackVendors()).find((candidate) =>
-      packVendorIdFromName(candidate.vendorName) === vendorId
-    );
-    if (entry) {
-      const cached = packSearchCache.get(entry.pdscUrl);
-      if (cached && cached.expiresAt > Date.now()) {
-        online = cached.packs;
-      } else {
-        online = await listPacksForVendor(fetchWithTimeout, entry);
-        packSearchCache.set(entry.pdscUrl, {
-          packs: online,
-          expiresAt: Date.now() + packVendorsTtlMs
-        });
-      }
-    }
+    const indexPacks = await listPackIndexPacks(fetchWithTimeout, packSearchCache);
+    online = indexPacks.filter((pack) => packVendorIdFromName(pack.vendorName) === vendorId);
   } catch (error) {
     notice = `在线 Pack 列表暂不可用：${error instanceof Error ? error.message : String(error)}`;
   }
@@ -626,8 +605,6 @@ async function pickOnlinePack(): Promise<{ buffer: Buffer; fileName: string } | 
       const cancellation = token.onCancellationRequested(() => controller.abort());
       return searchPacks(fetchWithTimeout, keyword, {
         cache: packSearchCache,
-        vendorCache: packVendorCache,
-        concurrency: 4,
         signal: controller.signal
       }).finally(() => cancellation.dispose());
     }

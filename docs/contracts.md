@@ -37,12 +37,13 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - `Dvendor` 的数字注册号后缀（如 `Sinomcu:985`、`ARM:82`）既不进入厂商显示名也不进入厂商 id；同一厂商的后缀变体解析为同一身份。
 - 烧录后端 `openocd|jlink|pyocd` 与探针兼容矩阵见 `src/flash/backendProfiles.ts`；pyocd 后端不支持 J-Link 探针（硬件限制）。
 - pyOCD 的 pack 参数必须是真实存在的 `.pack` 文件；导入设备没有归档时省略 `--pack`，不得生成指向虚拟路径的配置。
-- 在线 Pack 搜索可复用 TTL 缓存，限制并发索引请求，并在取消后停止发起后续请求；每个可下载版本都保留为独立条目，不折叠为最新版本。
+- 在线 Pack 搜索复用同一 TTL 缓存的索引并在取消后停止发起后续请求；每个可下载版本都保留为独立条目，不折叠为最新版本。
 - 侧栏 MCU 选择为 vendor → pack → version → series → part 五级；series/part 必须属于当前选中 Pack 的版本，否则回退到该版本首个可用系列与型号，不保留跨 vendor 或跨 Pack 残留。
 - Pack 目录条目按身份区分：`installed`、`imported`、`downloadable`；同一 packId+version 只展示一个条目，已安装/已导入优先于可下载。
 - 已安装 Pack 的身份取自 PDSC（`Dvendor`、包名、`release version`）；Keil 安装目录名或归档文件名不是最终身份，PDSC 无法解析的条目被跳过。
 - 目录选项的 `packFile` 是安装位置，不是导入档案的所有权键；导入档案的所有权键固定为 `packs/<vendor>/<file>.pack` 形式的扩展存储相对路径。切换 Pack 或版本时所有权键随之切换，目录中已加载的 `imported` 条目优先于持久化键，目录未加载时沿用持久化键。
-- 侧栏厂商列表只含能提供可用 MCU 设备的来源：已导入档案的厂商、PDSC 解析出至少一个可导入设备的已安装 Pack、`parts` 非空的已导入记录；在线索引不是厂商来源，其厂商在导入成功后出现。
+- 侧栏厂商列表按序包含：已导入档案的厂商、PDSC 解析出至少一个可导入设备的已安装 Pack、`parts` 非空的已导入记录，最后是 keil.com 在线索引厂商（label 标注「（在线）」）；同一厂商本地来源优先且不重复出现。
+- 在线索引为 keil.com `keil.pidx`（单次拉取，TTL 缓存）；其 `<pindex><pdsc url vendor name version/>` 条目按 CMSIS 命名约定派生下载地址 `<root><vendor>.<name>.<version>.pack`（keil.com 302 至 CDN）；索引缺失任何身份字段的条目跳过。
 - 显式切换厂商时自动激活该厂商最新的可用版本（`imported`/`installed`，同版本 `imported` 优先）；`downloadable` 版本不自动下载，启动时的目录刷新不自动激活。
 - 仅切换侧栏模式（mcu/linux/native）的保存按消息保留模式；MCU 字段重算不改写模式。
 - 侧栏调试器列表仅提供当前烧录后端支持的探针；切换后端时不保留不兼容探针。
