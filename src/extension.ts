@@ -532,9 +532,14 @@ async function pickLocalPack(): Promise<{ buffer: Buffer; fileName: string } | u
 }
 
 async function pickKeilPack(): Promise<{ kind: 'buffer'; buffer: Buffer; fileName: string } | { kind: 'directory'; root: string; pdscPath: string } | undefined> {
-  const installed = await installedPackIdentities();
+  // Component/board packs (CMSIS, middleware, BSPs) contain no chips and can
+  // never yield a usable import; only device-bearing packs are selectable.
+  const installed = (await installedPackIdentities()).filter((pack) => pack.hasDevices);
   if (installed.length === 0) {
-    vscode.window.showWarningMessage('未在 Keil Pack 目录中发现已安装的 Pack。');
+    vscode.window.showWarningMessage(
+      'Keil 安装目录中没有含可生成芯片的器件包（CMSIS 组件包、中间件包、板级包不算）。' +
+      '请先获取芯片厂商的 DFP 器件包（Keil Pack Installer 或厂商官网），再用「本地 .pack 文件」导入。'
+    );
     return undefined;
   }
   const picked = await vscode.window.showQuickPick(
@@ -544,7 +549,7 @@ async function pickKeilPack(): Promise<{ kind: 'buffer'; buffer: Buffer; fileNam
       detail: pack.packFile,
       identity: pack
     })),
-    { placeHolder: `发现 ${installed.length} 个已安装 Pack，选择要导入的` }
+    { placeHolder: `发现 ${installed.length} 个含器件的已安装 Pack，选择要导入的` }
   );
   if (!picked) {
     return undefined;
@@ -653,7 +658,12 @@ async function importPackOnly(): Promise<CommandResult> {
     void vscode.window.showInformationMessage(message);
     return { ok: true, message };
   } catch (error) {
-    const message = `Pack 导入失败：${error instanceof Error ? error.message : String(error)}`;
+    const raw = error instanceof Error ? error.message : String(error);
+    // Component/board packs (CMSIS, middleware, BSPs) fail deep inside the
+    // parser; translate those PDSC errors into product guidance.
+    const message = /no devices section|No \.pdsc file found|no family vendor/.test(raw)
+      ? 'Pack 导入失败：这个包的 PDSC 没有任何芯片定义（CMSIS 组件包、中间件包或板级包不含可生成的芯片）。请改用芯片厂商的 DFP 器件包。'
+      : `Pack 导入失败：${raw}`;
     void vscode.window.showErrorMessage(message);
     return { ok: false, message };
   }
