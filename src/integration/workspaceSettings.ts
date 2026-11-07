@@ -1,51 +1,23 @@
+/**
+ * Visual Studio Code settings written by every generated project.
+ *
+ * CMake Tools and the C/C++ extension are pointed at the generated presets and
+ * compile database; the shared values live in `../shared/cppPropertiesFile` so
+ * all three directions cannot drift apart.
+ */
+
+import {
+  baseWorkspaceSettings,
+  workspaceIntegration,
+  type WorkspaceIntegration
+} from '../shared/cppPropertiesFile';
+
 export type WorkspaceSettingValue = string | boolean;
 
-export interface WorkspaceIntegration {
-  cmakeTools: {
-    preset: string;
-    configurePreset: string;
-    buildPreset: string;
-    settingsFile: string;
-  };
-  cppTools: {
-    configurationSource: string;
-    compileCommands: string;
-    dimInactiveRegions: boolean;
-  };
-}
-
-const workspaceSettings: Record<string, WorkspaceSettingValue> = {
-  // The generated CMakeLists.txt and CMakePresets.json always live in the workspace root,
-  // so a stale source directory would hide the generated presets from CMake Tools.
-  'cmake.sourceDirectory': '${workspaceFolder}',
-  'cmake.useCMakePresets': 'always',
-  'cmake.configureOnOpen': true,
-  'C_Cpp.intelliSenseEngine': 'default',
-  'C_Cpp.default.compileCommands': '${workspaceFolder}/build/debug/compile_commands.json',
-  'C_Cpp.dimInactiveRegions': true
-};
-
-const workspaceIntegration: WorkspaceIntegration = {
-  cmakeTools: {
-    preset: 'debug',
-    configurePreset: 'debug',
-    buildPreset: 'debug',
-    settingsFile: '.vscode/settings.json'
-  },
-  cppTools: {
-    configurationSource: 'CMake compile_commands.json',
-    compileCommands: 'build/debug/compile_commands.json',
-    dimInactiveRegions: true
-  }
-};
+export { workspaceIntegration as getWorkspaceIntegration };
 
 export function getWorkspaceSettings(): Record<string, WorkspaceSettingValue> {
-  return { ...workspaceSettings };
+  return baseWorkspaceSettings();
 }
 
-export function getWorkspaceIntegration(): WorkspaceIntegration {
-  return {
-    cmakeTools: { ...workspaceIntegration.cmakeTools },
-    cppTools: { ...workspaceIntegration.cppTools }
-  };
-}
+export type { WorkspaceIntegration };

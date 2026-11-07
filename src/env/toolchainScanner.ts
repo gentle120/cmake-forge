@@ -229,6 +229,13 @@ export function listKeilPacks(packRoots: string[], fs: ScanFileSystem): KeilPack
       continue;
     }
     for (const vendor of safeReadDir(fs, packRoot)) {
+      // A real Pack root also holds CMSIS caches such as ".Web" (thousands of
+      // flat .pdsc files), ".Download" and ".Local", plus "pack.idx". Vendor
+      // directories never start with a dot, and probing those caches cost a
+      // failed readdir per file (~3400 per scan on a stock install).
+      if (vendor.startsWith('.')) {
+        continue;
+      }
       const vendorDirectory = joinPath(packRoot, vendor);
       for (const name of safeReadDir(fs, vendorDirectory)) {
         const nameDirectory = joinPath(vendorDirectory, name);

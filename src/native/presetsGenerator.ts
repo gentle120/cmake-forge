@@ -1,24 +1,12 @@
-export function generateNativeCMakePresets(): string {
-  const configurePreset = (name: string, displayName: string): Record<string, unknown> => ({
-    name,
-    displayName,
-    generator: 'Ninja',
-    binaryDir: `\${sourceDir}/build/${name}`,
-    cacheVariables: {
-      CMAKE_BUILD_TYPE: displayName,
-      CMAKE_EXPORT_COMPILE_COMMANDS: 'ON'
-    }
-  });
+/**
+ * Generates CMakePresets.json for a desktop C/C++ project.
+ *
+ * The desktop CMakeLists.txt does not enable the compile database, so the preset
+ * is the only place that turns it on for IntelliSense.
+ */
 
-  return `${JSON.stringify({
-    version: 3,
-    configurePresets: [
-      configurePreset('debug', 'Debug'),
-      configurePreset('release', 'Release')
-    ],
-    buildPresets: [
-      { name: 'debug', configurePreset: 'debug' },
-      { name: 'release', configurePreset: 'release' }
-    ]
-  }, null, 2)}\n`;
+import { generateCMakePresets as generateSharedPresets } from '../shared/cmakePresets';
+
+export function generateNativeCMakePresets(): string {
+  return generateSharedPresets();
 }

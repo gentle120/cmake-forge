@@ -99,3 +99,48 @@ test('ARMv8-M mainline cores expose SecureFault in the first reserved slot', () 
   assert.match(startup, /\.weak SecureFault_Handler/);
   assert.match(startup, /\.thumb_set SecureFault_Handler, Default_Handler/);
 });
+
+test('ARMv8-M baseline cores keep the ARMv6-M table, like Arm own startup file', () => {
+  // Arm's startup_ARMCM23.c declares words 4-10 reserved and has no
+  // MemManage/Fault/DebugMon handlers; a M23 is baseline, not mainline.
+  const startup = generateGnuStartup(fixtureDeviceProfile({
+    part: 'GD32E230C8T6',
+    core: 'cortex-m23',
+    linkerFileName: 'GD32E230C8T6.ld',
+    gnuStartupFileName: 'startup_gd32e230.S'
+  }));
+  const words = vectorWords(startup);
+
+  assert.deepEqual(words.slice(0, 16), [
+    '_estack',
+    'Reset_Handler',
+    'NMI_Handler',
+    'HardFault_Handler',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    'SVC_Handler',
+    '0',
+    '0',
+    'PendSV_Handler',
+    'SysTick_Handler'
+  ]);
+  assert.doesNotMatch(startup, /MemManage_Handler|BusFault_Handler|UsageFault_Handler|SecureFault_Handler|DebugMon_Handler/);
+});
+
+test('ARMv6-M cores without a mainline FPU/MPU table still get their aliases', () => {
+  const startup = generateGnuStartup(fixtureDeviceProfile({
+    part: 'ARMCM0',
+    core: 'cortex-m0plus',
+    linkerFileName: 'ARMCM0.ld',
+    gnuStartupFileName: 'startup_armcm0.S'
+  }));
+
+  assert.match(startup, /\.weak NMI_Handler/);
+  assert.match(startup, /\.weak SysTick_Handler/);
+  assert.doesNotMatch(startup, /\.weak MemManage_Handler/);
+});

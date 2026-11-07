@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createTimeoutFetcher, isTransientNetworkError } from '../packs/fetcher';
+import {
+  createTimeoutFetcher,
+  isCancellationError,
+  isTransientNetworkError
+} from '../packs/fetcher';
 
 function networkError(code: string): Error {
   return Object.assign(new Error('fetch failed'), { cause: { code } });
@@ -55,6 +59,16 @@ test('only connection-level codes count as transient', () => {
   assert.equal(isTransientNetworkError(networkError('ENOTFOUND')), false);
   assert.equal(isTransientNetworkError(Object.assign(new Error('x'), { name: 'AbortError' })), false);
   assert.equal(isTransientNetworkError(new Error('boom')), false);
+});
+
+test('recognises a user cancellation apart from a real failure', () => {
+  assert.equal(isCancellationError(Object.assign(new Error('aborted'), { name: 'AbortError' })), true);
+  assert.equal(isCancellationError(new Error('Pack search cancelled.')), true);
+  assert.equal(isCancellationError(new Error('Pack request cancelled.')), true);
+  assert.equal(isCancellationError(new Error('This operation was aborted')), true);
+  assert.equal(isCancellationError(new Error('fetch failed')), false);
+  assert.equal(isCancellationError(new Error('HTTP 404')), false);
+  assert.equal(isCancellationError(undefined), false);
 });
 
 test('the caller signal aborts the in-flight request', async () => {

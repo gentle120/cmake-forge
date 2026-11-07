@@ -100,3 +100,70 @@ test('generated files build the fixture pack F1 and F4 package variants', firmwa
     await buildMinimalFirmware(part);
   }
 });
+
+/**
+ * Builds the generated startup, linker script and toolchain for one core.
+ *
+ * The fixture Pack is all Cortex-M3/M4, so the ARMv6-M and ARMv8-M baseline
+ * encodings would otherwise never be assembled by the suite — and the reset
+ * handler used to contain Thumb-2-only instructions that fail on those cores.
+ */
+async function buildCoreVariant(core: string): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'mcu-cmake-core-'));
+  const profile = {
+    part: `CORE_${core.replace(/-/g, '_').toUpperCase()}`,
+    vendor: 'CORE',
+    series: 'variant',
+    family: 'variant',
+    core,
+    architecture: 'arm' as const,
+    toolchainPrefix: 'arm-none-eabi',
+    defines: [],
+    compilerFlags: [`-mcpu=${core}`, '-mthumb'],
+    flash: { origin: 0x08000000, length: 64 * 1024 },
+    ram: { origin: 0x20000000, length: 8 * 1024 },
+    linkerFileName: `${core}.ld`,
+    gnuStartupFileName: `startup_${core}.S`,
+    toolchainFileName: 'variant-toolchain.cmake',
+    interruptHandlers: ['IRQ0_Handler', 'IRQ1_Handler']
+  };
+  try {
+    await writeFile(join(root, profile.gnuStartupFileName), generateGnuStartup(profile));
+    await writeFile(join(root, profile.linkerFileName), generateLinkerScript(profile));
+    await mkdir(join(root, 'cmake'), { recursive: true });
+    await writeFile(join(root, 'cmake', profile.toolchainFileName), generateToolchainFile(profile));
+    await writeFile(join(root, 'main.c'), 'void SystemInit(void) {}\nint main(void) { return 0; }\n');
+    await writeFile(join(root, 'CMakeLists.txt'), `cmake_minimum_required(VERSION 3.22)
+project(firmware C ASM)
+add_executable(firmware)
+target_sources(firmware PRIVATE main.c ${profile.gnuStartupFileName})
+set_target_properties(firmware PROPERTIES SUFFIX ".elf")
+`);
+    const buildDir = join(root, 'build');
+    await execFileAsync('cmake', [
+      '-S', root,
+      '-B', buildDir,
+      '-G', 'Ninja',
+      `-DCMAKE_TOOLCHAIN_FILE=${join(root, 'cmake', profile.toolchainFileName)}`,
+      '-DCMAKE_BUILD_TYPE=Debug'
+    ]);
+    await execFileAsync('cmake', ['--build', buildDir]);
+    await access(`${buildDir}/firmware.elf`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test('the generated startup assembles for an ARMv6-M core', firmwareBuildOptions, async () => {
+  // Thumb-1 only: `ldr sp, =...` and writeback addressing are Thumb-2 encodings
+  // and fail to assemble on Cortex-M0 with "cannot honor width suffix".
+  await buildCoreVariant('cortex-m0');
+});
+
+test('the generated startup assembles for an ARMv8-M baseline core', firmwareBuildOptions, async () => {
+  await buildCoreVariant('cortex-m23');
+});
+
+test('the generated startup assembles for an ARMv8-M mainline core', firmwareBuildOptions, async () => {
+  await buildCoreVariant('cortex-m33');
+});

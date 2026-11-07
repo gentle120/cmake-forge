@@ -314,7 +314,6 @@ test('lists the packs of the Keil CMSIS layout and skips unrelated entries', () 
       `${packRoot}/Keil/STM32F7xx_DFP/2.1.0/Keil.STM32F7xx_DFP.2.1.0.pack`
     ]
   );
-
   assert.deepEqual(listKeilPacks(['C:/missing', packRoot], fs), [
     {
       packFile: `${packRoot}/ARM/CMSIS/5.9.0/ARM.CMSIS.5.9.0.pack`,
@@ -384,4 +383,39 @@ test('reports the installation folder for an extracted Pack so its PDSC can reso
     version: '1.1.1',
     source: 'directory'
   }]);
+});
+
+test('does not probe the CMSIS download caches of a Pack root', () => {
+  const packRoot = 'C:/Users/dev/AppData/Local/Arm/Packs';
+  const probed: string[] = [];
+  const fakeFs: ScanFileSystem = {
+    exists: (path) => path === packRoot,
+    readDir: (path) => {
+      probed.push(path);
+      if (path === packRoot) {
+        // A real root carries the CMSIS caches next to the vendor directories.
+        return ['.Download', '.Local', '.Web', 'pack.idx', 'Keil'];
+      }
+      if (path === `${packRoot}/.Web`) {
+        return ['Keil.STM32F1xx_DFP.2.4.1.pdsc', 'Keil.STM32F4xx_DFP.2.15.0.pdsc'];
+      }
+      if (path === `${packRoot}/Keil`) {
+        return ['STM32F1xx_DFP'];
+      }
+      if (path === `${packRoot}/Keil/STM32F1xx_DFP`) {
+        return ['2.4.1'];
+      }
+      if (path === `${packRoot}/Keil/STM32F1xx_DFP/2.4.1`) {
+        return ['Keil.STM32F1xx_DFP.2.4.1.pdsc'];
+      }
+      throw new Error(`unexpected probe ${path}`);
+    }
+  };
+
+  const packs = listKeilPacks([packRoot], fakeFs);
+
+  assert.deepEqual(packs.map((pack) => pack.packFile), [`${packRoot}/Keil/STM32F1xx_DFP/2.4.1`]);
+  // The caches hold thousands of flat .pdsc files; probing each one as a vendor
+  // directory cost a failed readdir per file before the dot-directory skip.
+  assert.equal(probed.some((path) => path.startsWith(`${packRoot}/.`)), false);
 });

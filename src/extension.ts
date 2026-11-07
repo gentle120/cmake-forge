@@ -43,7 +43,7 @@ import {
   selectPacksForSelection,
   type PackSearchCacheEntry
 } from './packs/packIndex';
-import { createTimeoutFetcher } from './packs/fetcher';
+import { createTimeoutFetcher, isCancellationError } from './packs/fetcher';
 import { curatedVendors } from './devices/curatedVendors';
 import { findCatalogSeries, seriesDownloadPage } from './devices/seriesCatalog';
 import { existsSync, readdirSync } from 'node:fs';
@@ -742,6 +742,9 @@ async function importPackOnly(): Promise<CommandResult> {
     void vscode.window.showInformationMessage(message);
     return { ok: true, message };
   } catch (error) {
+    if (isCancellationError(error)) {
+      return { ok: false, cancelled: true, message: '已取消 Pack 导入。' };
+    }
     const message = `Pack 导入失败：${describeImportFailure(error)}`;
     void vscode.window.showErrorMessage(message);
     return { ok: false, message };
@@ -856,6 +859,9 @@ async function installPackOnlineOnly(): Promise<CommandResult> {
     void vscode.window.showInformationMessage(message);
     return { ok: true, message };
   } catch (error) {
+    if (isCancellationError(error)) {
+      return { ok: false, cancelled: true, message: '已取消在线安装。' };
+    }
     const message = `在线安装失败：${describeImportFailure(error)}`;
     void vscode.window.showErrorMessage(message);
     return { ok: false, message };

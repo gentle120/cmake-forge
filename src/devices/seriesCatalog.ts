@@ -21,7 +21,7 @@ export interface CuratedSeries {
   packName: string;
 }
 
-export interface VendorSeriesCatalog {
+interface VendorSeriesCatalog {
   /** Registry-safe vendor id (matches pack vendorId / curated vendor). */
   vendorId: string;
   series: CuratedSeries[];
@@ -47,7 +47,7 @@ const GD32_SERIES: Array<[string, string, string]> = [
   ['F4x', 'GD32F4', 'GD32F4xx_DFP']
 ];
 
-export const seriesCatalog: VendorSeriesCatalog[] = [
+const seriesCatalog: VendorSeriesCatalog[] = [
   {
     vendorId: 'STMicroelectronics',
     downloadPage: 'https://www.st.com/en/microcontrollers-microprocessors/stm32-32-bit-arm-mcus.html',

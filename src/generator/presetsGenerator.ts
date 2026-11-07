@@ -1,24 +1,6 @@
-export function generateCMakePresets(toolchainFileName: string): string {
-  const configurePreset = (name: string, buildType: string, binaryDir: string): Record<string, unknown> => ({
-    name,
-    displayName: buildType,
-    generator: 'Ninja',
-    binaryDir,
-    cacheVariables: {
-      CMAKE_BUILD_TYPE: buildType,
-      CMAKE_TOOLCHAIN_FILE: '${sourceDir}/cmake/' + toolchainFileName
-    }
-  });
+import { generateCMakePresets as generateSharedPresets } from '../shared/cmakePresets';
 
-  return `${JSON.stringify({
-    version: 3,
-    configurePresets: [
-      configurePreset('debug', 'Debug', '${sourceDir}/build/debug'),
-      configurePreset('release', 'Release', '${sourceDir}/build/release')
-    ],
-    buildPresets: [
-      { name: 'debug', configurePreset: 'debug' },
-      { name: 'release', configurePreset: 'release' }
-    ]
-  }, null, 2)}\n`;
+/** Generates CMakePresets.json for an MCU project built with the generated toolchain file. */
+export function generateCMakePresets(toolchainFileName: string): string {
+  return generateSharedPresets({ toolchainFileName });
 }

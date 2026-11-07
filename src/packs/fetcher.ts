@@ -18,13 +18,31 @@ const transientErrorCodes = new Set([
 
 export function isTransientNetworkError(error: unknown): boolean {
   // A cancellation is never retried: the user asked for the work to stop.
-  if (error instanceof Error && error.name === 'AbortError') {
+  if (isCancellationError(error)) {
     return false;
   }
   const code = (error as { cause?: { code?: string } } | undefined)?.cause?.code
     ?? (error as { code?: string } | undefined)?.code
     ?? '';
   return transientErrorCodes.has(code);
+}
+
+/**
+ * Reports whether a failure is the user cancelling, not a real fault.
+ *
+ * Cancelling a progress notification rejects the awaited request with an
+ * `AbortError` (or the guard's own cancellation message), and that must reach the
+ * user as "cancelled" rather than as an error.
+ */
+export function isCancellationError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  if (error.name === 'AbortError') {
+    return true;
+  }
+  return /^(Pack search cancelled\.|Pack request cancelled\.|This operation was aborted|The operation was aborted\.?)$/
+    .test(error.message.trim());
 }
 
 /**

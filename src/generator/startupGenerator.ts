@@ -36,7 +36,7 @@ const armv7mCoreVectors = [
   'SysTick_Handler'
 ];
 
-// ARMv8-M mainline (M33/M55): SecureFault replaces the first reserved word.
+// ARMv8-M mainline (M33/M35P/M55): SecureFault replaces the first reserved word.
 const armv8mCoreVectors = [
   'NMI_Handler',
   'HardFault_Handler',
@@ -54,16 +54,37 @@ const armv8mCoreVectors = [
   'SysTick_Handler'
 ];
 
+/**
+ * Selects the exception table the core actually implements.
+ *
+ * ARMv8-M *baseline* (Cortex-M23) keeps the ARMv6-M layout — words 4-10 reserved,
+ * no MemManage/Fault/DebugMon handlers — exactly as Arm's own
+ * `startup_ARMCM23.c` declares. Cortex-M1 and SC000 are ARMv6-M as well. Getting
+ * this wrong fills architecturally reserved slots with handler pointers.
+ */
 function coreVectorsFor(core: string): string[] {
-  if (core === 'cortex-m0' || core === 'cortex-m0plus') {
+  if (core === 'cortex-m0'
+    || core === 'cortex-m0plus'
+    || core === 'cortex-m1'
+    || core === 'sc000'
+    || core === 'cortex-m23') {
     return armv6mCoreVectors;
   }
-  if (core === 'cortex-m33' || core === 'cortex-m55') {
+  if (core === 'cortex-m33' || core === 'cortex-m35p' || core === 'cortex-m55') {
     return armv8mCoreVectors;
   }
   return armv7mCoreVectors;
 }
 
+/**
+ * Generates the GNU startup assembly for one device profile.
+ *
+ * The reset handler is written in Thumb-1 only: `ldr sp, =...` and pre-indexed
+ * writeback (`ldr r3, [r0], #4`) are Thumb-2 encodings, so on an ARMv6-M part
+ * (Cortex-M0/M0+/M1/SC000, and ARMv8-M baseline M23) they fail to assemble with
+ * "cannot honor width suffix". Loading the stack pointer through a register and
+ * updating the copy pointers with `adds` assembles for every ARMv6-M/7-M/8-M core.
+ */
 export function generateGnuStartup(profile: DeviceProfile): string {
   const coreVectors = coreVectorsFor(profile.core);
   const vectors = [
@@ -96,7 +117,8 @@ ${vectorLines}
 .global Reset_Handler
 .type Reset_Handler, %function
 Reset_Handler:
-  ldr sp, =_estack
+  ldr r0, =_estack
+  mov sp, r0
 
   ldr r0, =_sidata
   ldr r1, =_sdata
@@ -104,8 +126,10 @@ Reset_Handler:
   cmp r1, r2
   bcs 2f
 1:
-  ldr r3, [r0], #4
-  str r3, [r1], #4
+  ldr r3, [r0]
+  str r3, [r1]
+  adds r0, r0, #4
+  adds r1, r1, #4
   cmp r1, r2
   bcc 1b
 2:
@@ -115,7 +139,8 @@ Reset_Handler:
   cmp r1, r2
   bcs 4f
 3:
-  str r3, [r1], #4
+  str r3, [r1]
+  adds r1, r1, #4
   cmp r1, r2
   bcc 3b
 4:
