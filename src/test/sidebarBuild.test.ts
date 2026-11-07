@@ -671,6 +671,73 @@ test('online install auto-activates the Pack of the selected series, not the new
   }
 });
 
+test('switching to a vendor without packs drops the previous vendor Pack', async () => {
+  const sourcePack = 'packs/GigaDevice/GD32F4xx_DFP.pack';
+  if (!hasVendor('GigaDevice')) {
+    registerVendor({ id: 'GigaDevice', label: 'GD32', definePrefixes: ['GD32'], order: 100 });
+  }
+  if (!hasVendor('WCH')) {
+    registerVendor({ id: 'WCH', label: 'CH32', definePrefixes: ['CH32'], order: 101 });
+  }
+  registerDeviceProfiles([{
+    ...fixtureDeviceProfile({
+      vendor: 'GigaDevice', part: 'GD32F403RC', series: 'GD32F4xx Series',
+      family: 'GD32F4xx Series', defines: ['GD32F403'], core: 'cortex-m4'
+    })
+  }], sourcePack);
+  const provider = startProvider(undefined, {
+    loadPackCatalog: async (vendor: string) => ({
+      options: vendor !== 'GigaDevice'
+        ? []
+        : [{
+            packId: 'GigaDevice:GD32F4xx_DFP',
+            vendorId: 'GigaDevice',
+            name: 'GD32F4xx_DFP',
+            version: '3.0.3',
+            origin: 'imported',
+            packFile: sourcePack
+          }],
+      notice: ''
+    }),
+    activatePack: async (vendor: string, packId: string, version: string) => ({
+      vendorId: 'GigaDevice',
+      packId,
+      version,
+      sourcePack,
+      message: '已载入。'
+    })
+  });
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const base = latestState(provider.messages)?.selection;
+    assert.ok(base);
+    provider.receive({
+      type: 'saveSelection',
+      selection: { ...base, mcu: { ...base.mcu, vendor: 'GigaDevice', series: 'F4x' } }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(latestState(provider.messages)?.selection.mcu.packId, 'GigaDevice:GD32F4xx_DFP');
+
+    // A vendor the catalog cannot serve keeps no Pack, no version, no part.
+    const active = latestState(provider.messages)?.selection;
+    assert.ok(active);
+    provider.receive({
+      type: 'saveSelection',
+      selection: { ...active, mcu: { ...active.mcu, vendor: 'WCH', series: 'F1x' } }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const state = latestState(provider.messages);
+    assert.equal(state?.selection.mcu.vendor, 'WCH');
+    assert.equal(state?.selection.mcu.packId, '');
+    assert.equal(state?.selection.mcu.version, '');
+    assert.equal(state?.selection.mcu.part, '');
+  } finally {
+    provider.dispose();
+    unregisterDeviceProfilesByPack(sourcePack);
+  }
+});
+
 test('a series without any local Pack stays selected with install guidance', async () => {
   const provider = startProvider(undefined, {
     loadPackCatalog: async (vendor: string) => vendor === 'GigaDevice'

@@ -319,6 +319,12 @@ function profileOwner(
   return option?.origin === 'imported' && option.packFile ? option.packFile : sourcePack;
 }
 
+/**
+ * Profiles of the selected Pack that belong to the selected vendor. The vendor
+ * filter matters after a vendor switch: the persisted owner still points at the
+ * previous vendor's Pack until the new catalog resolves, and the sidebar must
+ * not keep a foreign Pack selected under the new vendor.
+ */
 function packProfiles(
   vendor: DeviceVendor,
   packId: string,
@@ -327,7 +333,9 @@ function packProfiles(
   sourcePack?: string
 ): ReturnType<typeof listDeviceProfiles> {
   const owner = profileOwner(packId, version, packOptions, sourcePack);
-  return owner ? listDeviceProfilesForPack(owner) : [];
+  return owner
+    ? listDeviceProfilesForPack(owner).filter((profile) => profile.vendor === vendor)
+    : [];
 }
 
 export function nextMcuSelection(
