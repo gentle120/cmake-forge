@@ -238,6 +238,29 @@ test('accepts plus-spelled full-name Dcore values', () => {
   assert.equal(pack.devices[0].error, undefined);
 });
 
+test('normalizes Dfpu markers: 0/NO_FPU mean no FPU, DP_FPU stays explicit', () => {
+  const pdsc = wrapPdsc(`      <device Dname="PMC0">
+        <processor Dcore="Cortex-M0" Dfpu="0"/>
+        <memory id="ROM" start="0x00000000" size="0x40000"/>
+        <memory id="RAM" start="0x20000000" size="0x20000"/>
+        <debug svd="ARMCM0.svd"/>
+      </device>
+      <device Dname="PMC55">
+        <processor Dcore="Cortex-M55" Dfpu="DP_FPU"/>
+        <memory id="ROM" start="0x00000000" size="0x40000"/>
+        <memory id="RAM" start="0x20000000" size="0x20000"/>
+        <debug svd="ARMCM0.svd"/>
+      </device>`);
+  const pack = parsePack(
+    buildZip([{ name: 'ARM.Cortex_DFP.pdsc', data: pdsc }, { name: 'ARMCM0.svd', data: cortexSvd }])
+  );
+
+  assert.deepEqual(pack.devices.map((device) => [device.part, device.fpu]), [
+    ['PMC0', ''],
+    ['PMC55', 'DP_FPU']
+  ]);
+});
+
 test('maps PDSC memory access attributes onto additional regions', () => {
   const pdsc = wrapPdsc(`      <device Dname="GD32F450VGT6">
         <processor Dcore="Cortex-M4"/>

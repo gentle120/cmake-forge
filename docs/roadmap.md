@@ -9,8 +9,8 @@ This file is a compact relay ledger, not a history log. Stable facts belong in `
 
 ## Current Batch
 
-- Objective: 校正导入 MCU 的 FPU 编译参数与 J-Link/pyOCD 调试目标元数据，并增加大 Pack 注册表缓存验证。
-- Status: `ready`
+- Objective: 无正在执行的批次。
+- Status: `idle`
 
 ## Next Batch
 

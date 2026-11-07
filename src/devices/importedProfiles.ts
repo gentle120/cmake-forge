@@ -347,30 +347,35 @@ function packDeviceToProfile(device: PackDeviceCandidate, vendorId: string, vend
   };
 }
 
+/** Cores that can carry an FPU at all; a Dfpu claim on other cores is pack junk. */
+const FPU_CAPABLE_CORES = new Set(['cortex-m4', 'cortex-m7', 'cortex-m33', 'cortex-m35p', 'cortex-m55']);
+
 function compilerFlagsFor(core: string, fpu: string): string[] {
   const flags = [`-mcpu=${core}`, '-mthumb'];
-  const hasFpu = fpu.length > 0 && fpu.toUpperCase() !== 'NO_FPU';
-  if (!hasFpu) {
+  if (!FPU_CAPABLE_CORES.has(core) || fpu.length === 0 || fpu.toUpperCase() === 'NO_FPU') {
     return flags;
   }
   const isDoublePrecision = /DP/i.test(fpu);
   if (core === 'cortex-m4') {
     flags.push('-mfpu=fpv4-sp-d16', '-mfloat-abi=hard');
-  } else if (core === 'cortex-m7') {
+  } else if (core === 'cortex-m7' || core === 'cortex-m55') {
+    // Cortex-M55's FPU is FPv5 and comes in single- and double-precision builds.
     flags.push(isDoublePrecision ? '-mfpu=fpv5-d16' : '-mfpu=fpv5-sp-d16', '-mfloat-abi=hard');
-  } else if (['cortex-m23', 'cortex-m33', 'cortex-m35p', 'cortex-m55'].includes(core)) {
+  } else {
     flags.push('-mfpu=fpv5-sp-d16', '-mfloat-abi=hard');
   }
   return flags;
 }
 
 function debugTargetForSeries(series: string): string | undefined {
-  // OpenOCD names the L0/L1 targets without the trailing x.
-  const match = /^(STM32)?(F0|F1|F2|F3|F4|F7|G0|G4|H7|L0|L1|L4|L5|U5|WB|WL)/.exec(series);
+  // OpenOCD names the L0/L1 targets without the trailing x. GD32 families use
+  // the same Cortex-M peripherals as their STM32 counterparts, so the GD32
+  // prefix bridges to the matching STM32 target config.
+  const match = /^(?:STM32|GD32)?(F0|F1|F2|F3|F4|F7|G0|G4|H7|L0|L1|L4|L5|U5|WB|WL)/.exec(series);
   if (!match) {
     return undefined;
   }
-  const family = match[2].toLowerCase();
+  const family = match[1].toLowerCase();
   return family === 'l0' || family === 'l1' ? `stm32${family}` : `stm32${family}x`;
 }
 

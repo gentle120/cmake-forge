@@ -303,7 +303,8 @@ function collectDeviceCandidates(
     ?? inheritedProcessor.dfpu
     ?? ''
   ).toUpperCase();
-  const fpu = dfpu.length === 0 || dfpu === 'NO_FPU' ? '' : textOf(device['@_Dfpu']) ?? dfpu;
+  // Vendor packs mark "no FPU" inconsistently: NO_FPU, 0, or omission.
+  const fpu = dfpu === '' || dfpu === 'NO_FPU' || dfpu === '0' ? '' : dfpu;
 
   const names = [baseName, ...variantNames].filter((name) => name.length > 0);
   const partNames = names.length > 0 ? names : [''];

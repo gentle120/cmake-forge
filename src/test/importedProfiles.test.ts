@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { getDeviceProfile } from '../devices/deviceProfiles';
+import { getDeviceProfile, listDeviceProfiles } from '../devices/deviceProfiles';
 import {
   importPack,
   importPackDirectory,
@@ -462,6 +462,136 @@ test('imports an extracted pack directory in place with the vendor display name'
     }
     await rm(root, { recursive: true, force: true });
     await rm(packRoot, { recursive: true, force: true });
+  }
+});
+
+test('imported FPU flags follow the core capability and the PDSC precision', async () => {
+  const pdsc = `<?xml version="1.0" encoding="utf-8"?>
+<package>
+  <devices>
+    <family Dvendor="MS Semi" Dfamily="MS32F0xx">
+      <device Dname="MS32F0_NOFPU" Dcore="CM0">
+        <processor Dfpu="0"/>
+        <memory id="IROM1" start="0x08000000" size="0x8000"/>
+        <memory id="IRAM1" start="0x20000000" size="0x1000"/>
+        <debug svd="MS32F031.svd"/>
+      </device>
+    </family>
+    <family Dvendor="MS Semi" Dfamily="MS32M55xx">
+      <device Dname="MS32M55_DP" Dcore="CM55">
+        <processor Dfpu="DP_FPU"/>
+        <memory id="IROM1" start="0x08000000" size="0x8000"/>
+        <memory id="IRAM1" start="0x20000000" size="0x1000"/>
+        <debug svd="MS32F031.svd"/>
+      </device>
+    </family>
+  </devices>
+</package>
+`;
+  const svd = `<?xml version="1.0" encoding="utf-8"?>
+<device><peripherals><peripheral><name>WWDG</name><interrupt><name>WWDG</name><value>0</value></interrupt></peripheral></peripherals></device>
+`;
+  const root = await mkdtemp(join(tmpdir(), 'cmake-embedded-fpu-'));
+  try {
+    await writeFile(join(root, 'ms32fpu.pdsc'), pdsc, 'utf8');
+    await writeFile(join(root, 'MS32F031.svd'), svd, 'utf8');
+    const result = await importPackDirectory(root, join(root, 'ms32fpu.pdsc'), root);
+
+    assert.deepEqual(result.skipped, []);
+    const noFpu = getDeviceProfile('MS32F0_NOFPU');
+    assert.ok(
+      !noFpu.compilerFlags.some((flag) => /^-mfpu=|-mfloat-abi=/.test(flag)),
+      `Cortex-M0 with Dfpu="0" must not carry FPU flags: ${noFpu.compilerFlags}`
+    );
+    const dp = getDeviceProfile('MS32M55_DP');
+    assert.ok(dp.compilerFlags.includes('-mfpu=fpv5-d16'), `Cortex-M55 DP needs fpv5-d16: ${dp.compilerFlags}`);
+    assert.ok(dp.compilerFlags.includes('-mfloat-abi=hard'));
+  } finally {
+    for (const pack of await listImportedPacks(root)) {
+      await removePack(root, pack.packFile);
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('real GD32 series names resolve to bridged OpenOCD debug targets', async () => {
+  const pdsc = `<?xml version="1.0" encoding="utf-8"?>
+<package>
+  <devices>
+    <family Dvendor="GigaDevice" Dfamily="GD32F10x">
+      <device Dname="GD32F103C8T6" Dcore="CM3">
+        <processor Dfpu="NO_FPU"/>
+        <memory id="IROM1" start="0x08000000" size="0x10000"/>
+        <memory id="IRAM1" start="0x20000000" size="0x5000"/>
+        <debug svd="MS32F031.svd"/>
+      </device>
+    </family>
+    <family Dvendor="GigaDevice" Dfamily="GD32F4xx">
+      <device Dname="GD32F450VGT6" Dcore="CM4">
+        <processor Dfpu="SP_FPU"/>
+        <memory id="IROM1" start="0x08000000" size="0x100000"/>
+        <memory id="IRAM1" start="0x20000000" size="0x40000"/>
+        <debug svd="MS32F031.svd"/>
+      </device>
+    </family>
+  </devices>
+</package>
+`;
+  const svd = `<?xml version="1.0" encoding="utf-8"?>
+<device><peripherals><peripheral><name>WWDG</name><interrupt><name>WWDG</name><value>0</value></interrupt></peripheral></peripherals></device>
+`;
+  const root = await mkdtemp(join(tmpdir(), 'cmake-embedded-gd32-'));
+  try {
+    await writeFile(join(root, 'gd32.pdsc'), pdsc, 'utf8');
+    await writeFile(join(root, 'MS32F031.svd'), svd, 'utf8');
+    await importPackDirectory(root, join(root, 'gd32.pdsc'), root);
+
+    assert.equal(getDeviceProfile('GD32F103C8T6').debugTarget, 'stm32f1x');
+    assert.equal(getDeviceProfile('GD32F450VGT6').debugTarget, 'stm32f4x');
+  } finally {
+    for (const pack of await listImportedPacks(root)) {
+      await removePack(root, pack.packFile);
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a large synthetic pack imports completely and within a sane duration', async () => {
+  const deviceCount = 150;
+  const devices = Array.from({ length: deviceCount }, (_, index) => `    <device Dname="LARGE${String(index).padStart(3, '0')}" Dcore="CM0">
+      <memory id="IROM1" start="0x08000000" size="0x8000"/>
+      <memory id="IRAM1" start="0x20000000" size="0x1000"/>
+      <debug svd="MS32F031.svd"/>
+    </device>`).join('\n');
+  const pdsc = `<?xml version="1.0" encoding="utf-8"?>
+<package>
+  <devices>
+    <family Dvendor="MS Semi" Dfamily="MS32LARGE">
+${devices}
+    </family>
+  </devices>
+</package>
+`;
+  const svd = `<?xml version="1.0" encoding="utf-8"?>
+<device><peripherals><peripheral><name>WWDG</name><interrupt><name>WWDG</name><value>0</value></interrupt></peripheral></peripherals></device>
+`;
+  const root = await mkdtemp(join(tmpdir(), 'cmake-embedded-large-'));
+  try {
+    await writeFile(join(root, 'large.pdsc'), pdsc, 'utf8');
+    await writeFile(join(root, 'MS32F031.svd'), svd, 'utf8');
+    const startedAt = Date.now();
+    const result = await importPackDirectory(root, join(root, 'large.pdsc'), root);
+    const durationMs = Date.now() - startedAt;
+
+    assert.equal(result.imported.length, deviceCount);
+    assert.deepEqual(result.skipped, []);
+    assert.equal(listDeviceProfiles().filter((profile) => profile.part.startsWith('LARGE')).length, deviceCount);
+    assert.ok(durationMs < 20000, `large pack import took ${durationMs}ms`);
+  } finally {
+    for (const pack of await listImportedPacks(root)) {
+      await removePack(root, pack.packFile);
+    }
+    await rm(root, { recursive: true, force: true });
   }
 });
 
