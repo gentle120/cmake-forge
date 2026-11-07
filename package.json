@@ -80,6 +80,10 @@
         "title": "CMake-Embedded: Import CMSIS Pack"
       },
       {
+        "command": "cmakeEmbedded.installPackOnline",
+        "title": "CMake-Embedded: Install Pack Online"
+      },
+      {
         "command": "cmakeEmbedded.removePack",
         "title": "CMake-Embedded: Remove Imported CMSIS Pack"
       }

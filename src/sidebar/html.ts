@@ -97,9 +97,14 @@ export function renderSidebarHtml(
           </div>
         </div>
         <div id="target-host" class="target-host"></div>
-        <button id="import-pack" class="secondary-action compact" type="button" data-command="importPack">
-          <span class="ui-icon" data-icon="folder" aria-hidden="true"></span><span>导入 Pack 包…</span>
-        </button>
+        <div class="pack-actions">
+          <button id="import-pack" class="secondary-action compact" type="button" data-command="importPack">
+            <span class="ui-icon" data-icon="folder" aria-hidden="true"></span><span>导入 Pack 包…</span>
+          </button>
+          <button id="install-pack-online" class="secondary-action compact" type="button" data-command="installPackOnline">
+            <span class="ui-icon" data-icon="refresh" aria-hidden="true"></span><span>在线安装 Pack…</span>
+          </button>
+        </div>
         <p id="pack-catalog-notice" class="field-detail" role="status" aria-live="polite" hidden></p>
       </section>
 

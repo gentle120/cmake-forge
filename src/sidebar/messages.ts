@@ -7,6 +7,7 @@ export type SidebarIncomingMessage =
   | { type: 'scanWorkspace' }
   | { type: 'cancelWorkspaceScan' }
   | { type: 'importPack' }
+  | { type: 'installPackOnline' }
   | { type: 'generateProject' }
   | { type: 'generateFlashScript' }
   | { type: 'generateDebugConfiguration' }
@@ -40,6 +41,7 @@ const commandTypes = new Set([
   'scanWorkspace',
   'cancelWorkspaceScan',
   'importPack',
+  'installPackOnline',
   'generateProject',
   'generateFlashScript',
   'generateDebugConfiguration',

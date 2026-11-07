@@ -5,12 +5,16 @@ import {
   registerDeviceProfiles,
   unregisterDeviceProfilesByPack
 } from '../devices/deviceProfiles';
+import { hasVendor, registerVendor } from '../devices/vendorRegistry';
 import { ScanCancelledError } from '../scanner/projectScanner';
 import { WorkspaceProjectsCancelledError } from '../scanner/workspaceProjects';
 import { loadHostModule } from './support/hostModule';
 import { fixtureDeviceProfile, registerFixtureVendors } from './support/fixtureDevice';
 
 registerFixtureVendors();
+if (!hasVendor('Keil')) {
+  registerVendor({ id: 'Keil', label: 'Keil', definePrefixes: ['TM4C'], order: 100 });
+}
 
 interface ProviderHarness {
   messages: Array<Record<string, unknown>>;
@@ -140,6 +144,50 @@ test('importing a Pack refreshes the catalog and auto-activates the best version
       (writes.at(-1) as { mcu?: { packId?: string } } | undefined)?.mcu?.packId,
       'GD:GD32F1xx_DFP'
     );
+  } finally {
+    provider.dispose();
+    unregisterDeviceProfilesByPack(sourcePack);
+  }
+});
+
+test('online install downloads from the index and auto-activates the best version', async () => {
+  const writes: unknown[] = [];
+  const sourcePack = 'packs/Keil/TM4C_DFP.pack';
+  registerDeviceProfiles([{
+    ...fixtureDeviceProfile({ vendor: 'Keil', part: 'TM4C123GH6PM', family: 'TM4C', series: 'TM4C', defines: ['TM4C123'] })
+  }], sourcePack);
+  const activations: Array<[string, string, string]> = [];
+  const commands: string[] = [];
+  const provider = startProvider(undefined, {
+    loadPackCatalog: async () => ({
+      options: [{
+        packId: 'Keil:TM4C_DFP',
+        vendorId: 'Keil',
+        name: 'TM4C_DFP',
+        version: '1.1.0',
+        origin: 'imported',
+        packFile: sourcePack
+      }]
+    }),
+    activatePack: async (vendor: string, packId: string, version: string) => {
+      activations.push([vendor, packId, version]);
+      return { vendorId: 'Keil', packId, version, sourcePack, message: '已载入 TM4C_DFP。' };
+    }
+  }, writes, async (id: string) => {
+    commands.push(id);
+    return { ok: true, message: '在线安装完成' };
+  });
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    provider.receive({ type: 'installPackOnline' });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.deepEqual(commands, ['cmakeEmbedded.installPackOnline']);
+    assert.deepEqual(activations, [['', 'Keil:TM4C_DFP', '1.1.0']]);
+    const state = latestState(provider.messages);
+    assert.equal(state?.selection.mcu.vendor, 'Keil');
+    assert.equal(state?.selection.mcu.packId, 'Keil:TM4C_DFP');
+    assert.equal(state?.selection.mcu.part, 'TM4C123GH6PM');
   } finally {
     provider.dispose();
     unregisterDeviceProfilesByPack(sourcePack);

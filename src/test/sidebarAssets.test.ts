@@ -150,6 +150,7 @@ test('sidebar renderer wires every supported command', () => {
     'selectPack',
     'activatePack',
     'importPack',
+    'installPackOnline',
     'scanWorkspace',
     'cancelWorkspaceScan',
     'generateProject',
@@ -163,15 +164,20 @@ test('sidebar renderer wires every supported command', () => {
   assert.doesNotMatch(scriptSource, /innerHTML/);
 });
 
-test('the import button dispatches importPack with its busy label', () => {
+test('the import and online-install buttons dispatch their commands', () => {
   const harness = startSidebar(baseState());
-  const button = harness.byCommand('importPack')[0];
-  assert.ok(button, 'missing the import button');
-  button.dispatch('click', { target: button });
-  assert.equal(
-    harness.posted.filter((message) => message.type === 'importPack').length,
-    1
-  );
+  for (const command of ['importPack', 'installPackOnline']) {
+    const button = harness.byCommand(command)[0];
+    assert.ok(button, `missing the ${command} button`);
+    button.dispatch('click', { target: button });
+    assert.equal(harness.posted.filter((message) => message.type === command).length, 1);
+    // Each dispatch starts an operation; finish it so the next click passes
+    // the busy guard.
+    harness.send({
+      type: 'operationFinished',
+      result: { ok: true, message: 'done', files: [] }
+    });
+  }
 });
 
 test('project selection sends the selected project root without starting a command', () => {
@@ -244,8 +250,8 @@ test('every command button is unique and its command is dispatched by the render
   }
   assert.deepEqual(
     [...new Set(commands)].sort(),
-    ['cancelWorkspaceScan', 'generateDebugConfiguration',
-      'generateFlashScript', 'generateProject', 'importPack', 'scanWorkspace']
+    ['cancelWorkspaceScan', 'generateDebugConfiguration', 'generateFlashScript',
+      'generateProject', 'importPack', 'installPackOnline', 'scanWorkspace']
   );
   // One delegated listener owns the static commands; no per-button wiring remains.
   const catalogListeners = [...scriptSource.matchAll(/app\.addEventListener\('click'/g)];

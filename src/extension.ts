@@ -39,6 +39,7 @@ import {
 import { buildPackVendorOptions } from './packs/vendorOptions';
 import {
   downloadPack,
+  listPackIndexPacks,
   searchPacks,
   type FetchLike,
   type PackSearchCacheEntry
@@ -658,12 +659,80 @@ async function importPackOnly(): Promise<CommandResult> {
     void vscode.window.showInformationMessage(message);
     return { ok: true, message };
   } catch (error) {
-    const raw = error instanceof Error ? error.message : String(error);
-    // Component/board packs (CMSIS, middleware, BSPs) fail deep inside the
-    // parser; translate those PDSC errors into product guidance.
-    const message = /no devices section|No \.pdsc file found|no family vendor/.test(raw)
-      ? 'Pack 导入失败：这个包的 PDSC 没有任何芯片定义（CMSIS 组件包、中间件包或板级包不含可生成的芯片）。请改用芯片厂商的 DFP 器件包。'
-      : `Pack 导入失败：${raw}`;
+    const message = `Pack 导入失败：${describeImportFailure(error)}`;
+    void vscode.window.showErrorMessage(message);
+    return { ok: false, message };
+  }
+}
+
+/** Component/board packs fail deep inside the parser; surface product guidance. */
+function describeImportFailure(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return /no devices section|No \.pdsc file found|no family vendor/.test(raw)
+    ? '这个包的 PDSC 没有任何芯片定义（CMSIS 组件包、中间件包或板级包不含可生成的芯片）。请改用芯片厂商的 DFP 器件包。'
+    : raw;
+}
+
+/** One-click online install: full index browse → download → import. */
+async function installPackOnlineOnly(): Promise<CommandResult> {
+  try {
+    const packs = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: '正在读取 keil.com 在线 Pack 索引…',
+        cancellable: true
+      },
+      (_progress, token) => {
+        const controller = new AbortController();
+        const cancellation = token.onCancellationRequested(() => controller.abort());
+        return listPackIndexPacks(fetchWithTimeout, packSearchCache)
+          .finally(() => cancellation.dispose());
+      }
+    );
+    if (packs.length === 0) {
+      const message = '在线索引暂无可用 Pack。';
+      void vscode.window.showInformationMessage(message);
+      return { ok: false, message };
+    }
+    const picked = await vscode.window.showQuickPick(
+      packs.map((pack) => ({
+        label: `${pack.vendorName} ${pack.name}`,
+        description: pack.version,
+        detail: pack.packUrl,
+        pack
+      })),
+      { placeHolder: `在线索引共 ${packs.length} 个 Pack，输入关键字过滤，选择后自动下载导入` }
+    );
+    if (!picked) {
+      return { ok: false, cancelled: true, message: '未执行在线安装。' };
+    }
+    const buffer = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `正在下载 ${picked.label} ${picked.pack.version}…`,
+        cancellable: true
+      },
+      (_progress, token) => {
+        const controller = new AbortController();
+        const cancellation = token.onCancellationRequested(() => controller.abort());
+        return downloadPack(fetchWithTimeout, picked.pack.packUrl)
+          .finally(() => cancellation.dispose());
+      }
+    );
+    const fileName = picked.pack.packUrl.split('/').pop() ?? 'online.pack';
+    const result = await importPack(buffer, fileName, packStorageRoot);
+    await syncPackFileIndex();
+    activeSidebar?.refresh();
+    const skipped = result.skipped.length > 0
+      ? `\n跳过 ${result.skipped.length} 个型号：${result.skipped
+          .map((item) => `${item.part}（${item.reason}）`)
+          .join('、')}`
+      : '';
+    const message = `在线安装完成：${result.imported.length} 个新型号已注册。${skipped}`;
+    void vscode.window.showInformationMessage(message);
+    return { ok: true, message };
+  } catch (error) {
+    const message = `在线安装失败：${describeImportFailure(error)}`;
     void vscode.window.showErrorMessage(message);
     return { ok: false, message };
   }
@@ -946,6 +1015,7 @@ export function activate(context: vscode.ExtensionContext): void {
       () => generateDebugConfigurationOnly()
     ),
     vscode.commands.registerCommand('cmakeEmbedded.importPack', () => importPackOnly()),
+    vscode.commands.registerCommand('cmakeEmbedded.installPackOnline', () => installPackOnlineOnly()),
     vscode.commands.registerCommand('cmakeEmbedded.removePack', () => removePackOnly()),
     vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebarProvider, {
       webviewOptions: { retainContextWhenHidden: true }

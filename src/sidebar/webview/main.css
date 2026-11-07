@@ -732,6 +732,19 @@ input:disabled {
   margin-top: 10px;
 }
 
+.pack-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.pack-actions .secondary-action {
+  min-width: 0;
+}
+
 .workspace-head {
   display: flex;
   align-items: center;

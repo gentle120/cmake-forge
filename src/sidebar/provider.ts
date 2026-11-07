@@ -694,6 +694,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.postState();
       return;
     }
+    if (message.type === 'installPackOnline') {
+      const result = await this.runGeneration('正在在线安装 Pack', async () => {
+        const commandResult = await vscode.commands.executeCommand<CommandResult>('cmakeEmbedded.installPackOnline');
+        return { kind: 'mcu' as const, ...commandResult, files: [] };
+      });
+      if (result?.ok) {
+        await this.refreshPackCatalog(this.selectionValue.mcu.vendor, true);
+      }
+      this.postState();
+      return;
+    }
     if (message.type === 'openSettings') {
       await vscode.commands.executeCommand(
         'workbench.action.openSettings',

@@ -14,6 +14,7 @@ test('uses the extension name in command and settings display titles', () => {
       'CMake-Embedded: Generate OpenOCD Flash Script',
       'CMake-Embedded: Generate Cortex-Debug Configuration',
       'CMake-Embedded: Import CMSIS Pack',
+      'CMake-Embedded: Install Pack Online',
       'CMake-Embedded: Remove Imported CMSIS Pack'
     ]
   );
