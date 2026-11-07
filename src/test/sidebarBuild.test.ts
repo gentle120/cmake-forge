@@ -96,6 +96,7 @@ function latestState(messages: Array<Record<string, unknown>>) {
     };
     vendors: Array<{ value: string }>;
     packCatalogNotice: string;
+    mcuBlockedReason: string;
     pendingPackId: string;
     packs: Array<{ value: string; description?: string }>;
     versions: Array<{ value: string; description?: string }>;
@@ -802,9 +803,9 @@ test('a Pack whose PDSC series names differ from the catalog ids does not freeze
     await new Promise((resolve) => setTimeout(resolve, 80));
     const switched = latestState(provider.messages);
     assert.equal(switched?.selection.mcu.series, 'F4x');
-    // The activated Pack serves no F4 part, so the notice explains the next step.
+    // The activated Pack serves no F4 part, so the panel explains the next step.
     assert.equal(switched?.selection.mcu.part, '');
-    assert.match(switched?.packCatalogNotice ?? '', /STM32F4xx_DFP/);
+    assert.match(switched?.mcuBlockedReason ?? '', /STM32F4xx_DFP/);
 
     // And switching back re-populates the F1 parts.
     provider.receive({
@@ -862,6 +863,64 @@ test('MCU generation passes the core-pack include only when the switch is on', a
     await new Promise((resolve) => setTimeout(resolve, 60));
     // The switch is read at generation time, not cached at save time.
     assert.deepEqual(requests, [true, false]);
+  } finally {
+    provider.dispose();
+    unregisterDeviceProfilesByPack(sourcePack);
+  }
+});
+
+test('generating without a Pack for the series reports the missing DFP, not a generic error', async () => {
+  const sourcePack = 'packs/STMicroelectronics/Keil.STM32F1xx_DFP.pack';
+  if (!hasVendor('STMicroelectronics')) {
+    registerVendor({
+      id: 'STMicroelectronics', label: 'STM32', definePrefixes: ['STM32'], order: 100
+    });
+  }
+  registerDeviceProfiles([{
+    ...fixtureDeviceProfile({ vendor: 'STMicroelectronics', series: 'STM32F1 Series' })
+  }], sourcePack);
+  const provider = startProvider({
+    mode: 'mcu', projectRoot: '',
+    // An F1 Pack activated while F4x is chosen: exactly the state the old panel
+    // allowed, where every part list was empty and generation failed obscurely.
+    mcu: {
+      vendor: 'STMicroelectronics',
+      packId: 'STMicroelectronics:Keil.STM32F1xx_DFP',
+      version: '2.4.1',
+      sourcePack,
+      series: 'F4x',
+      part: ''
+    },
+    linux: { toolchainFamily: 'loongson' },
+    native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
+    debugEnabled: false, corePackInclude: true,
+    flash: { enabled: false, targetId: 'stm32f1xx', probeId: 'stlink', openocdPath: 'openocd', backend: 'openocd' }
+  }, {
+    loadPackCatalog: async () => ({
+      options: [{
+        packId: 'STMicroelectronics:Keil.STM32F1xx_DFP',
+        vendorId: 'STMicroelectronics',
+        name: 'Keil.STM32F1xx_DFP',
+        version: '2.4.1',
+        origin: 'imported',
+        packFile: sourcePack
+      }]
+    })
+  });
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const state = latestState(provider.messages);
+    // The panel says generation cannot proceed, and names the DFP to install.
+    assert.match(state?.mcuBlockedReason ?? '', /STM32F4xx_DFP/);
+
+    provider.receive({ type: 'generateProject' });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const finished = [...provider.messages].reverse().find((message) => message.type === 'operationFinished');
+    const result = finished?.result as { ok?: boolean; message?: string } | undefined;
+    assert.equal(result?.ok, false);
+    assert.match(result?.message ?? '', /STM32F4xx_DFP/);
+    assert.doesNotMatch(result?.message ?? '', /Unsupported MCU/);
   } finally {
     provider.dispose();
     unregisterDeviceProfilesByPack(sourcePack);

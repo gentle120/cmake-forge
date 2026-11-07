@@ -16,6 +16,7 @@
   const modeLinux = document.getElementById('mode-linux');
   const modeNative = document.getElementById('mode-native');
   const mcuPanel = document.getElementById('mcu-panel');
+  const mcuBlockedNotice = document.getElementById('mcu-blocked-notice');
   const configuration = document.getElementById('configuration');
   const workspaceSummary = document.getElementById('workspace-summary');
   const cancelWorkspaceScanButton = document.getElementById('cancel-workspace-scan');
@@ -445,6 +446,10 @@
     if (isMcu) {
       syncTargetSection();
       syncFlashSection();
+      if (mcuBlockedNotice) {
+        mcuBlockedNotice.textContent = state.mcuBlockedReason || '';
+        mcuBlockedNotice.hidden = !mcuBlockedNotice.textContent;
+      }
     } else if (mode === 'native') {
       configuration.replaceChildren(syncNativePanel());
     } else {
@@ -458,9 +463,17 @@
   }
 
   function applyDisabled() {
+    // An MCU generation command cannot succeed without a Pack serving the
+    // selected series; disabling it with the reason on screen beats a click that
+    // only produces an error.
+    const blocked = Boolean(state?.mcuBlockedReason);
     controls().forEach((control) => {
       if (control.dataset.alwaysEnabled === 'true') return;
-      control.disabled = busy || (control === projectRootSelect && Boolean(state?.discoveringProjects));
+      const mcuCommand = typeof control.dataset.command === 'string'
+        && control.dataset.command.startsWith('generate');
+      control.disabled = busy
+        || (control === projectRootSelect && Boolean(state?.discoveringProjects))
+        || (blocked && mcuCommand);
     });
     syncCancelWorkspaceScan();
   }

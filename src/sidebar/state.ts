@@ -81,6 +81,12 @@ export interface SidebarBootstrapState {
   packCatalogNotice: string;
   /** Installed ARM CMSIS core pack, which device packs rely on for core_cm*.h. */
   corePackNotice: string;
+  /**
+   * Why an MCU project cannot be generated right now; empty when it can.
+   * The sidebar disables its generation actions on a non-empty value instead of
+   * letting the user run a command that can only fail.
+   */
+  mcuBlockedReason: string;
   series: SidebarOption[];
   devices: SidebarOption[];
   flashTargets: SidebarOption[];
@@ -206,26 +212,6 @@ export function sanitizeSidebarSelection(
   const vendor = isVendor(mcu?.vendor) ? mcu.vendor : fallback.mcu.vendor;
   const selectedPackId = typeof mcu?.packId === 'string' ? mcu.packId : '';
   const selectedSourcePack = typeof mcu?.sourcePack === 'string' ? mcu.sourcePack : undefined;
-  const vendorProfiles = packProfiles(
-    vendor,
-    selectedPackId,
-    mcu?.version,
-    packOptions,
-    selectedSourcePack
-  );
-  // Without an owning Pack the whole MCU column stays empty; there is no
-  // built-in fallback anymore.
-  const packId = vendorProfiles.length > 0 ? selectedPackId : '';
-  const version = packId === ''
-    ? ''
-    : typeof mcu?.version === 'string' && mcu.version.trim()
-      ? mcu.version
-      : packOptions.find((option) => option.packId === packId)?.version ?? '';
-  // Persist the owner that actually supplied the profiles: the catalog entry
-  // wins once loaded, so a stale key from another Pack cannot survive.
-  const sourcePack = packId === ''
-    ? undefined
-    : profileOwner(packId, version, packOptions, selectedSourcePack);
   // Persisted series from an older build may be the pack's own Dfamily text;
   // normalize it to the curated id so the dropdown keeps a matching entry.
   const persistedSeries = isKnownSeries(vendor, mcu?.series)
@@ -237,6 +223,28 @@ export function sanitizeSidebarSelection(
   const series = persistedSeries === ''
     ? firstSeriesForVendor(vendor)
     : rawSeries !== '' ? rawSeries : persistedSeries;
+  const vendorProfiles = packProfiles(
+    vendor,
+    selectedPackId,
+    mcu?.version,
+    packOptions,
+    selectedSourcePack
+  ).filter((profile) => seriesServesProfile(vendor, series, profile));
+  // Without an owning Pack the whole MCU column stays empty; there is no
+  // built-in fallback anymore. A Pack that serves a different series than the
+  // one selected is not an owning Pack here: keeping it would show a Pack the
+  // part list can never fill.
+  const packId = vendorProfiles.length > 0 ? selectedPackId : '';
+  const version = packId === ''
+    ? ''
+    : typeof mcu?.version === 'string' && mcu.version.trim()
+      ? mcu.version
+      : packOptions.find((option) => option.packId === packId)?.version ?? '';
+  // Persist the owner that actually supplied the profiles: the catalog entry
+  // wins once loaded, so a stale key from another Pack cannot survive.
+  const sourcePack = packId === ''
+    ? undefined
+    : profileOwner(packId, version, packOptions, selectedSourcePack);
   const family = typeof linux?.toolchainFamily === 'string'
     && isLinuxToolchainFamily(linux.toolchainFamily)
     ? linux.toolchainFamily
@@ -305,11 +313,62 @@ function firstSeriesForVendor(vendor: DeviceVendor): DeviceSeries {
     ?? '';
 }
 
-/** Guidance shown when the selected series has no part to show. */
+/**
+ * True when a Pack can serve at least one part of the selected series.
+ *
+ * Choosing a series first makes the Pack list and the part list one decision:
+ * offering a Pack that cannot serve the series lets the user end up with a Pack
+ * selected and an empty part list, which reads as a broken panel. Imported Packs
+ * are judged by their parsed parts; installed and downloadable Packs by their
+ * DFP name, because their PDSC is not parsed until they are activated.
+ */
+export function packServesSeries(
+  vendor: DeviceVendor,
+  series: DeviceSeries,
+  option: DevicePackOption
+): boolean {
+  if (series === '') {
+    return true;
+  }
+  if (option.origin === 'imported' && option.packFile) {
+    return listDeviceProfilesForPack(option.packFile)
+      .some((profile) => seriesServesProfile(vendor, series, profile));
+  }
+  // A DFP name is the only signal before the Pack is parsed: "STM32F1xx_DFP"
+  // appears both bare and vendor-prefixed ("Keil.STM32F1xx_DFP").
+  const packName = findCatalogSeries(vendor, series)?.packName;
+  if (!packName) {
+    // Vendors outside the curated catalog define no DFP name; hiding all their
+    // Packs would leave nothing to select.
+    return true;
+  }
+  const wanted = packName.toLowerCase();
+  const actual = option.name.trim().toLowerCase();
+  return actual === wanted || actual.endsWith(`.${wanted}`);
+}
+
+/** Packs of the selected vendor that can serve the selected series. */
+function servingPacks(
+  vendor: DeviceVendor,
+  series: DeviceSeries,
+  packOptions: DevicePackOption[]
+): DevicePackOption[] {
+  return packOptions.filter((option) => packServesSeries(vendor, series, option));
+}
+
+/**
+ * Guidance shown when the selected series has no part to show.
+ *
+ * Three states need different words: the activated Pack serves another series, a
+ * Pack that serves this series is available but not activated yet, and nothing
+ * local can serve it at all. Saying "no Pack installed" while the dropdown lists
+ * the very Pack needed would be wrong.
+ */
 function missingSeriesNotice(
   vendor: DeviceVendor,
   series: DeviceSeries,
-  hasPack: boolean
+  hasPack: boolean,
+  hasServingPack: boolean
 ): string {
   const catalog = findCatalogSeries(vendor, series);
   const label = catalog?.label ?? series;
@@ -318,6 +377,11 @@ function missingSeriesNotice(
     return pack
       ? `当前 Pack 不含「${label}」系列：需要 ${pack}，点「在线安装 Pack…」可下载导入。`
       : `当前 Pack 不含「${label}」系列：请选择其它系列，或安装该系列对应的器件包。`;
+  }
+  if (hasServingPack) {
+    return pack
+      ? `「${label}」系列需要用 ${pack} 载入型号：在「芯片支持包 / Pack」里选中它即可。`
+      : `「${label}」系列需要先选择对应的芯片支持包，才能列出型号。`;
   }
   return pack
     ? `「${label}」系列还没有芯片支持包：点「在线安装 Pack…」下载 ${pack}。`
@@ -491,7 +555,7 @@ function optionsForPackSelection(
   );
   const selectedPackChoices = packOptions.filter((option) => option.packId === safe.mcu.packId);
   const packMap = new Map<string, DevicePackOption>();
-  packOptions.forEach((option) => {
+  servingPacks(safe.mcu.vendor, safe.mcu.series, packOptions).forEach((option) => {
     if (!packMap.has(option.packId)) packMap.set(option.packId, option);
   });
   return {
@@ -539,15 +603,22 @@ export function buildSidebarState(
   const choices = buildLinuxToolchainChoices(hits, selection.linux.toolchainFamily);
   const safeSelection = sanitizeSidebarSelection(selection, selection, packOptions);
   const mcuOptions = optionsForPackSelection(safeSelection, packOptions);
-  // An empty part list is unreachable without a reason: either the activated
-  // Pack serves another series, or no Pack for the series is installed at all.
-  const seriesNotice = mcuOptions.devices.length === 0 && safeSelection.mcu.series !== ''
-    ? missingSeriesNotice(
+  const resolvedPendingPackId = mcuOptions.packs.some((option) => option.value === pendingPackId)
+    ? pendingPackId
+    : mcuOptions.packs[0]?.value ?? '';
+  // Generation needs a Pack that serves the series and a part inside it; without
+  // both, every generation command fails the same way, so the reason is part of
+  // the state rather than an error after the click. This one sentence also
+  // explains an empty part list — the panel would otherwise show the same text
+  // twice, once here and once in the catalog notice.
+  const mcuBlockedReason = safeSelection.mode !== 'mcu' || safeSelection.mcu.part !== ''
+    ? ''
+    : missingSeriesNotice(
         safeSelection.mcu.vendor,
         safeSelection.mcu.series,
-        safeSelection.mcu.packId !== ''
-      )
-    : '';
+        safeSelection.mcu.packId !== '',
+        mcuOptions.packs.length > 0
+      );
 
   return {
     workspaceName: selectedProjectLabel(workspaceName, projects, projectRoot),
@@ -560,15 +631,16 @@ export function buildSidebarState(
     })),
     packs: mcuOptions.packs,
     versions: packOptions
-      .filter((option) => option.packId === pendingPackId)
+      .filter((option) => option.packId === resolvedPendingPackId)
       .map((option) => ({
         value: option.version,
         label: option.version,
         description: option.origin
       })),
-    pendingPackId,
-    packCatalogNotice: packCatalogNotice || seriesNotice,
+    pendingPackId: resolvedPendingPackId,
+    packCatalogNotice,
     corePackNotice,
+    mcuBlockedReason,
     series: mcuOptions.series,
     devices: mcuOptions.devices,
     flashTargets: listFlashTargetProfiles().map((target) => ({

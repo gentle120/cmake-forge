@@ -49,6 +49,7 @@ interface SidebarState {
   linuxToolchains: Array<{ value: string; label: string }>;
   packCatalogNotice: string;
   corePackNotice: string;
+  mcuBlockedReason: string;
   selection: SidebarSelection & { corePackInclude: boolean };
 }
 
@@ -67,6 +68,7 @@ function baseState(overrides: Partial<SidebarState> = {}): SidebarState {
     pendingPackId: 'builtin:STM',
     packCatalogNotice: '',
     corePackNotice: '',
+    mcuBlockedReason: '',
     series: [{ value: 'F1x', label: 'STM32F1' }],
     devices: [{ value: 'STM32F103C8T6', label: 'STM32F103C8T6', description: 'STM32F1', detail: '64 KB Flash' }],
     flashTargets: [{ value: 'stm32f1xx', label: 'STM32F1' }],
@@ -370,6 +372,30 @@ test('shows the CMSIS core pack state and its install action', () => {
     state: baseState({ corePackNotice: '已安装 ARM CMSIS 内核包 6.4.0（64 个头文件）。' })
   });
   assert.match(notice.textContent, /已安装 ARM CMSIS 内核包 6\.4\.0/);
+});
+
+test('a blocked MCU selection disables generation and shows why', () => {
+  const harness = startSidebar(baseState({
+    mcuBlockedReason: '「STM32F4」系列需要 STM32F4xx_DFP：请先点「在线安装 Pack…」下载导入，再生成工程。'
+  }));
+
+  const notice = harness.element('mcu-blocked-notice');
+  assert.equal(notice.hidden, false);
+  assert.match(notice.textContent, /STM32F4xx_DFP/);
+
+  // Every MCU generation entry point is unavailable, not just the main button.
+  for (const command of ['generateProject', 'generateFlashScript', 'generateDebugConfiguration']) {
+    const button = harness.byCommand(command)[0];
+    assert.ok(button, `expected a ${command} button`);
+    assert.equal(button.disabled, true, `${command} must be disabled while blocked`);
+  }
+  // Pack installation stays available: it is the way out of this state.
+  assert.equal(harness.element('install-pack-online').disabled, false);
+  assert.equal(harness.element('import-pack').disabled, false);
+
+  harness.send({ type: 'state', state: baseState() });
+  assert.equal(harness.element('mcu-blocked-notice').hidden, true);
+  assert.equal(harness.byCommand('generateProject')[0].disabled, false);
 });
 
 test('the core pack include switch persists the user choice', () => {

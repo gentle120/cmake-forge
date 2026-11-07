@@ -8,6 +8,7 @@ import {
   buildSidebarState,
   defaultSidebarSelection,
   nextMcuSelection,
+  packServesSeries,
   sanitizeSidebarSelection
 } from '../sidebar/state';
 import { hasVendor, registerVendor } from '../devices/vendorRegistry';
@@ -116,6 +117,94 @@ test('replaces stale MCU values with empty fields when no Pack owns the selectio
   assert.equal(selection.flash.enabled, false);
   assert.equal(selection.flash.probeId, 'stlink');
   assert.equal(selection.flash.openocdPath, 'openocd');
+});
+
+test('the Pack list only offers Packs that serve the selected series', () => {
+  if (!hasVendor('STMicroelectronics')) {
+    registerVendor({
+      id: 'STMicroelectronics', label: 'STM32', definePrefixes: ['STM32'], order: 100
+    });
+  }
+  const f1Pack = 'packs/STMicroelectronics/Keil.STM32F1xx_DFP.pack';
+  const f4Pack = 'packs/STMicroelectronics/Keil.STM32F4xx_DFP.pack';
+  registerDeviceProfiles([fixtureDeviceProfile({
+    vendor: 'STMicroelectronics', series: 'STM32F1 Series', family: 'STM32F1 Series'
+  })], f1Pack);
+  registerDeviceProfiles([fixtureDeviceProfile({
+    vendor: 'STMicroelectronics',
+    part: 'STM32F407VGT6',
+    series: 'STM32F4 Series',
+    family: 'STM32F4 Series',
+    defines: ['STM32F407xx'],
+    compilerFlags: ['-mcpu=cortex-m4', '-mthumb', '-mfpu=fpv4-sp-d16', '-mfloat-abi=hard'],
+    flash: { origin: 0x08000000, length: 1024 * 1024 },
+    ram: { origin: 0x20000000, length: 128 * 1024 },
+    debugTarget: 'stm32f4x'
+  })], f4Pack);
+  const packOptions = [
+    {
+      packId: 'STMicroelectronics:Keil.STM32F1xx_DFP',
+      vendorId: 'STMicroelectronics', name: 'Keil.STM32F1xx_DFP', version: '2.4.1',
+      origin: 'imported' as const, packFile: f1Pack
+    },
+    {
+      packId: 'STMicroelectronics:Keil.STM32F4xx_DFP',
+      vendorId: 'STMicroelectronics', name: 'Keil.STM32F4xx_DFP', version: '2.17.1',
+      origin: 'imported' as const, packFile: f4Pack
+    }
+  ];
+  try {
+    const f1Selection = sanitizeSidebarSelection({
+      mcu: {
+        vendor: 'STMicroelectronics',
+        packId: 'STMicroelectronics:Keil.STM32F1xx_DFP',
+        version: '2.4.1',
+        sourcePack: f1Pack,
+        series: 'F1x',
+        part: 'STM32F103C8T6'
+      }
+    }, defaultSidebarSelection(), packOptions);
+    const f1State = buildSidebarState('demo', f1Selection, [], [], '', false, packOptions, f1Selection.mcu.packId);
+    assert.deepEqual(f1State.packs.map((option) => option.label), ['Keil.STM32F1xx_DFP']);
+    assert.equal(f1State.mcuBlockedReason, '');
+
+    // Choosing F4x while the F1 Pack is active must not keep the F1 Pack: the
+    // Pack list, the selected Pack and the part list then all agree.
+    const switched = sanitizeSidebarSelection(
+      nextMcuSelection(f1Selection, { series: 'F4x' }, packOptions),
+      f1Selection,
+      packOptions
+    );
+    assert.equal(switched.mcu.series, 'F4x');
+    assert.equal(switched.mcu.packId, '');
+    const switchedState = buildSidebarState('demo', switched, [], [], '', false, packOptions, switched.mcu.packId);
+    assert.deepEqual(switchedState.packs.map((option) => option.label), ['Keil.STM32F4xx_DFP']);
+    assert.equal(switchedState.devices.length, 0);
+    assert.match(switchedState.mcuBlockedReason, /STM32F4xx_DFP/);
+
+    // Installed and downloadable entries carry no parsed parts, so their DFP
+    // name decides: both the bare and the vendor-prefixed form serve the series.
+    const nameOnly = [
+      { packId: 'ST:STM32F1xx_DFP', vendorId: 'STMicroelectronics', name: 'STM32F1xx_DFP', version: '2.4.1', origin: 'installed' as const, packFile: 'C:/Keil/STM32F1xx_DFP' },
+      { packId: 'ST:Keil.STM32F4xx_DFP', vendorId: 'STMicroelectronics', name: 'Keil.STM32F4xx_DFP', version: '2.17.1', origin: 'downloadable' as const, packUrl: 'https://example/F4.pack' },
+      { packId: 'ST:GD32F4xx_DFP', vendorId: 'STMicroelectronics', name: 'GD32F4xx_DFP', version: '3.0.3', origin: 'installed' as const, packFile: 'C:/Keil/other' }
+    ];
+    const namesForF4 = nameOnly
+      .filter((option) => packServesSeries('STMicroelectronics', 'F4x', option))
+      .map((option) => option.name);
+    assert.deepEqual(namesForF4, ['Keil.STM32F4xx_DFP']);
+
+    // A series with no local Pack offers an empty list and names the DFP needed.
+    const empty = sanitizeSidebarSelection({
+      mcu: { vendor: 'STMicroelectronics', series: 'L4x', packId: '', version: '', part: '' }
+    }, defaultSidebarSelection(), packOptions);
+    const emptyState = buildSidebarState('demo', empty, [], [], '', false, packOptions, '');
+    assert.deepEqual(emptyState.packs, []);
+    assert.match(emptyState.mcuBlockedReason, /STM32L4xx_DFP/);
+  } finally {
+    unregisterDeviceProfilesByPack(f1Pack);
+    unregisterDeviceProfilesByPack(f4Pack);
+  }
 });
 
 test('a series persisted as the pack Dfamily text renders under its catalog id', () => {

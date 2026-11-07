@@ -2,6 +2,14 @@
 
 ## 2.1.3
 
+- Keep the Pack dropdown consistent with the selected series: it now lists only
+  Packs that serve that series (imported Packs by their parsed parts, installed and
+  downloadable Packs by their DFP name), and a Pack serving another series is no
+  longer kept as the active choice.
+- Block MCU generation when no Pack serves the selected series: the sidebar
+  explains which DFP is needed and disables "生成工程", "仅 flash.py", and
+  "仅 Debug" instead of failing after the click, and the command palette reports
+  the same message.
 - Fix the frozen series dropdown: vendor packs name their series their own way
   (`Dfamily="STM32F1 Series"`) while the sidebar persists the curated id (`F1x`),
   so an exact-match comparison snapped the selection back to the pack text and

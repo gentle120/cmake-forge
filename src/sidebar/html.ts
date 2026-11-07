@@ -97,6 +97,7 @@ export function renderSidebarHtml(
           </div>
         </div>
         <div id="target-host" class="target-host"></div>
+        <p id="mcu-blocked-notice" class="operation-notice" data-tone="warning" role="alert" hidden></p>
         <div class="pack-actions">
           <button id="import-pack" class="secondary-action compact" type="button" data-command="importPack">
             <span class="ui-icon" data-icon="folder" aria-hidden="true"></span><span>导入 Pack 包…</span>

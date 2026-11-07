@@ -47,6 +47,8 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - 侧栏 MCU 选择为 vendor → series → pack → version → part：series 可在激活 Pack 前选择，来源为精选厂商系列目录（`src/devices/seriesCatalog.ts`，含各系列的 DFP 名与型号前缀）与本地包系列；选定系列后自动解析并激活本地对应 Pack（imported 按档案系列/型号前缀匹配，installed 按 DFP 名匹配），无匹配时提示确定性安装途径；part 按目录型号前缀或系列过滤；不保留跨 vendor 残留。
 - 系列有两套命名：侧栏持久化的精选 id（`F1x`）与 PDSC 的 `Dfamily` 文本（`STM32F1 Series`）。匹配必须接受两者之一（同系列或型号前缀命中），选中系列不得因激活 Pack 而回弹到 Pack 自己的文本；下拉选项按精选 id 去重，同一系列不得出现两行；旧版本持久化的 Pack 文本 id 在渲染时归一为精选 id。切换系列后若当前 Pack 不含该系列，part 为空并给出「需要哪个 DFP」的提示，而不是把系列改回原值。
 - 生成的工程是否写入内核包 include 目录由侧栏「生成内核包 include」开关决定（持久化，默认开）：关闭时不写该目录、也不再提示内核包缺失，用于用户自行提供 core 头文件的场景；该开关只影响生成，不改变内核包的安装状态。
+- 系列先于 Pack 选择，因此 Pack 下拉只列出服务所选系列的 Pack，不得让用户选中一个必然列不出型号的 Pack：imported 按已解析档案的系列/型号前缀判定，installed/downloadable 按目录 DFP 名判定（裸名与带厂商前缀名等价，如 `STM32F1xx_DFP` / `Keil.STM32F1xx_DFP`）；目录外厂商没有 DFP 名可判定时不隐藏 Pack。选中 Pack 的版本列表与持久化选择都必须在过滤后的集合内，不服务于该系列的 Pack 不作为有效选择保留。
+- 没有服务所选系列的 Pack（或没有型号）时 MCU 无法生成：`mcuBlockedReason` 随状态下发，侧栏据此禁用「生成工程」「仅 flash.py」「仅 Debug」并显示同一句原因（点明缺少哪个 DFP 与获取方式），安装 Pack 的入口保持可用；侧栏生成与命令面板生成都必须给出同一提示，不得抛出底层 `Unsupported MCU` 之类的泛化错误。该提示与空型号列表共用一个来源，不重复显示。
 - Pack 目录条目按身份区分：`installed`、`imported`、`downloadable`；同一 packId+version 只展示一个条目，已安装/已导入优先于可下载。
 - 已安装 Pack 的身份取自 PDSC（`Dvendor`、包名、`release version`）；Keil 安装目录名或归档文件名不是最终身份，PDSC 无法解析的条目被跳过。
 - 目录选项的 `packFile` 是安装位置，不是导入档案的所有权键；导入档案的所有权键固定为 `packs/<vendor>/<file>.pack` 形式的扩展存储相对路径。切换 Pack 或版本时所有权键随之切换，目录中已加载的 `imported` 条目优先于持久化键，目录未加载时沿用持久化键。

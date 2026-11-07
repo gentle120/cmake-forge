@@ -43,6 +43,7 @@ import { parseIncomingMessage, type SidebarIncomingMessage } from './messages';
 import {
   buildSidebarState,
   nextMcuSelection,
+  packServesSeries,
   sanitizeSidebarSelection,
   type SidebarOption,
   type SidebarSelection
@@ -345,18 +346,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       }
       this.packOptions = catalogResult.options;
       this.packCatalogNotice = catalogResult.notice || vendorResult?.notice || '';
-      if (this.packOptions.length === 0 && this.packCatalogNotice === '') {
+      // Only Packs that serve the selected series are offered: with a series
+      // chosen first, an unrelated DFP is not a valid choice — selecting one
+      // would leave the part list empty with no way forward.
+      const serving = this.servingPackOptions();
+      if (serving.length === 0 && this.packCatalogNotice === '') {
         const catalog = findCatalogSeries(this.selectionValue.mcu.vendor, this.selectionValue.mcu.series);
         this.packCatalogNotice = catalog?.packName
           ? `「${catalog.label}」系列需要 ${catalog.packName}：点上方「在线安装 Pack」可直接下载导入，或用 Keil Pack Installer 安装后重选系列，也可点「导入 Pack 包」导入已下载的 .pack。`
           : '未找到该厂商的 Pack：请点上方「在线安装 Pack」或「导入 Pack 包」获取器件包，也可以先用 Keil Pack Installer 安装。';
       }
 
-      const selected = this.packOptions.find((option) =>
+      const selected = serving.find((option) =>
         option.packId === this.selectionValue.mcu.packId
         && option.version === this.selectionValue.mcu.version
       );
-      const fallback = this.packOptions[0];
+      const fallback = serving[0];
       if (!selected && fallback) {
         this.pendingPackId = fallback.packId;
         // An explicit vendor change activates the newest already-available
@@ -368,13 +373,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         const seriesPack = autoActivate
           ? this.resolvePackForSeries(this.selectionValue.mcu.vendor, this.selectionValue.mcu.series)
           : undefined;
-        const seriesCandidate = seriesPack && this.packOptions.find((option) =>
+        const seriesCandidate = seriesPack && serving.find((option) =>
           option.packId === seriesPack.packId
           && option.version === seriesPack.version
           && (option.origin === 'imported' || option.origin === 'installed')
         );
         const autoCandidate = autoActivate && this.dependencies.activatePack
-          ? seriesCandidate ?? [...this.packOptions]
+          ? seriesCandidate ?? [...serving]
             .filter((option) => option.origin === 'imported' || option.origin === 'installed')
             .sort((left, right) =>
               comparePackVersions(right.version, left.version)
@@ -418,6 +423,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     }
   }
 
+  /** Catalog entries this selection's series can actually use. */
+  private servingPackOptions(): DevicePackOption[] {
+    return this.packOptions.filter((option) =>
+      packServesSeries(
+        this.selectionValue.mcu.vendor,
+        this.selectionValue.mcu.series,
+        option
+      )
+    );
+  }
+
   private optionsForCatalog(): { packs: SidebarOption[]; versions: SidebarOption[] } {
     const packs = new Map<string, DevicePackOption>();
     for (const option of this.packOptions) {
@@ -425,13 +441,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         packs.set(option.packId, option);
       }
     }
+    const serving = this.servingPackOptions();
     return {
-      packs: [...packs.values()].map((option) => ({
-        value: option.packId,
-        label: option.name,
-        description: option.origin
-      })),
-      versions: this.packOptions
+      packs: [...packs.values()]
+        .filter((option) => serving.some((candidate) =>
+          candidate.packId === option.packId && candidate.version === option.version
+        ))
+        .map((option) => ({
+          value: option.packId,
+          label: option.name,
+          description: option.origin
+        })),
+      versions: serving
         .filter((option) => option.packId === this.pendingPackId)
         .map((option) => ({
           value: option.version,
@@ -687,9 +708,27 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private selectedDeviceProfile() {
     const { part, sourcePack } = this.selectionValue.mcu;
     if (!part || !sourcePack) {
-      throw new Error('请先选择芯片支持包与型号。');
+      throw new Error(this.mcuBlockedMessage());
     }
-    return getDeviceProfileForPack(part, sourcePack);
+    try {
+      return getDeviceProfileForPack(part, sourcePack);
+    } catch {
+      throw new Error(this.mcuBlockedMessage());
+    }
+  }
+
+  /**
+   * Copy for a blocked MCU generation, naming the DFP the selected series needs.
+   * The sidebar shows the same sentence, so a command that slips through (the
+   * command palette, a stale webview) explains itself identically.
+   */
+  private mcuBlockedMessage(): string {
+    const { vendor, series } = this.selectionValue.mcu;
+    const catalog = findCatalogSeries(vendor, series);
+    if (catalog?.packName) {
+      return `「${catalog.label}」系列需要 ${catalog.packName}：请先点「在线安装 Pack…」下载导入，再生成工程。`;
+    }
+    return '请先选择可用的芯片支持包与型号，再生成工程。';
   }
 
   private async handleMessage(message: SidebarIncomingMessage): Promise<void> {
@@ -739,7 +778,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       return;
     }
     if (message.type === 'selectPack') {
-      if (this.packOptions.some((option) => option.packId === message.packId)) {
+      if (this.servingPackOptions().some((option) => option.packId === message.packId)) {
         this.pendingPackId = message.packId;
         const options = this.optionsForCatalog();
         this.post({
