@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -191,4 +191,42 @@ test('keeps the folder version when the PDSC carries no release version', async 
     assert.equal(identity?.version, '1.2.3');
     assert.equal(identity?.name, 'MS32F0xx_DFP');
   });
+});
+
+test('follows a linked pack directory instead of dropping it as neither file nor directory', async () => {
+  // Keeping a pack (or one of its directories) on another drive and linking it in
+  // is normal, and a dirent only reports "link" for it. A walk that trusts the
+  // dirent type alone sees neither a file nor a directory and silently drops the
+  // pack, so the target type has to be resolved.
+  const storageRoot = await mkdtemp(join(tmpdir(), 'cmake-embedded-link-pack-'));
+  try {
+    const packRoot = join(storageRoot, 'LINK_DFP');
+    const sharedRoot = join(storageRoot, 'shared');
+    await mkdir(packRoot, { recursive: true });
+    await mkdir(sharedRoot, { recursive: true });
+    await writeFile(join(sharedRoot, 'LINK.pdsc'), pdsc('LinkVendor', 'LINK_DFP', '1.0.0'));
+    try {
+      // Junctions are creatable without elevation on Windows; the same code path
+      // handles directory symlinks elsewhere.
+      await symlink(sharedRoot, join(packRoot, 'linked'), 'junction');
+    } catch {
+      return;
+    }
+
+    const identities = await listInstalledPackIdentities([
+      {
+        packFile: packRoot,
+        vendor: 'LinkVendor',
+        name: 'LINK_DFP',
+        version: '1.0.0',
+        source: 'directory'
+      }
+    ]);
+
+    assert.equal(identities.length, 1);
+    assert.equal(identities[0].name, 'LINK_DFP');
+    assert.equal(identities[0].hasDevices, false);
+  } finally {
+    await rm(storageRoot, { recursive: true, force: true });
+  }
 });

@@ -43,7 +43,12 @@ import {
   selectPacksForSelection,
   type PackSearchCacheEntry
 } from './packs/packIndex';
-import { createTimeoutFetcher, isCancellationError } from './packs/fetcher';
+import {
+  createTimeoutFetcher,
+  describeTimeout,
+  isCancellationError,
+  RequestTimeoutError
+} from './packs/fetcher';
 import { curatedVendors } from './devices/curatedVendors';
 import { findCatalogSeries, seriesDownloadPage } from './devices/seriesCatalog';
 import { existsSync, readdirSync } from 'node:fs';
@@ -753,6 +758,11 @@ async function importPackOnly(): Promise<CommandResult> {
 
 /** Component/board packs fail deep inside the parser; surface product guidance. */
 function describeImportFailure(error: unknown): string {
+  // A timeout aborts exactly like a cancellation; name it instead of surfacing
+  // either the raw AbortError or the cancellation copy.
+  if (error instanceof RequestTimeoutError) {
+    return `${describeTimeout(error)}。请检查代理/VPN 或换个时间重试，也可用「导入 Pack 包」导入本地 .pack。`;
+  }
   const raw = error instanceof Error ? error.message : String(error);
   if (/no devices section|No \.pdsc file found|no family vendor/.test(raw)) {
     return '这个包的 PDSC 没有任何芯片定义（CMSIS 组件包、中间件包或板级包不含可生成的芯片）。请改用芯片厂商的 DFP 器件包。';

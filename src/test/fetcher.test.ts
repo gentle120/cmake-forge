@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   createTimeoutFetcher,
+  describeTimeout,
   isCancellationError,
-  isTransientNetworkError
+  isTransientNetworkError,
+  RequestTimeoutError
 } from '../packs/fetcher';
 
 function networkError(code: string): Error {
@@ -89,4 +91,60 @@ test('the caller signal aborts the in-flight request', async () => {
 
   await assert.rejects(pending, /aborted/);
   assert.equal(receivedSignal?.aborted, true);
+});
+
+/** A fetch that never answers, so only the wrapper's own timer can settle it. */
+function hangingFetch(): typeof fetch {
+  return ((_url: string, init?: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => {
+      reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' }));
+    }, { once: true });
+  })) as unknown as typeof fetch;
+}
+
+test('the fetcher timeout is a failure, not a user cancellation', async () => {
+  const fetcher = createTimeoutFetcher(20, hangingFetch());
+
+  const error = await fetcher('https://example.test/pack').then(() => undefined, (reason) => reason);
+
+  assert.ok(error instanceof RequestTimeoutError);
+  assert.equal(error.name, 'RequestTimeoutError');
+  // The shared AbortError must never reach the "cancelled" branch.
+  assert.equal(isCancellationError(error), false);
+  assert.equal(isTransientNetworkError(error), false);
+});
+
+test('a timeout is not retried', async () => {
+  let attempts = 0;
+  const hanging = ((_url: string, init?: { signal?: AbortSignal }) => {
+    attempts += 1;
+    return new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' }));
+      }, { once: true });
+    });
+  }) as unknown as typeof fetch;
+
+  await assert.rejects(createTimeoutFetcher(20, hanging)('https://example.test/pack'), RequestTimeoutError);
+  assert.equal(attempts, 1);
+});
+
+test('a caller cancellation still aborts and stays a cancellation', async () => {
+  const controller = new AbortController();
+  const pending = createTimeoutFetcher(60_000, hangingFetch())(
+    'https://example.test/pack',
+    controller.signal
+  );
+  controller.abort();
+
+  const error = await pending.then(() => undefined, (reason) => reason);
+  assert.notEqual(error, null);
+  assert.equal(error instanceof RequestTimeoutError, false);
+  assert.equal(isCancellationError(error), true);
+});
+
+test('describes how long the timeout waited in user-facing copy', () => {
+  assert.match(describeTimeout(new RequestTimeoutError(30_000)), /30 秒/);
+  assert.match(describeTimeout(new RequestTimeoutError(600_000)), /10 分钟/);
+  assert.match(describeTimeout(new RequestTimeoutError(500)), /500 毫秒/);
 });

@@ -27,14 +27,39 @@ export function isTransientNetworkError(error: unknown): boolean {
   return transientErrorCodes.has(code);
 }
 
+/** Raised when the fetcher's own attempt timeout expires. */
+export class RequestTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super('请求超时。');
+    this.name = 'RequestTimeoutError';
+  }
+}
+
+export function describeTimeout(error: RequestTimeoutError): string {
+  const ms = error.timeoutMs;
+  const waited = ms >= 60000
+    ? `${Math.round(ms / 60000)} 分钟`
+    : ms >= 1000
+      ? `${Math.round(ms / 1000)} 秒`
+      : `${ms} 毫秒`;
+  return `在线索引或厂商下载站在 ${waited}内没有响应`;
+}
+
 /**
  * Reports whether a failure is the user cancelling, not a real fault.
  *
  * Cancelling a progress notification rejects the awaited request with an
  * `AbortError` (or the guard's own cancellation message), and that must reach the
  * user as "cancelled" rather than as an error.
+ *
+ * A timeout must NOT be reported as a cancellation: the fetcher aborts with the
+ * same `AbortError` when its own timer fires, so the timer path is converted to
+ * `RequestTimeoutError` before this ever sees it.
  */
 export function isCancellationError(error: unknown): boolean {
+  if (error instanceof RequestTimeoutError) {
+    return false;
+  }
   if (!(error instanceof Error)) {
     return false;
   }
@@ -59,7 +84,11 @@ export function createTimeoutFetcher(
   return async (url, signal) => {
     for (let attempt = 0; ; attempt += 1) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
       const forwardAbort = (): void => controller.abort();
       if (signal) {
         if (signal.aborted) {
@@ -71,6 +100,11 @@ export function createTimeoutFetcher(
       try {
         return await fetchImpl(url, { signal: controller.signal });
       } catch (error) {
+        // A timeout is a failure, not a user action: convert it before anyone can
+        // mistake the shared AbortError for a cancellation.
+        if (timedOut && !signal?.aborted) {
+          throw new RequestTimeoutError(timeoutMs);
+        }
         if (attempt >= 1 || signal?.aborted || !isTransientNetworkError(error)) {
           throw error;
         }

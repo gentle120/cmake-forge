@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ZipEntry } from './zipReader';
 
@@ -27,12 +27,19 @@ async function safeReaddir(path: string): Promise<string[]> {
  * whole pack tree. `readdir` reports the entry types, so the walk never stats a
  * path just to learn whether it is a directory — a large pack has thousands of
  * files and only a handful are ever read.
+ *
+ * Symbolic links are the one exception: a dirent only says "link", so the target
+ * type needs one stat. Linking is how a shared PDSC or a pack kept on another
+ * drive is wired into a CMSIS root, and skipping links would silently hide those
+ * packs. Linked directories are followed with a real-path guard, so a cycle is
+ * skipped instead of recursed into.
  */
 export async function readDirectoryEntries(
   root: string,
   select?: (name: string) => boolean
 ): Promise<ZipEntry[]> {
   const entries: ZipEntry[] = [];
+  const visitedDirectories = new Set<string>();
   const walk = async (directory: string, prefix: string): Promise<void> => {
     let dirents;
     try {
@@ -43,9 +50,28 @@ export async function readDirectoryEntries(
     for (const dirent of dirents) {
       const absolute = join(directory, dirent.name);
       const relative = prefix.length === 0 ? dirent.name : `${prefix}/${dirent.name}`;
-      if (dirent.isDirectory()) {
+      let isDirectory = dirent.isDirectory();
+      let isFile = dirent.isFile();
+      if (dirent.isSymbolicLink()) {
+        try {
+          const target = await stat(absolute);
+          isDirectory = target.isDirectory();
+          isFile = target.isFile();
+        } catch {
+          // A broken link is not a pack entry.
+          continue;
+        }
+        if (isDirectory) {
+          const real = await realpath(absolute).catch(() => absolute);
+          if (visitedDirectories.has(real)) {
+            continue;
+          }
+          visitedDirectories.add(real);
+        }
+      }
+      if (isDirectory) {
         await walk(absolute, relative);
-      } else if (dirent.isFile() && (!select || select(relative))) {
+      } else if (isFile && (!select || select(relative))) {
         try {
           entries.push({ name: relative, data: await readFile(absolute) });
         } catch {
@@ -54,6 +80,7 @@ export async function readDirectoryEntries(
       }
     }
   };
+  visitedDirectories.add(await realpath(root).catch(() => root));
   await walk(root, '');
   return entries;
 }
