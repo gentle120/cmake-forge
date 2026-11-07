@@ -6,10 +6,11 @@ import {
   listPackVendors,
   listPacksForVendor,
   searchPacks,
+  selectPacksForSelection,
   type FetchLike
 } from '../packs/packIndex';
 
-const PACK_INDEX_URL = 'https://www.keil.com/pack/keil.pidx';
+const PACK_INDEX_URL = 'https://www.keil.com/pack/index.pidx';
 
 interface FetchStub {
   ok: boolean;
@@ -32,6 +33,10 @@ const packIndexXml = `<?xml version="1.0" encoding="UTF-8" ?>
     <pdsc url="https://packs.example.com/vendor-pack/" vendor="MS32" name="MS32F0xx_DFP" version="1.2.0" />
     <pdsc url="https://www.keil.com/pack" vendor="NoSlash" name="Example_DFP" version="2.0.0" />
     <pdsc url="https://www.keil.com/pack/" vendor="Keil" name="MCB1500_BSP" version="1.2.0" deprecated="2021-10-28" />
+    <pdsc url="https://gd32mcu.com/data/documents/pack/" vendor="GigaDevice" name="GD32F10x_DFP" version="2.0.3" />
+    <pdsc url="https://gd32mcu.com/data/documents/pack/" vendor="GigaDevice" name="GD32F30x_DFP" version="2.2.1" />
+    <pdsc url="https://gd32mcu.com/data/documents/pack/" vendor="GigaDevice" name="GD32F4xx_DFP" version="3.0.3" />
+    <pdsc url="https://www.keil.com/pack/" vendor="Keil" name="STM32F1xx_DFP" version="2.4.1" />
   </pindex>
 </index>`;
 
@@ -63,6 +68,7 @@ test('listPackIndexPacks flattens pindex pdsc entries into downloadable packs', 
   const { fetcher, requestedUrls } = createFetcher(indexStubs());
   const packs = await listPackIndexPacks(fetcher);
 
+  // The complete public index carries vendor-hosted packs, not just Keil's own.
   assert.deepEqual(requestedUrls, [PACK_INDEX_URL]);
   // The CMSIS naming convention resolves the direct pack download URL, with a
   // slash inserted when the index root lacks one.
@@ -84,6 +90,17 @@ test('listPackIndexPacks flattens pindex pdsc entries into downloadable packs', 
   ]);
   const noSlash = packs.find((pack) => pack.vendorName === 'NoSlash');
   assert.equal(noSlash?.packUrl, 'https://www.keil.com/pack/NoSlash.Example_DFP.2.0.0.pack');
+  const vendorHosted = packs.find((pack) => pack.name === 'GD32F10x_DFP');
+  assert.equal(
+    vendorHosted?.packUrl,
+    'https://gd32mcu.com/data/documents/pack/GigaDevice.GD32F10x_DFP.2.0.3.pack'
+  );
+});
+
+test('deprecated index entries are not offered', async () => {
+  const { fetcher } = createFetcher(indexStubs());
+  const packs = await listPackIndexPacks(fetcher);
+  assert.equal(packs.some((pack) => pack.name === 'MCB1500_BSP'), false);
 });
 
 test('listPackVendors lists each index vendor once', async () => {
@@ -92,7 +109,7 @@ test('listPackVendors lists each index vendor once', async () => {
 
   assert.deepEqual(
     vendors.map((vendor) => vendor.vendorName),
-    ['Keil', 'ARM', 'MS32', 'NoSlash']
+    ['Keil', 'ARM', 'MS32', 'NoSlash', 'GigaDevice']
   );
 });
 
@@ -109,8 +126,39 @@ test('listPacksForVendor keeps every version of the selected vendor', async () =
     ['ARM_Compiler', '1.7.2'],
     ['TM4C_DFP', '1.1.0'],
     ['TM4C_DFP', '1.2.0'],
-    ['MCB1500_BSP', '1.2.0']
+    ['STM32F1xx_DFP', '2.4.1']
   ]);
+});
+
+test('selectPacksForSelection prefers the named DFP of the selected series', async () => {
+  const { fetcher } = createFetcher(indexStubs());
+  const packs = await listPackIndexPacks(fetcher);
+
+  // GD32 F4x is served by GD32F4xx_DFP, whichever pack version is newest.
+  assert.deepEqual(
+    selectPacksForSelection(packs, 'GigaDevice', 'GD32F4xx_DFP').map((pack) => [pack.name, pack.version]),
+    [['GD32F4xx_DFP', '3.0.3']]
+  );
+  // A named DFP wins even when it is published under another vendor, as ST's
+  // STM32F1xx_DFP is published by Keil.
+  assert.deepEqual(
+    selectPacksForSelection(packs, 'STMicroelectronics', 'STM32F1xx_DFP')
+      .map((pack) => `${pack.vendorName}.${pack.name}`),
+    ['Keil.STM32F1xx_DFP']
+  );
+});
+
+test('selectPacksForSelection falls back to every pack of the vendor', async () => {
+  const { fetcher } = createFetcher(indexStubs());
+  const packs = await listPackIndexPacks(fetcher);
+
+  // Without a catalog entry for the series, every vendor pack stays selectable,
+  // newest version first.
+  assert.deepEqual(
+    selectPacksForSelection(packs, 'GigaDevice').map((pack) => pack.name),
+    ['GD32F10x_DFP', 'GD32F30x_DFP', 'GD32F4xx_DFP']
+  );
+  assert.deepEqual(selectPacksForSelection(packs, 'UnknownVendor'), []);
 });
 
 test('searchPacks matches vendor name, pack name, and version case-insensitively', async () => {
@@ -119,7 +167,8 @@ test('searchPacks matches vendor name, pack name, and version case-insensitively
   assert.equal((await searchPacks(fetcher, 'keil')).length, 4);
   assert.equal((await searchPacks(fetcher, 'tm4c')).length, 2);
   assert.equal((await searchPacks(fetcher, 'cmsis')).length, 1);
-  assert.equal((await searchPacks(fetcher, '   ')).length, 7);
+  assert.equal((await searchPacks(fetcher, 'gd32f')).length, 3);
+  assert.equal((await searchPacks(fetcher, '   ')).length, 10);
 });
 
 test('searchPacks reuses a cached index between calls', async () => {

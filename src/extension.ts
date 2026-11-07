@@ -25,7 +25,6 @@ import {
   importPackDirectory,
   listImportedPacks,
   loadImportedProfiles,
-  packVendorIdFromName,
   removePack,
   type ImportPackResult
 } from './devices/importedProfiles';
@@ -42,11 +41,12 @@ import {
   downloadPack,
   listPackIndexPacks,
   searchPacks,
+  selectPacksForSelection,
   type FetchLike,
   type PackSearchCacheEntry
 } from './packs/packIndex';
 import { curatedVendors } from './devices/curatedVendors';
-import { seriesDownloadPage } from './devices/seriesCatalog';
+import { findCatalogSeries, seriesDownloadPage } from './devices/seriesCatalog';
 import { existsSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import * as os from 'node:os';
@@ -329,8 +329,8 @@ async function installedPackIdentities(): Promise<InstalledPackIdentity[]> {
  * Vendor options for the sidebar: locally usable vendors (imported profiles
  * and installed Packs with importable devices) first, then the curated
  * mainstream chip vendors so the dropdown always reads like a product menu.
- * The keil.com pack index is deliberately not a vendor source — it only lists
- * Keil-hosted packs and would bury real chip vendors under publisher noise.
+ * The pack index is deliberately not a vendor source — it lists publisher and
+ * component packs too and would bury real chip vendors under publisher noise.
  */
 async function discoverPackVendorOptions(): Promise<{
   vendors: Array<{ value: string; label: string; description?: string }>;
@@ -436,7 +436,7 @@ async function activateDevicePack(
         );
       }
     } else if (option.origin === 'downloadable' && option.packUrl) {
-      const buffer = await downloadPack(fetchWithTimeout, option.packUrl);
+      const buffer = await downloadPack(downloadFetcher, option.packUrl);
       const fileName = option.packUrl.split('/').pop() ?? `${option.name}.${option.version}.pack`;
       importedResult = await importPack(buffer, fileName, packStorageRoot, {
         name: option.name,
@@ -517,11 +517,19 @@ function scanRoots() {
   return roots;
 }
 
-const fetchWithTimeout: FetchLike = (url) => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12000);
-  return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
-};
+function fetcherWithTimeout(timeoutMs: number): FetchLike {
+  return (url) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+  };
+}
+
+// The public CMSIS index is ~240 KB and can answer slowly, while a real DFP runs
+// to tens of megabytes; one shared timeout would either abort the index or cut a
+// large pack download short.
+const indexFetcher = fetcherWithTimeout(30000);
+const downloadFetcher = fetcherWithTimeout(10 * 60 * 1000);
 
 async function pickLocalPack(): Promise<{ buffer: Buffer; fileName: string } | undefined> {
   const picked = await vscode.window.showOpenDialog({
@@ -569,7 +577,11 @@ async function pickKeilPack(): Promise<{ kind: 'buffer'; buffer: Buffer; fileNam
   return { kind: 'buffer', buffer: await readFile(picked.identity.packFile), fileName };
 }
 
-async function pickOnlinePack(): Promise<{ buffer: Buffer; fileName: string } | undefined> {
+async function pickOnlinePack(): Promise<{
+  buffer: Buffer;
+  fileName: string;
+  identity: { name: string; version: string };
+} | undefined> {
   const keyword = await vscode.window.showInputBox({
     placeHolder: '输入厂商或芯片关键字，例如 MS32'
   });
@@ -579,37 +591,52 @@ async function pickOnlinePack(): Promise<{ buffer: Buffer; fileName: string } | 
   const results = await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: `正在搜索 keil.com Pack 索引「${keyword.trim()}」…`,
+      title: `正在搜索 CMSIS 公开 Pack 索引「${keyword.trim()}」…`,
       cancellable: true
     },
     (_progress, token) => {
       const controller = new AbortController();
       const cancellation = token.onCancellationRequested(() => controller.abort());
-      return searchPacks(fetchWithTimeout, keyword, {
+      return searchPacks(indexFetcher, keyword, {
         cache: packSearchCache,
         signal: controller.signal
       }).finally(() => cancellation.dispose());
     }
   );
   if (results.length === 0) {
-    vscode.window.showInformationMessage(`keil.com 在线索引中没有匹配「${keyword}」的 Pack。`);
+    vscode.window.showInformationMessage(`CMSIS 公开索引中没有匹配「${keyword}」的 Pack。`);
     return undefined;
   }
   const picked = await vscode.window.showQuickPick(
     results.map((pack) => ({
       label: pack.name,
       description: pack.version,
-      detail: pack.description,
-      packUrl: pack.packUrl
+      detail: pack.packUrl,
+      pack
     })),
     { placeHolder: `匹配 ${results.length} 个 Pack，选择要下载导入的包` }
   );
   if (!picked) {
     return undefined;
   }
-  const buffer = await downloadPack(fetchWithTimeout, picked.packUrl);
-  const fileName = picked.packUrl.split('/').pop() ?? 'imported.pack';
-  return { buffer, fileName };
+  const download = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `正在下载 ${picked.pack.name} ${picked.pack.version}…`,
+      cancellable: true
+    },
+    (_progress, token) => {
+      const controller = new AbortController();
+      const cancellation = token.onCancellationRequested(() => controller.abort());
+      return downloadPack(downloadFetcher, picked.pack.packUrl)
+        .finally(() => cancellation.dispose());
+    }
+  );
+  return {
+    buffer: download,
+    fileName: picked.pack.packUrl.split('/').pop() ?? 'imported.pack',
+    identity: { name: picked.pack.name, version: picked.pack.version }
+  };
 }
 
 async function importPackOnly(): Promise<CommandResult> {
@@ -618,7 +645,7 @@ async function importPackOnly(): Promise<CommandResult> {
     [
       { label: '本地 .pack 文件', value: 'local' as const },
       { label: 'Keil 已安装 Pack', value: 'keil' as const },
-      { label: 'keil.com 在线索引', value: 'online' as const }
+      { label: 'CMSIS 公开在线索引', value: 'online' as const }
     ],
     { placeHolder: '选择 CMSIS Pack 来源' }
   );
@@ -648,7 +675,7 @@ async function importPackOnly(): Promise<CommandResult> {
       if (!picked) {
         return cancelled;
       }
-      result = await importPack(picked.buffer, picked.fileName, packStorageRoot);
+      result = await importPack(picked.buffer, picked.fileName, packStorageRoot, picked.identity);
     }
     await syncPackFileIndex();
     activeSidebar?.refresh();
@@ -675,19 +702,19 @@ function describeImportFailure(error: unknown): string {
     : raw;
 }
 
-/** One-click online install: full index browse → download → import. */
+/** One-click online install: the selected vendor's DFP, downloaded and imported. */
 async function installPackOnlineOnly(): Promise<CommandResult> {
   try {
     const packs = await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: '正在读取 keil.com 在线 Pack 索引…',
+        title: '正在读取 CMSIS 公开 Pack 索引…',
         cancellable: true
       },
       (_progress, token) => {
         const controller = new AbortController();
         const cancellation = token.onCancellationRequested(() => controller.abort());
-        return listPackIndexPacks(fetchWithTimeout, packSearchCache)
+        return listPackIndexPacks(indexFetcher, packSearchCache)
           .finally(() => cancellation.dispose());
       }
     );
@@ -696,39 +723,39 @@ async function installPackOnlineOnly(): Promise<CommandResult> {
       void vscode.window.showInformationMessage(message);
       return { ok: false, message };
     }
-    // The online install is vendor-aware: the packs offered match the vendor
-    // selected in the sidebar. Trial vendors (STM32/GD32/CH32) are not on the
-    // keil.com index — for them, open the official DFP download page instead.
+    // The online install is vendor- and series-aware: the candidates are the
+    // packs that can serve the chip family selected in the sidebar, newest
+    // version first.
     const selectedVendor = activeSidebar?.selection().mcu.vendor ?? '';
     const selectedSeries = activeSidebar?.selection().mcu.series ?? '';
     const curatedLabel = curatedVendors.find((vendor) => vendor.id === selectedVendor)?.label
       ?? selectedVendor;
-    let candidates = packs;
-    if (selectedVendor) {
-      candidates = packs.filter((pack) => packVendorIdFromName(pack.vendorName) === selectedVendor);
-      if (candidates.length === 0) {
-        const downloadPage = seriesDownloadPage(selectedVendor, selectedSeries);
-        if (downloadPage) {
-          void vscode.env.openExternal(vscode.Uri.parse(downloadPage));
-          void vscode.window.showInformationMessage(
-            `已在浏览器打开「${curatedLabel}」的器件包下载页：下载 DFP .pack 文件后，点「导入 Pack 包」完成导入。`
-          );
-          return { ok: false, cancelled: true, message: '已在浏览器打开器件包下载页。' };
-        }
-        const fallback = await vscode.window.showQuickPick(
-          [
-            { label: '浏览在线索引全部厂商的包', value: 'all' as const },
-            { label: '取消', value: 'cancel' as const }
-          ],
-          {
-            placeHolder: `在线索引（keil.com 托管）没有「${curatedLabel}」的器件包：该厂商请用 Keil Pack Installer 安装 DFP，或在官网下载 .pack 后用「导入 Pack 包」安装`
-          }
+    const wantedPackName = findCatalogSeries(selectedVendor, selectedSeries)?.packName ?? '';
+    let candidates = selectedVendor
+      ? selectPacksForSelection(packs, selectedVendor, wantedPackName)
+      : packs;
+    if (selectedVendor && candidates.length === 0) {
+      const downloadPage = seriesDownloadPage(selectedVendor, selectedSeries);
+      if (downloadPage) {
+        void vscode.env.openExternal(vscode.Uri.parse(downloadPage));
+        void vscode.window.showInformationMessage(
+          `CMSIS 公开索引没有「${curatedLabel}」的器件包：已在浏览器打开官方下载页，下载 DFP .pack 后点「导入 Pack 包」完成导入。`
         );
-        if (fallback?.value !== 'all') {
-          return { ok: false, cancelled: true, message: '未执行在线安装。' };
-        }
-        candidates = packs;
+        return { ok: false, cancelled: true, message: '已在浏览器打开器件包下载页。' };
       }
+      const fallback = await vscode.window.showQuickPick(
+        [
+          { label: '浏览在线索引全部厂商的包', value: 'all' as const },
+          { label: '取消', value: 'cancel' as const }
+        ],
+        {
+          placeHolder: `CMSIS 公开索引没有「${curatedLabel}」的器件包：请用 Keil Pack Installer 安装，或从厂商官网下载 .pack 后用「导入 Pack 包」安装`
+        }
+      );
+      if (fallback?.value !== 'all') {
+        return { ok: false, cancelled: true, message: '未执行在线安装。' };
+      }
+      candidates = packs;
     }
     const picked = await vscode.window.showQuickPick(
       candidates.map((pack) => ({
@@ -739,7 +766,7 @@ async function installPackOnlineOnly(): Promise<CommandResult> {
       })),
       {
         placeHolder: selectedVendor
-          ? `「${curatedLabel}」可在线安装的 Pack（${candidates.length} 个），输入关键字过滤，选择后自动下载导入`
+          ? `${curatedLabel} 可在线安装的 Pack（${candidates.length} 个），选择后自动下载导入`
           : `在线索引共 ${candidates.length} 个 Pack，输入关键字过滤，选择后自动下载导入`
       }
     );
@@ -755,12 +782,17 @@ async function installPackOnlineOnly(): Promise<CommandResult> {
       (_progress, token) => {
         const controller = new AbortController();
         const cancellation = token.onCancellationRequested(() => controller.abort());
-        return downloadPack(fetchWithTimeout, picked.pack.packUrl)
+        return downloadPack(downloadFetcher, picked.pack.packUrl)
           .finally(() => cancellation.dispose());
       }
     );
     const fileName = picked.pack.packUrl.split('/').pop() ?? 'online.pack';
-    const result = await importPack(buffer, fileName, packStorageRoot);
+    // The index entry is the authoritative identity: a vendor-hosted archive
+    // name is not a reliable pack name/version pair.
+    const result = await importPack(buffer, fileName, packStorageRoot, {
+      name: picked.pack.name,
+      version: picked.pack.version
+    });
     await syncPackFileIndex();
     activeSidebar?.refresh();
     const skipped = result.skipped.length > 0

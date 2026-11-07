@@ -599,6 +599,78 @@ test('selecting a series auto-activates its matching installed Pack', async () =
   }
 });
 
+test('online install auto-activates the Pack of the selected series, not the newest Pack', async () => {
+  const f1Pack = 'packs/GigaDevice/GD32F10x_DFP.pack';
+  const f4Pack = 'packs/GigaDevice/GD32F4xx_DFP.pack';
+  if (!hasVendor('GigaDevice')) {
+    registerVendor({ id: 'GigaDevice', label: 'GD32', definePrefixes: ['GD32'], order: 100 });
+  }
+  registerDeviceProfiles([{
+    ...fixtureDeviceProfile({
+      vendor: 'GigaDevice', part: 'GD32F103C8T6', series: 'GD32F10x Series',
+      family: 'GD32F10x Series', defines: ['GD32F10X_MD']
+    })
+  }], f1Pack);
+  registerDeviceProfiles([{
+    ...fixtureDeviceProfile({
+      vendor: 'GigaDevice', part: 'GD32F403RC', series: 'GD32F4xx Series',
+      family: 'GD32F4xx Series', defines: ['GD32F403'], core: 'cortex-m4'
+    })
+  }], f4Pack);
+  const activations: Array<[string, string, string]> = [];
+  const provider = startProvider(undefined, {
+    loadPackCatalog: async (vendor: string) => ({
+      options: vendor !== 'GigaDevice'
+        ? []
+        : [{
+            packId: 'GigaDevice:GD32F10x_DFP',
+            vendorId: 'GigaDevice',
+            name: 'GD32F10x_DFP',
+            version: '3.0.0',
+            origin: 'imported',
+            packFile: f1Pack
+          }, {
+            packId: 'GigaDevice:GD32F4xx_DFP',
+            vendorId: 'GigaDevice',
+            name: 'GD32F4xx_DFP',
+            version: '3.0.3',
+            origin: 'imported',
+            packFile: f4Pack
+          }]
+    }),
+    activatePack: async (vendor: string, packId: string, version: string) => {
+      activations.push([vendor, packId, version]);
+      return {
+        vendorId: 'GigaDevice',
+        packId,
+        version,
+        sourcePack: packId === 'GigaDevice:GD32F4xx_DFP' ? f4Pack : f1Pack,
+        message: '已载入。'
+      };
+    }
+  }, [], async () => ({ ok: true, message: '在线安装完成' }));
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const base = latestState(provider.messages)?.selection;
+    assert.ok(base);
+    provider.receive({
+      type: 'saveSelection',
+      selection: { ...base, mcu: { ...base.mcu, vendor: 'GigaDevice', series: 'F4x' } }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    // F4x resolves to its own DFP even though the F1 pack has the newer version.
+    assert.deepEqual(activations, [['GigaDevice', 'GigaDevice:GD32F4xx_DFP', '3.0.3']]);
+    const state = latestState(provider.messages);
+    assert.equal(state?.selection.mcu.packId, 'GigaDevice:GD32F4xx_DFP');
+    assert.equal(state?.selection.mcu.part, 'GD32F403RC');
+  } finally {
+    provider.dispose();
+    unregisterDeviceProfilesByPack(f1Pack);
+    unregisterDeviceProfilesByPack(f4Pack);
+  }
+});
+
 test('a series without any local Pack stays selected with install guidance', async () => {
   const provider = startProvider(undefined, {
     loadPackCatalog: async (vendor: string) => vendor === 'GigaDevice'

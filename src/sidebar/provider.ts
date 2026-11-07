@@ -319,7 +319,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       if (this.packOptions.length === 0 && this.packCatalogNotice === '') {
         const catalog = findCatalogSeries(this.selectionValue.mcu.vendor, this.selectionValue.mcu.series);
         this.packCatalogNotice = catalog?.packName
-          ? `「${catalog.label}」系列需要 ${catalog.packName}：请点上方「在线安装 Pack」打开官方下载页，或用 Keil Pack Installer 安装后重选系列，也可点「导入 Pack 包」导入已下载的 .pack。`
+          ? `「${catalog.label}」系列需要 ${catalog.packName}：点上方「在线安装 Pack」可直接下载导入，或用 Keil Pack Installer 安装后重选系列，也可点「导入 Pack 包」导入已下载的 .pack。`
           : '未找到该厂商的 Pack：请点上方「在线安装 Pack」或「导入 Pack 包」获取器件包，也可以先用 Keil Pack Installer 安装。';
       }
 
@@ -333,9 +333,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         // An explicit vendor change activates the newest already-available
         // Pack version so series and parts work without a manual import.
         // Downloadable entries wait for an explicit selection; startup
-        // refreshes never activate on their own.
+        // refreshes never activate on their own. The series wins over version
+        // order: after an online install of another series' DFP, the Pack that
+        // serves the selected series is the only correct activation.
+        const seriesPack = autoActivate
+          ? this.resolvePackForSeries(this.selectionValue.mcu.vendor, this.selectionValue.mcu.series)
+          : undefined;
+        const seriesCandidate = seriesPack && this.packOptions.find((option) =>
+          option.packId === seriesPack.packId
+          && option.version === seriesPack.version
+          && (option.origin === 'imported' || option.origin === 'installed')
+        );
         const autoCandidate = autoActivate && this.dependencies.activatePack
-          ? [...this.packOptions]
+          ? seriesCandidate ?? [...this.packOptions]
             .filter((option) => option.origin === 'imported' || option.origin === 'installed')
             .sort((left, right) =>
               comparePackVersions(right.version, left.version)

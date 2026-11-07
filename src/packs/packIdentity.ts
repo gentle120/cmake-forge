@@ -15,10 +15,16 @@ export function packVendorDisplayName(vendorName: string): string {
   return vendorName.replace(/:\d+$/, '') || vendorName;
 }
 
-/** Strips a trailing '.pack' and the trailing version from a pack file name. */
+/**
+ * Splits a CMSIS pack file name into pack name and version. The version is the
+ * trailing all-numeric dotted group (`Vendor.Name.1.2.3.pack`), so the name
+ * keeps every earlier dot segment; matching must start from the shortest
+ * candidate name, otherwise `1.2` would be read as the name's tail and `3` —
+ * or in a four-part version the last number alone — as the version.
+ */
 export function packNameFromFileName(fileName: string): { name: string; version?: string } {
   const base = fileName.split(/[/\\]/).pop()?.replace(/\.pack$/i, '') ?? fileName;
-  const versionMatch = /^(.*)\.(\d+(?:\.\d+)*(?:[-_][A-Za-z0-9.-]+)?)$/.exec(base);
+  const versionMatch = /^(.*?)\.(\d+(?:\.\d+)*(?:[-_][A-Za-z0-9.-]+)?)$/.exec(base);
   return {
     name: versionMatch?.[1] ?? base,
     version: versionMatch?.[2]

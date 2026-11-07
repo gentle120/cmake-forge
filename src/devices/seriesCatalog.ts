@@ -28,7 +28,8 @@ export interface VendorSeriesCatalog {
   /**
    * Official DFP download page for this vendor; `{fam2}` is replaced with the
    * first two characters of the series id (e.g. F1x → GD32F1). Undefined for
-   * vendors without a stable public download page.
+   * vendors without a stable public download page. Used only when the online
+   * pack index has no pack for the selected series.
    */
   downloadPage?: string;
 }
@@ -43,7 +44,7 @@ const STM32_SERIES: Array<[string, string]> = [
 const GD32_SERIES: Array<[string, string, string]> = [
   ['F1x', 'GD32F1', 'GD32F10x_DFP'],
   ['F3x', 'GD32F3', 'GD32F30x_DFP'],
-  ['F4x', 'GD32F4', 'GD32F40x_DFP']
+  ['F4x', 'GD32F4', 'GD32F4xx_DFP']
 ];
 
 export const seriesCatalog: VendorSeriesCatalog[] = [

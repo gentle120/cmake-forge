@@ -501,11 +501,6 @@ async function writeStore(storageRoot: string, store: PackStoreFile): Promise<vo
   }
 }
 
-/** Creates a registry identity from a vendor name parsed out of a Pack. */
-export function packVendorIdFromName(vendorName: string): string {
-  return packVendorId(vendorName);
-}
-
 function packIdentity(
   packFile: string,
   vendorId: string,

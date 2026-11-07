@@ -6,7 +6,7 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 
 ## System Context
 
-- 用户与外部系统：嵌入式开发者在 VS Code 侧边栏/命令面板选择方向与芯片；扩展读写工作区文件并生成 `.vscode/` 配置；配置与编译由 CMake Tools 负责，烧录/调试依赖用户 PATH 或设置中的 OpenOCD、arm-none-eabi、J-Link、pyOCD；CMSIS Pack 来自本地文件、Keil 安装库或 keil.com 索引。
+- 用户与外部系统：嵌入式开发者在 VS Code 侧边栏/命令面板选择方向与芯片；扩展读写工作区文件并生成 `.vscode/` 配置；配置与编译由 CMake Tools 负责，烧录/调试依赖用户 PATH 或设置中的 OpenOCD、arm-none-eabi、J-Link、pyOCD；CMSIS Pack 来自本地文件、Keil 安装库或 CMSIS 公开在线索引。
 - 运行与部署目标：VS Code 扩展宿主（Node，`engines.vscode ^1.85`），`main: ./out/extension.js`，tsc 编译，无打包器。
 - 信任与安全边界：生成文件落盘前有覆盖确认；不执行外部烧录器进程（仅生成脚本供用户执行）；Pack 导入只读 zip 内容并复制到扩展 globalStorage。
 

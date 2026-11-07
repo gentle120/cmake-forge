@@ -1,4 +1,5 @@
 import { XMLParser } from 'fast-xml-parser';
+import { packVendorId } from './packIdentity';
 
 export interface PackIndexEntry {
   vendorName: string;
@@ -35,7 +36,10 @@ export type FetchLike = (url: string) => Promise<{
   arrayBuffer(): Promise<ArrayBuffer>;
 }>;
 
-const packIndexUrl = 'https://www.keil.com/pack/keil.pidx';
+// The complete public CMSIS pack index. The vendor-specific keil.pidx only
+// lists Keil-hosted packs and therefore cannot serve chip vendors such as
+// GigaDevice or STMicroelectronics, whose DFPs are hosted by the vendor.
+const packIndexUrl = 'https://www.keil.com/pack/index.pidx';
 const indexTtlMs = 5 * 60 * 1000;
 
 type XmlNode = Record<string, unknown>;
@@ -43,11 +47,14 @@ type XmlNode = Record<string, unknown>;
 const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
 
 /**
- * Fetches keil.pidx and flattens its `<pindex><pdsc url vendor name version/>`
- * entries into direct Pack entries. The CMSIS naming convention resolves the
- * download URL as `<root><vendor>.<name>.<version>.pack`; keil.com serves
- * these under a 302 to its CDN. Entries missing any identity field are
- * skipped because there is no download URL to hand to the importer.
+ * Fetches the CMSIS pack index and flattens its
+ * `<pindex><pdsc url vendor name version/>` entries into direct Pack entries.
+ * The CMSIS naming convention resolves the download URL as
+ * `<root><vendor>.<name>.<version>.pack`; keil.com redirects its own packs to a
+ * CDN while vendor-hosted packs point straight at the vendor site. Entries
+ * missing any identity field are skipped because there is no download URL to
+ * hand to the importer, and deprecated entries are skipped so the catalog never
+ * offers a superseded DFP.
  */
 export async function listPackIndexPacks(
   fetcher: FetchLike,
@@ -68,7 +75,7 @@ export async function listPackIndexPacks(
     const vendor = textField(node, 'vendor');
     const name = textField(node, 'name');
     const version = textField(node, 'version');
-    if (!url || !vendor || !name || !version) {
+    if (!url || !vendor || !name || !version || textField(node, 'deprecated')) {
       continue;
     }
     const root = url.endsWith('/') ? url : `${url}/`;
@@ -82,6 +89,31 @@ export async function listPackIndexPacks(
   }
   cache?.set(packIndexUrl, { packs, expiresAt: Date.now() + indexTtlMs });
   return packs;
+}
+
+/**
+ * Index packs serving one sidebar selection, newest version first.
+ *
+ * A curated series names its DFP, so an exact name match wins even when the
+ * DFP is published under another vendor (Keil publishes ST's STM32F1xx_DFP).
+ * Without a named DFP, every pack of the selected registry vendor qualifies,
+ * which also absorbs numeric Dvendor suffixes and vendor display variants.
+ */
+export function selectPacksForSelection(
+  packs: PackIndexPack[],
+  vendorId: string,
+  packName = ''
+): PackIndexPack[] {
+  const wantedName = packName.trim().toLowerCase();
+  const byName = wantedName === ''
+    ? []
+    : packs.filter((pack) => pack.name.toLowerCase() === wantedName);
+  const pool = byName.length > 0
+    ? byName
+    : packs.filter((pack) => vendorId !== '' && packVendorId(pack.vendorName) === vendorId);
+  return [...pool].sort((left, right) =>
+    left.name.localeCompare(right.name) || compareVersions(right.version, left.version)
+  );
 }
 
 /** Lists each vendor of the pack index once, in first-appearance order. */
