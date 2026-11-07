@@ -15,7 +15,10 @@ export function loadHostModule<T>(filename: string, vscode: object): T {
     const moduleObject = { exports: {} as unknown };
     modules.set(file, moduleObject);
     const requireFile = createRequire(file);
-    const wrapper = runInNewContext('(function(require, module, exports, __filename, __dirname) {\n' + readFileSync(file, 'utf8') + '\n})', { AbortController });
+    const wrapper = runInNewContext(
+      '(function(require, module, exports, __filename, __dirname) {\n' + readFileSync(file, 'utf8') + '\n})',
+      { AbortController, console }
+    );
     wrapper((name: string) => {
       if (name === 'vscode') {
         return vscode;

@@ -114,7 +114,7 @@ test('importing a Pack refreshes the catalog and auto-activates the best version
       options: [{
         packId: 'GD:GD32F1xx_DFP',
         vendorId: 'GD',
-        name: 'GD32F1xx_DFP',
+        name: 'GD32F10x_DFP',
         version: '2.4.1',
         origin: 'installed',
         packFile: 'C:/Keil/GD/GD32F1xx_DFP/2.4.1',
@@ -522,31 +522,31 @@ test('sidebar keeps the requested mode when the selection only changes mode', as
   }
 });
 
-test('selecting a vendor auto-activates its best installed Pack version', async () => {
+test('selecting a series auto-activates its matching installed Pack', async () => {
   const writes: unknown[] = [];
-  const sourcePack = 'packs/GD/GD32F1xx_DFP.pack';
+  const sourcePack = 'packs/GigaDevice/GD32F10x_DFP.pack';
+  if (!hasVendor('GigaDevice')) {
+    registerVendor({ id: 'GigaDevice', label: 'GD32', definePrefixes: ['GD32'], order: 100 });
+  }
   registerDeviceProfiles([{
-    ...fixtureDeviceProfile(),
-    part: 'GD32F103C8T6',
-    vendor: 'GD'
+    ...fixtureDeviceProfile({ vendor: 'GigaDevice', part: 'GD32F103C8T6', family: 'GD32F10x', defines: ['GD32F10X_MD'] })
   }], sourcePack);
   const activations: Array<[string, string, string]> = [];
   const provider = startProvider(undefined, {
-    loadPackCatalog: async (vendor: string) => vendor === 'GD'
+    loadPackCatalog: async (vendor: string) => vendor === 'GigaDevice'
       ? {
           options: [{
-            packId: 'GD:GD32F1xx_DFP',
-            vendorId: 'GD',
-            name: 'GD32F1xx_DFP',
+            packId: 'GigaDevice:GD32F10x_DFP',
+            vendorId: 'GigaDevice',
+            name: 'GD32F10x_DFP',
             version: '2.4.1',
             origin: 'installed',
-            packFile: 'C:/Keil/GD/GD32F1xx_DFP/2.4.1',
-            source: 'directory',
-            hasDevices: true
+            packFile: 'C:/Keil/GigaDevice/GD32F1xx_DFP/2.4.1',
+            source: 'directory'
           }, {
-            packId: 'GD:GD32F1xx_DFP',
-            vendorId: 'GD',
-            name: 'GD32F1xx_DFP',
+            packId: 'GigaDevice:GD32F10x_DFP',
+            vendorId: 'GigaDevice',
+            name: 'GD32F10x_DFP',
             version: '3.0.0',
             origin: 'downloadable',
             packUrl: 'https://packs.example/GD32F1xx_DFP.3.0.0.pack'
@@ -557,7 +557,7 @@ test('selecting a vendor auto-activates its best installed Pack version', async 
         },
     activatePack: async (vendor: string, packId: string, version: string) => {
       activations.push([vendor, packId, version]);
-      return { vendorId: 'GD', packId, version, sourcePack, message: '已载入 GD32F1xx_DFP。' };
+      return { vendorId: 'GigaDevice', packId, version, sourcePack, message: '已载入 GD32F1xx_DFP。' };
     }
   }, writes);
   try {
@@ -565,27 +565,77 @@ test('selecting a vendor auto-activates its best installed Pack version', async 
     await new Promise((resolve) => setTimeout(resolve, 20));
     const base = latestState(provider.messages)?.selection;
     assert.ok(base, 'expected an initial sidebar state');
+    // Vendor selection alone must NOT auto-activate in the series-first flow.
     provider.receive({
       type: 'saveSelection',
-      selection: { ...base, mcu: { ...base.mcu, vendor: 'GD' } }
+      selection: { ...base, mcu: { ...base.mcu, vendor: 'GigaDevice' } }
     });
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    // The installed version is imported automatically; the downloadable one waits.
-    assert.deepEqual(activations, [['GD', 'GD:GD32F1xx_DFP', '2.4.1']]);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    // The catalog defaults the series to F1x, which resolves immediately.
+    assert.deepEqual(activations, [['GigaDevice', 'GigaDevice:GD32F10x_DFP', '2.4.1']]);
+    // The webview always sends the CURRENT state; capture it after activation.
+    const activated = latestState(provider.messages)?.selection;
+    assert.ok(activated?.mcu.packId, 'expected the default-series pack activated');
+    provider.receive({
+      type: 'saveSelection',
+      selection: { ...activated, mcu: { ...activated.mcu, series: 'F1x' } }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.deepEqual(activations, [['GigaDevice', 'GigaDevice:GD32F10x_DFP', '2.4.1']]);
     const state = latestState(provider.messages);
-    assert.equal(state?.selection.mcu.vendor, 'GD');
-    assert.equal(state?.selection.mcu.packId, 'GD:GD32F1xx_DFP');
+    assert.equal(state?.selection.mcu.vendor, 'GigaDevice');
+    assert.equal(state?.selection.mcu.packId, 'GigaDevice:GD32F10x_DFP');
     assert.equal(state?.selection.mcu.version, '2.4.1');
     assert.equal(state?.selection.mcu.sourcePack, sourcePack);
     assert.equal(state?.selection.mcu.part, 'GD32F103C8T6');
-    assert.equal(state?.pendingPackId, 'GD:GD32F1xx_DFP');
+    assert.equal(state?.pendingPackId, 'GigaDevice:GD32F10x_DFP');
     assert.equal(
       (writes.at(-1) as { mcu?: { packId?: string } } | undefined)?.mcu?.packId,
-      'GD:GD32F1xx_DFP'
+      'GigaDevice:GD32F10x_DFP'
     );
   } finally {
     provider.dispose();
     unregisterDeviceProfilesByPack(sourcePack);
+  }
+});
+
+test('a series without any local Pack stays selected with install guidance', async () => {
+  const provider = startProvider(undefined, {
+    loadPackCatalog: async (vendor: string) => vendor === 'GigaDevice'
+      ? {
+          options: [{
+            packId: 'GigaDevice:GD32F10x_DFP',
+            vendorId: 'GigaDevice',
+            name: 'GD32F10x_DFP',
+            version: '3.0.0',
+            origin: 'downloadable',
+            packUrl: 'https://packs.example/GD32F1xx_DFP.3.0.0.pack'
+          }]
+        }
+      : {
+          options: []
+        },
+    activatePack: async () => {
+      throw new Error('must not activate without a local pack');
+    }
+  });
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const base = latestState(provider.messages)?.selection;
+    assert.ok(base);
+    provider.receive({
+      type: 'saveSelection',
+      selection: { ...base, mcu: { ...base.mcu, vendor: 'GigaDevice', series: 'F1x' } }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const state = latestState(provider.messages);
+    assert.equal(state?.selection.mcu.series, 'F1x');
+    assert.equal(state?.selection.mcu.packId, '');
+    // The downloadable pack is offered as the pending choice; nothing activates.
+    assert.equal(state?.pendingPackId, 'GigaDevice:GD32F10x_DFP');
+  } finally {
+    provider.dispose();
   }
 });
 
@@ -597,7 +647,7 @@ test('a vendor with only downloadable Packs is not auto-activated', async () => 
           options: [{
             packId: 'GD:GD32F1xx_DFP',
             vendorId: 'GD',
-            name: 'GD32F1xx_DFP',
+            name: 'GD32F10x_DFP',
             version: '3.0.0',
             origin: 'downloadable',
             packUrl: 'https://packs.example/GD32F1xx_DFP.3.0.0.pack'
@@ -658,7 +708,7 @@ test('startup catalog refresh does not auto-activate an installed Pack', async (
       options: [{
         packId: 'GD:GD32F1xx_DFP',
         vendorId: 'GD',
-        name: 'GD32F1xx_DFP',
+        name: 'GD32F10x_DFP',
         version: '2.4.1',
         origin: 'installed',
         packFile: 'C:/Keil/GD/GD32F1xx_DFP/2.4.1',

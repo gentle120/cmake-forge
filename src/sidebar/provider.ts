@@ -13,6 +13,7 @@ import {
   listDeviceSeries
 } from '../devices/deviceSelection';
 import { getVendorMetadata, hasVendor } from '../devices/vendorRegistry';
+import { findCatalogSeries } from '../devices/seriesCatalog';
 import { getFlashProbeProfile } from '../flash/probeProfiles';
 import { getFlashTargetProfile } from '../flash/targets/targetProfiles';
 import {
@@ -236,6 +237,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         )
       : requested;
     const vendorChanged = this.selectionValue.mcu.vendor !== previous.mcu.vendor;
+    const seriesChanged = this.selectionValue.mcu.series !== previous.mcu.series;
     await this.context.workspaceState.update(selectionKey, this.selectionValue);
     if (vendorChanged) {
       this.pendingPackId = this.selectionValue.mcu.packId;
@@ -244,8 +246,44 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     }
     this.postState();
     if (vendorChanged) {
-      await this.refreshPackCatalog(this.selectionValue.mcu.vendor, true);
+      // Series-first: switching vendors only refreshes the catalog; the series
+      // (defaulted to the catalog's first entry) then determines the Pack.
+      await this.refreshPackCatalog(this.selectionValue.mcu.vendor);
     }
+    if (seriesChanged || vendorChanged) {
+      const resolved = this.resolvePackForSeries(
+        this.selectionValue.mcu.vendor,
+        this.selectionValue.mcu.series
+      );
+      if (resolved) {
+        this.pendingPackId = resolved.packId;
+        await this.activatePack(resolved.packId, resolved.version);
+        return;
+      }
+    }
+  }
+
+  /** Finds a locally known Pack serving the selected series. */
+  private resolvePackForSeries(
+    vendor: string,
+    series: string
+  ): { packId: string; version: string } | undefined {
+    const catalog = findCatalogSeries(vendor, series);
+    const prefix = catalog?.partPrefix.toUpperCase();
+    for (const option of this.packOptions) {
+      if (option.origin === 'imported' && option.packFile) {
+        const profiles = listDeviceProfilesForPack(option.packFile);
+        if (profiles.some((profile) =>
+          profile.series === series
+          || (prefix !== undefined && profile.part.toUpperCase().startsWith(prefix))
+        )) {
+          return { packId: option.packId, version: option.version };
+        }
+      } else if (option.origin === 'installed' && catalog && option.name === catalog.packName) {
+        return { packId: option.packId, version: option.version };
+      }
+    }
+    return undefined;
   }
 
   private async refreshPackCatalog(vendor: string, autoActivate = false): Promise<void> {
@@ -279,8 +317,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.packOptions = catalogResult.options;
       this.packCatalogNotice = catalogResult.notice || vendorResult?.notice || '';
       if (this.packOptions.length === 0 && this.packCatalogNotice === '') {
-        this.packCatalogNotice =
-          '未找到该厂商的 Pack：请点上方「在线安装 Pack」或「导入 Pack 包」获取器件包，也可以先用 Keil Pack Installer 安装。';
+        const catalog = findCatalogSeries(this.selectionValue.mcu.vendor, this.selectionValue.mcu.series);
+        this.packCatalogNotice = catalog?.packName
+          ? `「${catalog.label}」系列需要 ${catalog.packName}：请用 Keil Pack Installer 安装该器件包，或点上方「导入 Pack 包」/「在线安装 Pack」获取。`
+          : '未找到该厂商的 Pack：请点上方「在线安装 Pack」或「导入 Pack 包」获取器件包，也可以先用 Keil Pack Installer 安装。';
       }
 
       const selected = this.packOptions.find((option) =>
@@ -413,9 +453,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       if (profiles.length === 0) {
         throw new Error('此 Pack 版本没有可用于生成的芯片。');
       }
-      const series = [...new Set(profiles.map((profile) => profile.series))]
+      // The series-first flow keeps the user's chosen series when the activated
+      // pack serves it (by series id or catalog part prefix).
+      const chosenSeries = this.selectionValue.mcu.series;
+      const catalog = findCatalogSeries(vendor, chosenSeries);
+      const prefix = catalog?.partPrefix.toUpperCase();
+      const pool = prefix !== undefined
+        ? profiles.filter((profile) => profile.part.toUpperCase().startsWith(prefix))
+        : profiles.filter((profile) => profile.series === chosenSeries);
+      const candidates = pool.length > 0 ? pool : profiles;
+      const series = [...new Set(candidates.map((profile) => profile.series))]
         .sort((left, right) => left.localeCompare(right))[0];
-      const profile = profiles
+      const profile = candidates
         .filter((candidate) => candidate.series === series)
         .sort((left, right) => left.part.localeCompare(right.part))[0];
       if (!profile) {

@@ -7,10 +7,9 @@ import {
 import {
   buildDevicePackOptions,
   type DevicePackOption,
-  listDeviceProfilesForSeries,
-  listDeviceSeries,
   listDeviceVendors
 } from '../devices/deviceSelection';
+import { findCatalogSeries, seriesCatalogFor } from '../devices/seriesCatalog';
 import { listFlashProbeProfiles, type FlashProbeId } from '../flash/probeProfiles';
 import { listFlashTargetProfiles } from '../flash/targets/targetProfiles';
 import { buildLinuxToolchainChoices } from '../linux/toolchainChoices';
@@ -97,9 +96,31 @@ function isVendor(value: unknown): value is DeviceVendor {
   return typeof value === 'string' && hasVendor(value);
 }
 
-function isSeries(value: unknown): value is DeviceSeries {
-  return typeof value === 'string'
-    && listDeviceProfiles().some((profile) => profile.series === value);
+/**
+ * A series id is selectable when the vendor's catalog defines it (the curated
+ * trial vendors) or a locally registered profile uses it. Catalog series stay
+ * selectable before any Pack is activated — selecting one determines the Pack.
+ */
+function isKnownSeries(vendor: DeviceVendor, value: unknown): value is DeviceSeries {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return false;
+  }
+  const series = value.trim();
+  return findCatalogSeries(vendor, series) !== undefined
+    || listDeviceProfiles().some((profile) => profile.vendor === vendor && profile.series === series);
+}
+
+/** Parts of the activated Pack matching the selected series (catalog-aware). */
+function seriesPool(
+  profiles: ReturnType<typeof listDeviceProfiles>,
+  vendor: DeviceVendor,
+  series: DeviceSeries
+): ReturnType<typeof listDeviceProfiles> {
+  const catalog = findCatalogSeries(vendor, series);
+  const pool = catalog
+    ? profiles.filter((profile) => profile.part.toUpperCase().startsWith(catalog.partPrefix.toUpperCase()))
+    : profiles.filter((profile) => profile.vendor === vendor && profile.series === series);
+  return [...pool].sort((left, right) => left.part.localeCompare(right.part));
 }
 
 function partFor(
@@ -109,12 +130,9 @@ function partFor(
   value: unknown
 ): string {
   const selected = typeof value === 'string' ? value.trim().toUpperCase() : '';
-  return profiles.find((profile) =>
-    profile.vendor === vendor
-    && profile.series === series
-    && profile.part.toUpperCase() === selected
-  )?.part
-    ?? listDeviceProfilesForSeries(profiles, vendor, series)[0]?.part
+  const pool = seriesPool(profiles, vendor, series);
+  return pool.find((profile) => profile.part.toUpperCase() === selected)?.part
+    ?? pool[0]?.part
     ?? '';
 }
 
@@ -199,9 +217,9 @@ export function sanitizeSidebarSelection(
   const sourcePack = packId === ''
     ? undefined
     : profileOwner(packId, version, packOptions, selectedSourcePack);
-  const series = packId !== '' && isSeries(mcu?.series) && seriesBelongsToVendor(mcu.series, vendor, vendorProfiles)
-    ? mcu.series
-    : firstSeriesForVendor(vendor, vendorProfiles);
+  const series = isKnownSeries(vendor, mcu?.series)
+    ? (mcu!.series as string).trim()
+    : firstSeriesForVendor(vendor);
   const family = typeof linux?.toolchainFamily === 'string'
     && isLinuxToolchainFamily(linux.toolchainFamily)
     ? linux.toolchainFamily
@@ -259,21 +277,25 @@ export function sanitizeSidebarSelection(
   };
 }
 
-function firstSeriesForVendor(
-  vendor: DeviceVendor,
-  profiles: ReturnType<typeof listDeviceProfiles> = listDeviceProfiles()
-): DeviceSeries {
-  return listDeviceSeries(profiles, vendor)[0] ?? '';
+/** Series dropdown fallback order: catalog first, then locally imported series. */
+function firstSeriesForVendor(vendor: DeviceVendor): DeviceSeries {
+  return seriesCatalogFor(vendor)[0]?.series
+    ?? listDeviceProfiles().find((profile) => profile.vendor === vendor)?.series
+    ?? '';
 }
 
-function seriesBelongsToVendor(
-  series: DeviceSeries,
-  vendor: DeviceVendor,
-  profiles: ReturnType<typeof listDeviceProfiles> = listDeviceProfiles()
-): boolean {
-  return profiles.some((profile) =>
-    profile.vendor === vendor && profile.series === series
-  );
+/** Series dropdown entries: catalog series first, then local pack series. */
+function vendorSeriesOptions(vendor: DeviceVendor): SidebarOption[] {
+  const options = new Map<string, SidebarOption>();
+  for (const entry of seriesCatalogFor(vendor)) {
+    options.set(entry.series, { value: entry.series, label: entry.label });
+  }
+  for (const profile of listDeviceProfiles()) {
+    if (profile.vendor === vendor && !options.has(profile.series)) {
+      options.set(profile.series, { value: profile.series, label: profile.series });
+    }
+  }
+  return [...options.values()];
 }
 
 /**
@@ -338,9 +360,17 @@ export function nextMcuSelection(
     ? profileOwner(packId, version, packOptions, undefined)
     : requestedSourcePack;
   const profiles = packProfiles(vendor, packId, version, packOptions, owner);
-  const series = change.series ?? (packChanged
-    ? firstSeriesForVendor(vendor, profiles)
-    : selection.mcu.series);
+  // The series is user-chosen (vendor → series → pack): it survives pack
+  // switches and only falls back when unknown for the vendor. When the newly
+  // activated pack does not serve the chosen series, adopt the pack's first
+  // series so the part list never empties out.
+  const chosenSeries = change.series ?? (isKnownSeries(vendor, selection.mcu.series)
+    ? selection.mcu.series
+    : firstSeriesForVendor(vendor));
+  const series = profiles.length === 0 || profiles.some((profile) => profile.series === chosenSeries)
+    ? chosenSeries
+    : [...new Set(profiles.map((profile) => profile.series))]
+      .sort((left, right) => left.localeCompare(right))[0];
   const seriesChanged = series !== selection.mcu.series;
   const part = change.part
     ? partFor(profiles, vendor, series, change.part)
@@ -366,7 +396,7 @@ function deviceOptions(
   vendor: DeviceVendor,
   series: DeviceSeries
 ): SidebarOption[] {
-  return listDeviceProfilesForSeries(profiles, vendor, series).map((profile) => ({
+  return seriesPool(profiles, vendor, series).map((profile) => ({
     value: profile.part,
     label: profile.part,
     description: `${profile.family} / ${profile.core}`,
@@ -406,10 +436,7 @@ export function optionsForPackSelection(
       label: option.version,
       description: option.origin
     })),
-    series: listDeviceSeries(profiles, safe.mcu.vendor).map((series) => ({
-      value: series,
-      label: listDeviceProfilesForSeries(profiles, safe.mcu.vendor, series)[0]?.family ?? series
-    })),
+    series: vendorSeriesOptions(safe.mcu.vendor),
     devices: deviceOptions(profiles, safe.mcu.vendor, safe.mcu.series)
   };
 }

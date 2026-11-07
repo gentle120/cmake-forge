@@ -201,16 +201,25 @@ test('project selection sends the selected project root without starting a comma
   });
 });
 
-test('MCU selection follows vendor, Pack, version, series, and device order', () => {
-  const harness = startSidebar(baseState());
+test('MCU selection follows vendor, series, Pack, version, and device order', () => {
+  const harness = startSidebar(baseState({
+    series: [{ value: 'F1x', label: 'F1x' }]
+  }));
   const selects = harness.element('target-host').querySelectorAll('select');
   assert.equal(selects.length, 5);
-  const [vendor, pack, version, series, device] = selects;
+  const [vendor, series, pack, version, device] = selects;
   assert.equal(vendor.value, 'STM');
+  assert.equal(series.value, 'F1x');
   assert.equal(pack.value, 'builtin:STM');
   assert.equal(version.value, 'builtin');
-  assert.equal(series.value, 'F1x');
   assert.equal(device.value, 'STM32F103C8T6');
+
+  series.value = 'F4x';
+  series.dispatch('change');
+  const lastSave = harness.posted
+    .filter((message) => message.type === 'saveSelection')
+    .at(-1) as { selection?: { mcu?: { series?: string } } } | undefined;
+  assert.equal(lastSave?.selection?.mcu?.series, 'F4x');
 
   pack.value = 'STM:STM32F1xx_DFP';
   pack.dispatch('change');
@@ -229,7 +238,7 @@ test('MCU selection follows vendor, Pack, version, series, and device order', ()
     })
   });
   const refreshedSelects = harness.element('target-host').querySelectorAll('select');
-  const versionSelect = refreshedSelects[2];
+  const versionSelect = refreshedSelects[3];
   versionSelect.value = '1.1.0';
   versionSelect.dispatch('change');
   assert.deepEqual(harness.posted.at(-1), {
@@ -285,7 +294,7 @@ test('offline catalog notice remains visible while built-in and installed Pack c
   const notice = harness.element('pack-catalog-notice');
   assert.equal(notice.hidden, false);
   assert.match(notice.textContent, /network offline/);
-  const pack = harness.element('target-host').querySelectorAll('select')[1];
+  const pack = harness.element('target-host').querySelectorAll('select')[2];
   assert.equal(pack.disabled, false);
   assert.deepEqual(
     pack.querySelectorAll('option').map((option) => option.value),

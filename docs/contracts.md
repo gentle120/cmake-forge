@@ -39,7 +39,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - 烧录后端 `openocd|jlink|pyocd` 与探针兼容矩阵见 `src/flash/backendProfiles.ts`；pyocd 后端不支持 J-Link 探针（硬件限制）。
 - pyOCD 的 pack 参数必须是真实存在的 `.pack` 文件；导入设备没有归档时省略 `--pack`，不得生成指向虚拟路径的配置。
 - 在线 Pack 搜索复用同一 TTL 缓存的索引并在取消后停止发起后续请求；每个可下载版本都保留为独立条目，不折叠为最新版本。
-- 侧栏 MCU 选择为 vendor → pack → version → series → part 五级；series/part 必须属于当前选中 Pack 的版本，否则回退到该版本首个可用系列与型号，不保留跨 vendor 或跨 Pack 残留。
+- 侧栏 MCU 选择为 vendor → series → pack → version → part：series 可在激活 Pack 前选择，来源为精选厂商系列目录（`src/devices/seriesCatalog.ts`，含各系列的 DFP 名与型号前缀）与本地包系列；选定系列后自动解析并激活本地对应 Pack（imported 按档案系列/型号前缀匹配，installed 按 DFP 名匹配），无匹配时提示确定性安装途径；part 按目录型号前缀或系列过滤；不保留跨 vendor 残留。
 - Pack 目录条目按身份区分：`installed`、`imported`、`downloadable`；同一 packId+version 只展示一个条目，已安装/已导入优先于可下载。
 - 已安装 Pack 的身份取自 PDSC（`Dvendor`、包名、`release version`）；Keil 安装目录名或归档文件名不是最终身份，PDSC 无法解析的条目被跳过。
 - 目录选项的 `packFile` 是安装位置，不是导入档案的所有权键；导入档案的所有权键固定为 `packs/<vendor>/<file>.pack` 形式的扩展存储相对路径。切换 Pack 或版本时所有权键随之切换，目录中已加载的 `imported` 条目优先于持久化键，目录未加载时沿用持久化键。

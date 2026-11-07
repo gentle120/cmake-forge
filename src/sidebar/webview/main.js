@@ -173,6 +173,10 @@
     if (!state) return;
     saveSelection({ ...state.selection, mcu: { ...state.selection.mcu, vendor: value } });
   });
+  const seriesField = createSelectField('系列', (value) => {
+    if (!state) return;
+    saveSelection({ ...state.selection, mcu: { ...state.selection.mcu, series: value } });
+  });
   const packField = createSelectField('芯片支持包 / Pack', (value) => {
     if (!state) return;
     post({ type: 'selectPack', packId: value });
@@ -194,10 +198,6 @@
       version: value
     });
   });
-  const seriesField = createSelectField('系列', (value) => {
-    if (!state) return;
-    saveSelection({ ...state.selection, mcu: { ...state.selection.mcu, series: value } });
-  });
   const deviceField = createSelectField('型号', (value) => {
     if (!state) return;
     saveSelection({ ...state.selection, mcu: { ...state.selection.mcu, part: value } });
@@ -209,9 +209,9 @@
   deviceSummary.append(deviceName, deviceMeta);
   targetHost.append(
     vendorField.wrapper,
+    seriesField.wrapper,
     packField.wrapper,
     versionField.wrapper,
-    seriesField.wrapper,
     deviceField.wrapper,
     deviceSummary,
     packCatalogBusy
