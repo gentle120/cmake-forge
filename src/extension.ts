@@ -25,6 +25,7 @@ import {
   importPackDirectory,
   listImportedPacks,
   loadImportedProfiles,
+  packVendorIdFromName,
   removePack,
   type ImportPackResult
 } from './devices/importedProfiles';
@@ -694,14 +695,43 @@ async function installPackOnlineOnly(): Promise<CommandResult> {
       void vscode.window.showInformationMessage(message);
       return { ok: false, message };
     }
+    // The online install is vendor-aware: the packs offered match the vendor
+    // selected in the sidebar; the full index stays reachable as an explicit
+    // fallback because keil.com only hosts its own packs.
+    const selectedVendor = activeSidebar?.selection().mcu.vendor ?? '';
+    const curatedLabel = curatedVendors.find((vendor) => vendor.id === selectedVendor)?.label
+      ?? selectedVendor;
+    let candidates = packs;
+    if (selectedVendor) {
+      candidates = packs.filter((pack) => packVendorIdFromName(pack.vendorName) === selectedVendor);
+      if (candidates.length === 0) {
+        const fallback = await vscode.window.showQuickPick(
+          [
+            { label: '浏览在线索引全部厂商的包', value: 'all' as const },
+            { label: '取消', value: 'cancel' as const }
+          ],
+          {
+            placeHolder: `在线索引（keil.com 托管）没有「${curatedLabel}」的器件包：该厂商请用 Keil Pack Installer 安装 DFP，或在官网下载 .pack 后用「导入 Pack 包」安装`
+          }
+        );
+        if (fallback?.value !== 'all') {
+          return { ok: false, cancelled: true, message: '未执行在线安装。' };
+        }
+        candidates = packs;
+      }
+    }
     const picked = await vscode.window.showQuickPick(
-      packs.map((pack) => ({
+      candidates.map((pack) => ({
         label: `${pack.vendorName} ${pack.name}`,
         description: pack.version,
         detail: pack.packUrl,
         pack
       })),
-      { placeHolder: `在线索引共 ${packs.length} 个 Pack，输入关键字过滤，选择后自动下载导入` }
+      {
+        placeHolder: selectedVendor
+          ? `「${curatedLabel}」可在线安装的 Pack（${candidates.length} 个），输入关键字过滤，选择后自动下载导入`
+          : `在线索引共 ${candidates.length} 个 Pack，输入关键字过滤，选择后自动下载导入`
+      }
     );
     if (!picked) {
       return { ok: false, cancelled: true, message: '未执行在线安装。' };
