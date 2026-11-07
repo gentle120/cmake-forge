@@ -822,24 +822,33 @@ test('a Pack whose PDSC series names differ from the catalog ids does not freeze
   }
 });
 
-test('MCU generation passes the core-pack include only when the switch is on', async () => {
+test('MCU generation passes the core-pack version and switch at generation time', async () => {
   const sourcePack = 'packs/STM/Fixture_DFP.pack';
   registerDeviceProfiles([fixtureDeviceProfile()], sourcePack);
   const coreDir = 'C:/extension/cores/ARM.CMSIS.6.4.0/CMSIS/Core/Include';
-  const requests: boolean[] = [];
+  const requests: Array<[boolean, string]> = [];
   const provider = startProvider({
     ...{
       mode: 'mcu', projectRoot: '',
-      mcu: { vendor: 'STM', packId: 'STM:Fixture_DFP', version: '1.0.0', sourcePack, series: 'F1x', part: 'STM32F103C8T6' },
+      mcu: {
+        vendor: 'STM', packId: 'STM:Fixture_DFP', version: '1.0.0', sourcePack,
+        series: 'F1x', part: 'STM32F103C8T6', corePackVersion: '6.4.0'
+      },
       linux: { toolchainFamily: 'loongson' },
       native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
       debugEnabled: false, corePackInclude: true,
       flash: { enabled: false, targetId: 'stm32f1xx', probeId: 'stlink', openocdPath: 'openocd', backend: 'openocd' }
     }
   }, {
-    coreIncludeDirs: async (includeCorePack: boolean) => {
-      requests.push(includeCorePack);
-      return includeCorePack ? [coreDir] : [];
+    describeCorePack: async () => ({
+      installed: true,
+      version: '6.4.0',
+      versions: ['6.4.0'],
+      notice: '已安装 ARM CMSIS 内核包 6.4.0（3 个头文件）。'
+    }),
+    corePackForGeneration: async (includeCorePack: boolean, version: string) => {
+      requests.push([includeCorePack, version]);
+      return includeCorePack ? { includeDir: coreDir, version: version || '6.4.0' } : undefined;
     }
   });
   try {
@@ -848,7 +857,7 @@ test('MCU generation passes the core-pack include only when the switch is on', a
 
     provider.receive({ type: 'generateProject' });
     await new Promise((resolve) => setTimeout(resolve, 60));
-    assert.deepEqual(requests, [true]);
+    assert.deepEqual(requests, [[true, '6.4.0']]);
 
     const state = latestState(provider.messages);
     assert.ok(state);
@@ -861,8 +870,8 @@ test('MCU generation passes the core-pack include only when the switch is on', a
 
     provider.receive({ type: 'generateProject' });
     await new Promise((resolve) => setTimeout(resolve, 60));
-    // The switch is read at generation time, not cached at save time.
-    assert.deepEqual(requests, [true, false]);
+    // The switch and version are read at generation time, not cached at save time.
+    assert.deepEqual(requests, [[true, '6.4.0'], [false, '6.4.0']]);
   } finally {
     provider.dispose();
     unregisterDeviceProfilesByPack(sourcePack);

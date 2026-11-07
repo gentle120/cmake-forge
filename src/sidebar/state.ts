@@ -47,6 +47,11 @@ export interface SidebarSelection {
     sourcePack?: string;
     series: DeviceSeries;
     part: string;
+    /**
+     * Installed CMSIS core pack version copied into generated projects;
+     * empty means the newest installed one.
+     */
+    corePackVersion: string;
   };
   linux: {
     toolchainFamily: LinuxToolchainFamily;
@@ -87,6 +92,8 @@ export interface SidebarBootstrapState {
    * letting the user run a command that can only fail.
    */
   mcuBlockedReason: string;
+  /** Installed core pack versions offered by the MCU panel. */
+  corePackVersions: SidebarOption[];
   series: SidebarOption[];
   devices: SidebarOption[];
   flashTargets: SidebarOption[];
@@ -177,7 +184,8 @@ export function defaultSidebarSelection(): SidebarSelection {
       packId: '',
       version: '',
       series: '',
-      part: ''
+      part: '',
+      corePackVersion: ''
     },
     linux: {
       toolchainFamily: defaultLinuxToolchain
@@ -268,7 +276,10 @@ export function sanitizeSidebarSelection(
       version,
       ...(sourcePack === undefined ? {} : { sourcePack }),
       series,
-      part: packId === '' ? '' : partFor(vendorProfiles, vendor, series, mcu?.part)
+      part: packId === '' ? '' : partFor(vendorProfiles, vendor, series, mcu?.part),
+      corePackVersion: typeof mcu?.corePackVersion === 'string'
+        ? mcu.corePackVersion.trim()
+        : fallback.mcu.corePackVersion
     },
     linux: {
       toolchainFamily: family
@@ -519,7 +530,9 @@ export function nextMcuSelection(
       version,
       ...(packId === '' || owner === undefined ? {} : { sourcePack: owner }),
       series,
-      part
+      part,
+      // The core pack is independent of the device Pack, so it survives here.
+      corePackVersion: selection.mcu.corePackVersion
     }
   };
 }
@@ -590,7 +603,8 @@ export function buildSidebarState(
   pendingPackId = selection.mcu.packId,
   vendorOptions?: SidebarOption[],
   packCatalogNotice = '',
-  corePackNotice = ''
+  corePackNotice = '',
+  corePackVersions: SidebarOption[] = []
 ): SidebarBootstrapState {
   const profiles = listDeviceProfiles();
   const hits: LinuxToolchainHit[] = discoveredToolchains.map((hit) => ({
@@ -640,6 +654,7 @@ export function buildSidebarState(
     pendingPackId: resolvedPendingPackId,
     packCatalogNotice,
     corePackNotice,
+    corePackVersions,
     mcuBlockedReason,
     series: mcuOptions.series,
     devices: mcuOptions.devices,
@@ -667,9 +682,17 @@ export function buildSidebarState(
     })),
     selection: {
       ...selection,
-      // The dropdown renders this value; a series the option list cannot match
-      // (a legacy pack-text id) would silently show the first entry instead.
-      mcu: { ...selection.mcu, series: safeSelection.mcu.series }
+      // The dropdown renders these values; a series or core pack version the
+      // option list cannot match would silently show the first entry instead.
+      mcu: {
+        ...selection.mcu,
+        series: safeSelection.mcu.series,
+        corePackVersion: corePackVersions.some((option) =>
+          option.value === selection.mcu.corePackVersion
+        )
+          ? selection.mcu.corePackVersion
+          : corePackVersions[0]?.value ?? ''
+      }
     }
   };
 }

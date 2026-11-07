@@ -5,12 +5,15 @@ import { cmakeString, projectPath } from '../shared/cmakeText';
 import { preserveUserCodeSection, userCodeSection } from '../shared/userCodeSection';
 
 /**
- * Absolute include directories outside the project, e.g. the ARM CMSIS core pack
- * installed in extension storage. They are emitted verbatim because a relative
- * path would be resolved against the workspace root.
+ * Extra include directories beyond the scanned ones.
+ *
+ * `paths` are absolute directories outside the project and are emitted verbatim;
+ * `projectPaths` are relative to the project root and go through
+ * `MCU_PROJECT_ROOT` like the scanned include directories do.
  */
-export interface ExternalIncludeDirs {
+export interface AdditionalIncludeDirs {
   paths?: string[];
+  projectPaths?: string[];
 }
 
 export function generateCMakeLists(
@@ -18,9 +21,16 @@ export function generateCMakeLists(
   project: ProjectDescription,
   profile: DeviceProfile,
   existingContent?: string,
-  externalDirs: ExternalIncludeDirs = {}
+  externalDirs: AdditionalIncludeDirs = {}
 ): string {
-  const sources = project.sources.filter((source) => !/\.s$/i.test(source));
+  const generatedStartup = (profile.gnuStartupFileName.split('/').pop() ?? '').toLowerCase();
+  // A legacy startup source is replaced by the generated GNU startup, but other
+  // hand-written assembly must stay in the build instead of being dropped.
+  const sources = project.sources.filter((source) => {
+    const name = (source.split('/').pop() ?? '').toLowerCase();
+    if (name === generatedStartup) return false;
+    return !(name.startsWith('startup') && /\.s$/.test(name));
+  });
   sources.push(profile.gnuStartupFileName);
   for (const runtimeSourceName of runtimeSourceNames) {
     const runtimeBasename = runtimeSourceName.split('/').pop()?.toLowerCase();
@@ -40,12 +50,19 @@ export function generateCMakeLists(
   const projectIncludes = project.includeDirs.length === 0
     ? [`    ${projectPath('MCU_PROJECT_ROOT', '.')}`]
     : project.includeDirs.map((directory) => `    ${projectPath('MCU_PROJECT_ROOT', directory)}`);
-  // The CMSIS core pack lives in extension storage, outside the workspace, so it
-  // is quoted verbatim instead of being resolved against MCU_PROJECT_ROOT.
+  // An absolute directory outside the project cannot be resolved against
+  // MCU_PROJECT_ROOT, so it is quoted verbatim.
   const externalIncludes = (externalDirs.paths ?? [])
     .filter((path) => path.length > 0)
     .map((path) => `    "${cmakeString(path)}"`);
-  const includeBlock = [...projectIncludes, ...externalIncludes].join('\n');
+  const projectExtraIncludes = (externalDirs.projectPaths ?? [])
+    .filter((path) => path.length > 0)
+    .map((path) => `    ${projectPath('MCU_PROJECT_ROOT', path)}`);
+  const includeBlock = [
+    ...projectIncludes,
+    ...projectExtraIncludes,
+    ...externalIncludes
+  ].join('\n');
 
   const generated = `cmake_minimum_required(VERSION 3.22)
 

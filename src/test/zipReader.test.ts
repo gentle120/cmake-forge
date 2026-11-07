@@ -104,3 +104,8 @@ test('reads only the entries a selector asks for', () => {
     'Vendor.pdsc'
   ]);
 });
+
+test('reports a truncated archive instead of a range error', () => {
+  assert.throws(() => readZipEntries(Buffer.alloc(0)), /end of central directory record not found/);
+  assert.throws(() => readZipEntries(Buffer.from('PK')), /end of central directory record not found/);
+});

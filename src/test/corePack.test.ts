@@ -4,12 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import {
+  copyCoreHeaders,
   coreIncludePrefix,
+  coreProjectIncludeDir,
   describeCorePack,
+  findInstalledCorePack,
   installCorePack,
   installedCoreIncludeDir,
   isCorePackSourceEntry,
   listInstalledCorePacks,
+  planCoreHeaderCopy,
   readCorePack
 } from '../packs/corePack';
 import { buildZip } from './support/zipFixture';
@@ -152,4 +156,69 @@ test('a stale include directory is not reported as installed', () =>
 
     assert.equal(await installedCoreIncludeDir(root), undefined);
     assert.equal((await describeCorePack(root)).installed, false);
+  }));
+
+test('refuses archive entries that would escape the install directory', () => {
+  assert.equal(isCorePackSourceEntry('CMSIS/Core/Include/../escape.h'), false);
+  assert.equal(isCorePackSourceEntry('/CMSIS/Core/Include/core_cm4.h'), false);
+  assert.equal(isCorePackSourceEntry('C:/CMSIS/Core/Include/core_cm4.h'), false);
+
+  const escaped = buildZip([
+    { name: 'ARM.CMSIS.pdsc', data: corePdsc },
+    { name: 'CMSIS/Core/Include/../../evil.h', data: 'evil' },
+    { name: '/abs/evil.h', data: 'evil' }
+  ]);
+  assert.equal(readCorePack(escaped, 'ARM.CMSIS.6.4.0.pack'), undefined);
+});
+
+test('sanitises dot-only identity fields before deleting the install directory', () =>
+  withStorage(async (root) => {
+    const traversal = buildZip([
+      { name: 'ARM.CMSIS.pdsc', data: '<package><vendor>..</vendor><name>..</name></package>' },
+      { name: `${coreIncludePrefix}/core_cm4.h`, data: '/* cm4 */' }
+    ]);
+
+    const result = await installCorePack(traversal, 'ARM.CMSIS.6.4.0.pack', root);
+
+    assert.equal(result.record.includeDir.startsWith('cores/'), true);
+    assert.equal(result.record.includeDir.includes('..'), false);
+    // The storage root itself must still exist after the install rewrite.
+    assert.equal((await stat(root)).isDirectory(), true);
+    assert.equal((await stat(join(root, 'cores'))).isDirectory(), true);
+  }));
+
+test('resolves the requested installed core pack version only when it exists', () =>
+  withStorage(async (root) => {
+    await installCorePack(corePackBuffer('6.3.0'), 'ARM.CMSIS.6.3.0.pack', root);
+    await installCorePack(corePackBuffer('6.4.0'), 'ARM.CMSIS.6.4.0.pack', root);
+
+    assert.equal((await findInstalledCorePack(root))?.record.version, '6.4.0');
+    assert.equal((await findInstalledCorePack(root, '6.3.0'))?.record.version, '6.3.0');
+    assert.equal(await findInstalledCorePack(root, '9.9.9'), undefined);
+    assert.deepEqual((await describeCorePack(root)).versions, ['6.4.0', '6.3.0']);
+
+    await rm(join(root, 'cores/ARM.CMSIS.6.4.0'), { recursive: true, force: true });
+    assert.equal(await findInstalledCorePack(root, '6.4.0'), undefined);
+    assert.equal((await findInstalledCorePack(root))?.record.version, '6.3.0');
+  }));
+
+test('plans and copies core headers into the generated project', () =>
+  withStorage(async (root) => {
+    await installCorePack(corePackBuffer(), 'ARM.CMSIS.6.4.0.pack', root);
+    const pack = await findInstalledCorePack(root);
+    assert.ok(pack);
+
+    const projectRoot = join(root, 'project');
+    const plan = await planCoreHeaderCopy(pack.includeDir, projectRoot);
+    assert.equal(coreProjectIncludeDir, 'CMSIS/Include');
+    assert.deepEqual(plan.map((entry) => entry.relative), [
+      `${coreProjectIncludeDir}/cmsis_version.h`,
+      `${coreProjectIncludeDir}/core_cm3.h`,
+      `${coreProjectIncludeDir}/core_cm4.h`
+    ]);
+    assert.equal(plan.every((entry) => entry.target.startsWith(projectRoot)), true);
+
+    await copyCoreHeaders(plan);
+    const copied = await readFile(join(projectRoot, 'CMSIS', 'Include', 'core_cm4.h'), 'utf8');
+    assert.ok(copied.includes('cm4'));
   }));

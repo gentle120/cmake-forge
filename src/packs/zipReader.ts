@@ -71,6 +71,11 @@ export function readZipEntries(
 }
 
 function findEndOfCentralDirectory(buffer: Buffer): number {
+  // readUInt32LE below would throw a RangeError on a negative offset, so a
+  // truncated or empty file must be reported as an invalid archive instead.
+  if (buffer.length < EOCD_MIN_LENGTH) {
+    throw new Error('Invalid ZIP archive: end of central directory record not found');
+  }
   const lowest = Math.max(0, buffer.length - EOCD_MAX_SCAN);
   for (let offset = buffer.length - EOCD_MIN_LENGTH; offset >= lowest; offset -= 1) {
     if (buffer.readUInt32LE(offset) === EOCD_SIGNATURE) {

@@ -211,7 +211,7 @@ test('MCU selection follows vendor, series, Pack, version, and device order', ()
     series: [{ value: 'F1x', label: 'F1x' }]
   }));
   const selects = harness.element('target-host').querySelectorAll('select');
-  assert.equal(selects.length, 5);
+  assert.equal(selects.length, 6);
   const [vendor, series, pack, version, device] = selects;
   assert.equal(vendor.value, 'STM');
   assert.equal(series.value, 'F1x');
@@ -568,4 +568,37 @@ test('packages the reviewed sidebar assets into the compiled extension output', 
   const compiledRoot = join(__dirname, '..', 'sidebar', 'webview');
   assert.equal(readFileSync(join(compiledRoot, 'main.js'), 'utf8'), scriptSource);
   assert.equal(readFileSync(join(compiledRoot, 'main.css'), 'utf8'), stylesheet);
+});
+
+test('a failed run clears the previous generated file list', () => {
+  const harness = startSidebar(baseState());
+  const generate = harness.element('generate-project');
+  generate.dispatch('click', { target: generate });
+  harness.send({
+    type: 'operationFinished',
+    result: { ok: true, message: '已生成', files: ['CMakeLists.txt'] }
+  });
+  assert.equal(harness.element('result-region').hidden, false);
+  assert.equal(harness.element('generated-files').querySelectorAll('li').length, 1);
+
+  generate.dispatch('click', { target: generate });
+  harness.send({
+    type: 'operationFinished',
+    result: { ok: false, message: '生成失败', files: [] }
+  });
+  assert.equal(harness.element('result-region').hidden, true);
+  assert.equal(harness.element('generated-files').querySelectorAll('li').length, 0);
+});
+
+test('changed option labels redraw an already rendered dropdown', () => {
+  const harness = startSidebar(baseState());
+
+  harness.send({
+    type: 'state',
+    state: baseState({ packs: [{ value: 'builtin:STM', label: '内置（已更新）' }] })
+  });
+
+  const refreshed = harness.element('target-host').querySelectorAll('select')[2];
+  assert.equal(refreshed.querySelectorAll('option').length, 1);
+  assert.equal(refreshed.querySelectorAll('option')[0].textContent, '内置（已更新）');
 });

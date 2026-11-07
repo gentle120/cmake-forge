@@ -16,7 +16,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - `registerDeviceProfiles()` 允许运行时追加档案；`unregisterDeviceProfilesByPack()` 按来源移除并恢复前一个来源，无前序来源时移除该型号；`listDeviceProfiles()/getDeviceProfile()` 签名稳定，返回防御性拷贝。
 - 注册表无内置芯片数据：所有 DeviceProfile 由 Pack 导入注入；无任何 Pack 时注册表与厂商列表为空，持久化的 `builtin:` 选择落空为空选择。
 - 厂商必须先在 `vendorRegistry` 注册（id 唯一，`getVendorMetadata` 未知 id 抛错）。
-- 命令 ID：`cmakeEmbedded.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/importPack/installPackOnline/removePack`；`package.json` 贡献的命令必须与 `extension.ts` 注册的命令一一对应。
+- 命令 ID：`cmakeEmbedded.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/importPack/installPackOnline/removePack/installCorePack`；`package.json` 贡献的命令必须与 `extension.ts` 注册的命令一一对应。
 - 工作区可包含多个工程；扫描、生成、烧录与调试都以当前选中的工程根目录为边界，不跨工程合并源文件。目标工程按工作区持久化；发现结果只有一个时自动选择，多个时保留有效选择或等待用户选择。空工作区根目录仍作为可扫描目标保留；扫描返回零个源文件、头文件目录和宏，并明确提示没有 C/C++ 或汇编源文件。
 - 插件不提供构建命令、构建执行器或 ARM GNU 路径设置；配置、编译与调试分别由 CMake Tools 与 Cortex-Debug 拥有。生成产物只写可移植命令名 `arm-none-eabi-gcc/g++/objcopy/size`，不含机器绝对路径。
 - 生成文件落盘前必须经过覆盖确认（`shared/generatedFiles.ts`）。
@@ -35,7 +35,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 
 - `architecture` 字段仅 `'arm'`；非 ARM Dcore 的 Pack 设备跳过并报告，不生成半成品档案。
 - PDSC `<processor Dcore>` 在 family/subFamily/device 任一层均有效，device 层缺失时继承上层；`CM0` 缩写与 `Cortex-M0`、`Cortex-M0+` 等全名拼写等价（`+` 归一为 `plus`）。
-- ARM CMSIS 内核包与器件 Pack 分开管理：内核包只取 `CMSIS/Core/Include/**/*.h` 与 PDSC，安装到扩展存储，其身份由 PDSC 的 vendor/name 决定；器件 Pack 的 `<devices>` 解析不得因内核包缺失或存在而改变。厂商器件头文件 `#include core_cm*.h`，而器件 DFP 不含这些文件，因此生成的 MCU 工程 `target_include_directories` 必须同时含工程内 include 目录与内核包的绝对 include 目录；内核包未安装时仍生成工程但提示缺失，不得静默产出一个必然编译失败的工程。
+- ARM CMSIS 内核包与器件 Pack 分开管理：内核包只取 `CMSIS/Core/Include/**/*.h` 与 PDSC，安装到扩展存储，其身份由 PDSC 的 vendor/name 决定；器件 Pack 的 `<devices>` 解析不得因内核包缺失或存在而改变。厂商器件头文件 `#include core_cm*.h`，而器件 DFP 不含这些文件，因此生成 MCU 工程时把已安装内核包的全部头文件按字节复制到工程内 `CMSIS/Include`，`target_include_directories` 只用工程内相对路径，不得写扩展存储或任何机器绝对路径；复制出的头文件计入覆盖确认。内核包未安装（或所选版本的头文件已缺失）时仍生成工程但提示缺失，不得静默产出一个必然编译失败的工程。
 - `Dvendor` 的数字注册号后缀（如 `Sinomcu:985`、`ARM:82`）既不进入厂商显示名也不进入厂商 id；同一厂商的后缀变体解析为同一身份。
 - 烧录后端 `openocd|jlink|pyocd` 与探针兼容矩阵见 `src/flash/backendProfiles.ts`；pyocd 后端不支持 J-Link 探针（硬件限制）。
 - pyOCD 的 pack 参数必须是真实存在的 `.pack` 文件；导入设备没有归档时省略 `--pack`，不得生成指向虚拟路径的配置。
@@ -46,7 +46,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - 大包（≥2 MB 且服务端支持 `Range`）按 1 MB 分段并发下载（最多 8 路），每段独立重试、独立失败；小包与不支持 Range 的主机仍走单次请求（`200` 响应视为完整归档，不得当作分片）。重组后必须校验总长度与分段齐全，缺段即失败。
 - 侧栏 MCU 选择为 vendor → series → pack → version → part：series 可在激活 Pack 前选择，来源为精选厂商系列目录（`src/devices/seriesCatalog.ts`，含各系列的 DFP 名与型号前缀）与本地包系列；选定系列后自动解析并激活本地对应 Pack（imported 按档案系列/型号前缀匹配，installed 按 DFP 名匹配），无匹配时提示确定性安装途径；part 按目录型号前缀或系列过滤；不保留跨 vendor 残留。
 - 系列有两套命名：侧栏持久化的精选 id（`F1x`）与 PDSC 的 `Dfamily` 文本（`STM32F1 Series`）。匹配必须接受两者之一（同系列或型号前缀命中），选中系列不得因激活 Pack 而回弹到 Pack 自己的文本；下拉选项按精选 id 去重，同一系列不得出现两行；旧版本持久化的 Pack 文本 id 在渲染时归一为精选 id。切换系列后若当前 Pack 不含该系列，part 为空并给出「需要哪个 DFP」的提示，而不是把系列改回原值。
-- 生成的工程是否写入内核包 include 目录由侧栏「生成内核包 include」开关决定（持久化，默认开）：关闭时不写该目录、也不再提示内核包缺失，用于用户自行提供 core 头文件的场景；该开关只影响生成，不改变内核包的安装状态。
+- 生成的工程是否复制内核包头文件由侧栏「生成内核包 include」开关决定（持久化，默认开）：开启时把所选已安装版本复制进工程 `CMSIS/Include` 并写入该相对 include；关闭时不复制、不写 include、也不再提示内核包缺失，用于用户自行提供 core 头文件的场景。目标配置面板在开关开启且已安装内核包时提供版本下拉，空值表示最新已安装版本，选择随选择持久化且不受切换厂商/器件 Pack 影响；该开关与版本选择只影响生成，不改变内核包的安装状态。
 - 系列先于 Pack 选择，因此 Pack 下拉只列出服务所选系列的 Pack，不得让用户选中一个必然列不出型号的 Pack：imported 按已解析档案的系列/型号前缀判定，installed/downloadable 按目录 DFP 名判定（裸名与带厂商前缀名等价，如 `STM32F1xx_DFP` / `Keil.STM32F1xx_DFP`）；目录外厂商没有 DFP 名可判定时不隐藏 Pack。选中 Pack 的版本列表与持久化选择都必须在过滤后的集合内，不服务于该系列的 Pack 不作为有效选择保留。
 - 没有服务所选系列的 Pack（或没有型号）时 MCU 无法生成：`mcuBlockedReason` 随状态下发，侧栏据此禁用「生成工程」「仅 flash.py」「仅 Debug」并显示同一句原因（点明缺少哪个 DFP 与获取方式），安装 Pack 的入口保持可用；侧栏生成与命令面板生成都必须给出同一提示，不得抛出底层 `Unsupported MCU` 之类的泛化错误。该提示与空型号列表共用一个来源，不重复显示。
 - Pack 目录条目按身份区分：`installed`、`imported`、`downloadable`；同一 packId+version 只展示一个条目，已安装/已导入优先于可下载。
@@ -68,6 +68,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - 生成器绝不执行外部工具；flash.py 由用户显式运行。
 - zip 读取器遇 Zip64/加密条目抛显式错误，不部分解压。
 - 校验失败的 Pack 设备进入 skipped 并给出原因，不中断整包导入。
+- 内核包安装只写 `CMSIS/Core/Include/**/*.h`，拒绝绝对路径与含 `..` 的归档条目；安装目录名把只含点的身份字段归一为 `_`，安装前的删除只作用于该版本目录。
 
 ## Verification Matrix
 

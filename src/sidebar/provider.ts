@@ -10,6 +10,7 @@ import type { DevicePackOption } from '../devices/deviceSelection';
 import { comparePackVersions } from '../shared/packVersion';
 import { getVendorMetadata, hasVendor } from '../devices/vendorRegistry';
 import { canonicalSeriesId, findCatalogSeries, seriesServesProfile } from '../devices/seriesCatalog';
+import type { CorePackStatus } from '../packs/corePack';
 import { getFlashProbeProfile } from '../flash/probeProfiles';
 import { getFlashTargetProfile } from '../flash/targets/targetProfiles';
 import {
@@ -74,13 +75,16 @@ export interface SidebarProviderDependencies {
     packId: string,
     version: string
   ): Promise<{ vendorId: string; packId: string; version: string; sourcePack: string; message: string }>;
-  /** Sidebar copy describing the installed ARM CMSIS core pack. */
-  describeCorePack?(): Promise<string>;
+  /** Installed ARM CMSIS core pack, for the sidebar copy and its dropdown. */
+  describeCorePack?(): Promise<CorePackStatus>;
   /**
-   * External include directories for a generated MCU project. `includeCorePack`
-   * is false when the user turned the core-pack switch off.
+   * The core pack a generation must copy into the project. `includeCorePack` is
+   * false when the user turned the switch off; `version` empty means newest.
    */
-  coreIncludeDirs?(includeCorePack: boolean): Promise<string[]>;
+  corePackForGeneration?(
+    includeCorePack: boolean,
+    version: string
+  ): Promise<{ includeDir: string; version: string } | undefined>;
 }
 
 function workspaceName(): string {
@@ -119,6 +123,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private pendingPackId: string;
   private packCatalogNotice = '';
   private corePackNotice = '';
+  private corePackVersions: SidebarOption[] = [];
   private packCatalogRequest = 0;
   private lastBusyHintAt = 0;
   private readonly viewDisposables: vscode.Disposable[] = [];
@@ -180,9 +185,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       return;
     }
     try {
-      this.corePackNotice = await this.dependencies.describeCorePack();
+      const status = await this.dependencies.describeCorePack();
+      this.corePackNotice = status.notice;
+      this.corePackVersions = status.versions.map((version) => ({
+        value: version,
+        label: version
+      }));
     } catch (error) {
       this.corePackNotice = error instanceof Error ? error.message : String(error);
+      this.corePackVersions = [];
     }
   }
 
@@ -235,7 +246,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.pendingPackId,
       this.vendorOptions,
       this.packCatalogNotice,
-      this.corePackNotice
+      this.corePackNotice,
+      this.corePackVersions
     );
   }
 
@@ -747,6 +759,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       return;
     }
     if (message.type === 'ready') {
+      // The core-pack status drives the version dropdown, so it must be loaded
+      // with the first state instead of waiting for an unrelated refresh.
+      void this.refreshCorePackNotice().then(() => this.postState());
       void this.discoverProjects().catch((error) => {
         const text = error instanceof Error ? error.message : String(error);
         this.post({ type: 'notification', level: 'error', message: text });
@@ -903,8 +918,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           : undefined;
         const project = await generateMcuWorkflow(this.workflowHost(), profile, {
           flash,
-          externalIncludeDirs: this.dependencies.coreIncludeDirs
-            ? await this.dependencies.coreIncludeDirs(this.selectionValue.corePackInclude !== false)
+          corePack: this.dependencies.corePackForGeneration
+            ? await this.dependencies.corePackForGeneration(
+                this.selectionValue.corePackInclude !== false,
+                this.selectionValue.mcu.corePackVersion
+              )
             : undefined
         });
         if (!project.ok || !this.selectionValue.debugEnabled || !flash) {
@@ -958,6 +976,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           files: [...new Set(debug.files)]
         };
       });
+      return;
     }
   }
 

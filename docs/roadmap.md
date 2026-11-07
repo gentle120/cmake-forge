@@ -9,9 +9,7 @@ This file is a compact relay ledger, not a history log. Stable facts belong in `
 
 ## Current Batch
 
-- Objective: 让「芯片支持包 / Pack」只列出服务于所选系列的 Pack；没有可用 Pack 时 MCU 无法生成，需明确提示缺少哪个器件包。
-- Scope: `src/sidebar/{state.ts,provider.ts,webview/main.js}`、`src/test/**`、`docs/contracts.md`、`README.md`、`CHANGELOG.md`。
-- Acceptance criteria: 系列切换后 Pack 下拉只含服务该系列的 Pack（imported 按档案型号前缀判定，installed/downloadable 按目录 DFP 名判定）；不服务的 Pack 不再被选中或出现在列表中；没有可用 Pack 时「生成工程」「仅 flash.py」「仅 Debug」禁用，侧栏提示需要哪个 DFP；命令面板与侧栏生成路径都给出同一提示而不是泛化错误；`tsc --noUnusedLocals --noUnusedParameters` 无告警；`npm test` 全绿。
+- Objective: None scheduled.
 - Status: `idle`
 
 ## Next Batch

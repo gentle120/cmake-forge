@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -138,5 +138,40 @@ test('native workflow writes a CMake project for the host C/C++ toolchain', asyn
     assert.ok(result.files.includes('.native-cmake.json'));
     assert.equal(result.files.some((file) => file.endsWith('.ld')), false);
     assert.equal(result.files.some((file) => /\.S$/i.test(file)), false);
+  });
+});
+
+test('MCU workflow copies the installed core headers into the project', async () => {
+  await withWorkspace(async (root) => {
+    const includeDir = join(root, 'core-storage', 'CMSIS', 'Core', 'Include');
+    await mkdir(includeDir, { recursive: true });
+    await writeFile(join(includeDir, 'core_cm3.h'), '/* core */');
+    await writeFile(join(includeDir, 'cmsis_version.h'), '#define __CM3 1');
+    const confirmed: string[] = [];
+    const host = createHost(root, async (files) => {
+      confirmed.push(...files);
+      return true;
+    });
+
+    const first = await generateMcuWorkflow(host, fixtureDeviceProfile(), {
+      corePack: { includeDir, version: '6.4.0' }
+    });
+    assert.equal(first.ok, true);
+    assert.equal(
+      await readFile(join(root, 'CMSIS', 'Include', 'core_cm3.h'), 'utf8'),
+      '/* core */'
+    );
+    assert.match(await readFile(join(root, 'CMakeLists.txt'), 'utf8'), /CMSIS\/Include/);
+    assert.match(first.message, /6\.4\.0/);
+
+    // The copies take part in the overwrite check, not just the generated files.
+    const second = await generateMcuWorkflow(host, fixtureDeviceProfile(), {
+      corePack: { includeDir, version: '6.4.0' }
+    });
+    assert.equal(second.ok, true);
+    assert.equal(
+      confirmed.some((file) => file.replace(/\\/g, '/').endsWith('CMSIS/Include/core_cm3.h')),
+      true
+    );
   });
 });

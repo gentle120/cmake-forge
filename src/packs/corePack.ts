@@ -8,7 +8,7 @@
  * include directory is added to every generated project.
  */
 
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { comparePackVersions } from '../shared/packVersion';
 import { packNameFromFileName } from './packIdentity';
@@ -17,6 +17,15 @@ import { readZipEntries } from './zipReader';
 
 /** CMSIS Core headers live in this directory inside the pack. */
 export const coreIncludePrefix = 'CMSIS/Core/Include';
+
+/**
+ * Project-relative directory generated projects receive the core headers in.
+ *
+ * The headers are copied into the project instead of being referenced in
+ * extension storage: a project that points at an absolute install path does not
+ * build anywhere else, and the copy is the same 3 MB of header files.
+ */
+export const coreProjectIncludeDir = 'CMSIS/Include';
 
 export interface CorePackRecord {
   /** PDSC vendor name, e.g. `ARM`. */
@@ -40,8 +49,22 @@ interface CorePackManifest {
 const manifestRelativePath = 'cores/index.json';
 const emptyManifest: CorePackManifest = { version: 1, packs: [] };
 
+/** True for a relative archive path that cannot escape the directory it is written to. */
+function isSafeEntryName(name: string): boolean {
+  if (name.length === 0 || name.includes('\0')) {
+    return false;
+  }
+  if (name.startsWith('/') || name.startsWith('\\') || /^[A-Za-z]:/.test(name)) {
+    return false;
+  }
+  return !name.split(/[\\/]/).some((segment) => segment === '..');
+}
+
 /** Selects the archive entries a core pack is made of: PDSC plus Core headers. */
 export function isCorePackSourceEntry(name: string): boolean {
+  if (!isSafeEntryName(name)) {
+    return false;
+  }
   const lower = name.toLowerCase();
   return lower.endsWith('.pdsc')
     || (lower.startsWith(`${coreIncludePrefix.toLowerCase()}/`) && lower.endsWith('.h'));
@@ -83,10 +106,20 @@ export function readCorePack(buffer: Buffer, fileName: string): ParsedCorePack |
   };
 }
 
+/** Filesystem-safe path segment that can never become `.` or `..`. */
+function sanitizeSegment(value: string): string {
+  const cleaned = value.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+$/, '_');
+  return cleaned.length > 0 ? cleaned : '_';
+}
+
 /** Filesystem-safe directory name for one installed core pack version. */
 function corePackDirectory(identity: PackIdentity): string {
-  const raw = `${identity.vendorName}.${identity.name}.${identity.version}`;
-  return `cores/${raw.replace(/[^A-Za-z0-9._-]/g, '_')}`;
+  // Dot-only identity fields must never turn the install directory into `.` or
+  // `..`: installing deletes that directory before writing the new headers.
+  const vendor = sanitizeSegment(identity.vendorName);
+  const name = sanitizeSegment(identity.name);
+  const version = sanitizeSegment(identity.version);
+  return `cores/${vendor}.${name}.${version}`;
 }
 
 async function readManifest(storageRoot: string): Promise<CorePackManifest> {
@@ -113,7 +146,106 @@ async function readManifest(storageRoot: string): Promise<CorePackManifest> {
 async function writeManifest(storageRoot: string, manifest: CorePackManifest): Promise<void> {
   const path = join(storageRoot, manifestRelativePath);
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  // Write-then-rename keeps a crash from leaving a truncated manifest, which
+  // would make every installed core pack disappear on the next read.
+  const temporary = `${path}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  await rename(temporary, path);
+}
+
+export interface CorePackInstall {
+  record: CorePackRecord;
+  /** Absolute include directory holding `core_cm*.h` and the rest. */
+  includeDir: string;
+}
+
+/** True when an include directory still holds the CMSIS core headers. */
+async function hasCoreHeaders(directory: string): Promise<boolean> {
+  try {
+    const names = await readdir(directory);
+    return names.some((name) => /^core_cm.*\.h$/i.test(name));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * One installed core pack by version, or the newest installed one when version
+ * is empty. Undefined when that version is not installed or its headers are
+ * gone, so a caller never receives a path that does not resolve.
+ */
+export async function findInstalledCorePack(
+  storageRoot: string,
+  version = ''
+): Promise<CorePackInstall | undefined> {
+  const wanted = version.trim();
+  const packs = (await listInstalledCorePacks(storageRoot))
+    .filter((pack) => wanted === '' || pack.version === wanted);
+  for (const pack of packs) {
+    const includeDir = join(storageRoot, pack.includeDir);
+    if (await hasCoreHeaders(includeDir)) {
+      return { record: pack, includeDir };
+    }
+  }
+  return undefined;
+}
+
+/** A header file a generation copies into the project. */
+export interface CoreHeaderCopy {
+  /** Absolute path inside the installed core pack. */
+  source: string;
+  /** Absolute path inside the generated project. */
+  target: string;
+  /** Path relative to the project root, forward slashes. */
+  relative: string;
+}
+
+/**
+ * Files a generation copies into the project: every header of the installed core
+ * pack, mirrored under `CMSIS/Include` (one flat include directory, so generated
+ * projects do not carry the pack's internal `CMSIS/Core/Include` nesting).
+ *
+ * The plan is computed before the overwrite check so an existing project's
+ * headers take part in it, and the copy is byte-for-byte: a CMSIS header carries
+ * its own encoding and must not be rewritten as a UTF-8 string.
+ */
+export async function planCoreHeaderCopy(
+  includeDir: string,
+  projectRoot: string,
+  targetDir = coreProjectIncludeDir
+): Promise<CoreHeaderCopy[]> {
+  const plan: CoreHeaderCopy[] = [];
+  const walk = async (directory: string, prefix: string): Promise<void> => {
+    let dirents;
+    try {
+      dirents = await readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const dirent of dirents) {
+      const source = join(directory, dirent.name);
+      const relative = prefix === '' ? dirent.name : `${prefix}/${dirent.name}`;
+      if (dirent.isDirectory()) {
+        await walk(source, relative);
+      } else if (dirent.isFile() && relative.toLowerCase().endsWith('.h')) {
+        plan.push({
+          source,
+          target: join(projectRoot, targetDir, relative),
+          relative: `${targetDir}/${relative}`
+        });
+      }
+    }
+  };
+  await walk(includeDir, '');
+  return plan.sort((left, right) => left.relative.localeCompare(right.relative));
+}
+
+/** Writes a copy plan into the project. */
+export async function copyCoreHeaders(plan: CoreHeaderCopy[]): Promise<void> {
+  for (const entry of plan) {
+    await mkdir(dirname(entry.target), { recursive: true });
+    await copyFile(entry.source, entry.target);
+  }
 }
 
 export interface InstallCorePackResult {
@@ -142,7 +274,9 @@ export async function installCorePack(
   const absoluteDirectory = join(storageRoot, directory);
   const manifest = await readManifest(storageRoot);
   const replaced = manifest.packs.some(
-    (pack) => pack.name === parsed.identity.name && pack.version !== parsed.identity.version
+    (pack) => pack.vendor === parsed.identity.vendorName
+      && pack.name === parsed.identity.name
+      && pack.version !== parsed.identity.version
   );
 
   // A reinstall replaces the previous copy of the same version rather than
@@ -165,7 +299,9 @@ export async function installCorePack(
   };
   manifest.packs = [
     ...manifest.packs.filter(
-      (pack) => !(pack.name === record.name && pack.version === record.version)
+      (pack) => !(pack.vendor === record.vendor
+        && pack.name === record.name
+        && pack.version === record.version)
     ),
     record
   ];
@@ -187,37 +323,40 @@ export async function listInstalledCorePacks(storageRoot: string): Promise<CoreP
  * storage directory cannot make every generated project reference nothing.
  */
 export async function installedCoreIncludeDir(storageRoot: string): Promise<string | undefined> {
-  for (const pack of await listInstalledCorePacks(storageRoot)) {
-    const absolute = join(storageRoot, pack.includeDir);
-    try {
-      const names = await readdir(absolute);
-      if (names.some((name) => /^core_cm.*\.h$/i.test(name))) {
-        return absolute;
-      }
-    } catch {
-      // Missing directory: fall through to the next installed pack.
-    }
-  }
-  return undefined;
+  return (await findInstalledCorePack(storageRoot))?.includeDir;
+}
+
+export interface CorePackStatus {
+  installed: boolean;
+  version: string;
+  /** Every installed version, newest first; the sidebar offers them as choices. */
+  versions: string[];
+  notice: string;
 }
 
 /** Sidebar copy describing the installed core pack, or the missing one. */
-export async function describeCorePack(
-  storageRoot: string
-): Promise<{ installed: boolean; version: string; notice: string }> {
+export async function describeCorePack(storageRoot: string): Promise<CorePackStatus> {
   const packs = await listInstalledCorePacks(storageRoot);
-  const includeDir = await installedCoreIncludeDir(storageRoot);
-  const current = packs.find((pack) => includeDir !== undefined && join(storageRoot, pack.includeDir) === includeDir);
+  const usable: CorePackRecord[] = [];
+  for (const pack of packs) {
+    if (await hasCoreHeaders(join(storageRoot, pack.includeDir))) {
+      usable.push(pack);
+    }
+  }
+  const versions = usable.map((pack) => pack.version);
+  const current = usable[0];
   if (!current) {
     return {
       installed: false,
       version: '',
+      versions,
       notice: '未安装 ARM CMSIS 内核包：器件头文件 #include core_cm*.h 无法编译。'
     };
   }
   return {
     installed: true,
     version: current.version,
+    versions,
     notice: `已安装 ARM CMSIS 内核包 ${current.version}（${current.files} 个头文件）。`
   };
 }

@@ -205,3 +205,39 @@ test('upgrades the previous empty user code section to active CMake blocks', () 
   assert.match(regenerated, /target_compile_definitions\(\$\{CMAKE_PROJECT_NAME\} PRIVATE/);
   assert.match(regenerated, /target_link_libraries\(\$\{CMAKE_PROJECT_NAME\} PRIVATE/);
 });
+
+test('adds a project-relative include directory for copied CMSIS headers', () => {
+  const project: ProjectDescription = {
+    sources: ['Core/Src/main.c'],
+    includeDirs: ['Core/Inc'],
+    defines: []
+  };
+
+  const cmake = generateCMakeLists('firmware', project, gd32F103Profile(), undefined, {
+    projectPaths: ['CMSIS/Core/Include']
+  });
+
+  assert.match(cmake, /"\$\{MCU_PROJECT_ROOT\}\/CMSIS\/Core\/Include"/);
+  // A copied header directory is project-relative, never an absolute path.
+  assert.doesNotMatch(cmake, /target_include_directories\([\s\S]*[A-Z]:\//);
+});
+
+test('keeps hand-written assembly and drops only legacy startup sources', () => {
+  const project: ProjectDescription = {
+    sources: [
+      'Core/Src/main.c',
+      'Core/Src/dsp_filter.S',
+      'Core/Src/startup_gd32f10x_md.s',
+      'startup_gd32f10x_md.S'
+    ],
+    includeDirs: [],
+    defines: []
+  };
+
+  const cmake = generateCMakeLists('firmware', project, gd32F103Profile());
+
+  assert.match(cmake, /MCU_PROJECT_ROOT.*Core\/Src\/dsp_filter\.S/s);
+  assert.doesNotMatch(cmake, /startup_gd32f10x_md\.s/);
+  // The generated startup is listed exactly once even though the project had it.
+  assert.equal((cmake.match(/startup_gd32f10x_md\.S/g) ?? []).length, 1);
+});

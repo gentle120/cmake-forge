@@ -45,8 +45,8 @@ import {
 import { describeDownloadProgress, downloadPack } from './packs/packDownloads';
 import {
   describeCorePack,
-  installCorePack,
-  installedCoreIncludeDir
+  findInstalledCorePack,
+  installCorePack
 } from './packs/corePack';
 import {
   createTimeoutFetcher,
@@ -746,18 +746,21 @@ async function pickOnlinePack(): Promise<{
  * project is still generated — the missing headers would break the build either
  * way, and blocking generation would also block the user from fixing it.
  */
-async function mcuExternalIncludeDirs(includeCorePack = true): Promise<string[]> {
+async function mcuCorePackForGeneration(
+  includeCorePack: boolean,
+  version: string
+): Promise<{ includeDir: string; version: string } | undefined> {
   if (!includeCorePack) {
-    return [];
+    return undefined;
   }
-  const core = await installedCoreIncludeDir(packStorageRoot);
-  if (core) {
-    return [core];
+  const pack = await findInstalledCorePack(packStorageRoot, version);
+  if (pack) {
+    return { includeDir: pack.includeDir, version: pack.record.version };
   }
   void vscode.window.showWarningMessage(
     '未安装 ARM CMSIS 内核包：生成的工程缺少 core_cm*.h，编译会失败。请点侧栏「安装内核包…」或运行「CMake-Embedded: Install ARM CMSIS Core Pack」。'
   );
-  return [];
+  return undefined;
 }
 
 async function importPackOnly(): Promise<CommandResult> {
@@ -1194,13 +1197,15 @@ async function generateProject(): Promise<void> {
       executables: executablePaths()
     };
   }
-  const externalIncludeDirs = await mcuExternalIncludeDirs(
-    activeSidebar?.selection().corePackInclude !== false
+  const selection = activeSidebar?.selection();
+  const corePack = await mcuCorePackForGeneration(
+    selection?.corePackInclude !== false,
+    selection?.mcu.corePackVersion ?? ''
   );
   reportWorkflowResult(await generateMcuWorkflow(
     createWorkflowHost(root),
     profile,
-    { flash, externalIncludeDirs }
+    { flash, corePack }
   ));
 }
 
@@ -1286,8 +1291,9 @@ export function activate(context: vscode.ExtensionContext): void {
       sourcePack ? packArchiveBySource.get(sourcePack) : packFileByPart.get(part)
     ),
     discoverPackVendors: () => discoverPackVendorOptions(),
-    describeCorePack: async () => (await describeCorePack(packStorageRoot)).notice,
-    coreIncludeDirs: (includeCorePack) => mcuExternalIncludeDirs(includeCorePack),
+    describeCorePack: () => describeCorePack(packStorageRoot),
+    corePackForGeneration: (includeCorePack, version) =>
+      mcuCorePackForGeneration(includeCorePack, version),
     loadPackCatalog: (vendor) => loadDevicePackCatalog(vendor),
     activatePack: (vendor, packId, version) => activateDevicePack(vendor, packId, version)
   });

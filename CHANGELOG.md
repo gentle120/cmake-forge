@@ -2,6 +2,17 @@
 
 ## 2.1.3
 
+- Copy the installed ARM CMSIS core headers into generated MCU projects
+  (`CMSIS/Include`) instead of pointing at the extension storage, and offer
+  the installed core-pack versions in the sidebar so a project can pin one.
+- Guard the core-pack installer against archive entries that escape the install
+  directory and against `.`/`..` identity fields, and write its manifest
+  atomically.
+- Keep hand-written assembly sources in generated CMake projects; only legacy
+  `startup*` assembly is replaced by the generated GNU startup.
+- Clear the previous generated-file list when a sidebar run fails, redraw
+  dropdowns when option labels change, and reject truncated ZIP archives with a
+  clear error instead of a range error.
 - Keep the Pack dropdown consistent with the selected series: it now lists only
   Packs that serve that series (imported Packs by their parsed parts, installed and
   downloadable Packs by their DFP name), and a Pack serving another series is no

@@ -73,7 +73,7 @@
 
   function fillOptions(select, options) {
     const list = Array.isArray(options) ? options : [];
-    const signature = list.map((item) => String(item.value)).join('\u0000');
+    const signature = list.map((item) => String(item.value) + '::' + String(item.label ?? '') + '::' + String(item.description ?? '') + '::' + String(item.detail ?? '')).join('\u0000');
     if (select.dataset.signature === signature) {
       return;
     }
@@ -201,6 +201,13 @@
       version: value
     });
   });
+  const corePackField = createSelectField('CMSIS 内核包', (value) => {
+    if (!state) return;
+    saveSelection({
+      ...state.selection,
+      mcu: { ...state.selection.mcu, corePackVersion: value }
+    });
+  });
   const deviceField = createSelectField('型号', (value) => {
     if (!state) return;
     saveSelection({ ...state.selection, mcu: { ...state.selection.mcu, part: value } });
@@ -217,6 +224,7 @@
     versionField.wrapper,
     deviceField.wrapper,
     deviceSummary,
+    corePackField.wrapper,
     packCatalogBusy
   );
 
@@ -275,6 +283,18 @@
     applyOptions(versionField.select, state.versions, selection.version);
     applyOptions(seriesField.select, state.series, selection.series);
     applyOptions(deviceField.select, state.devices, selection.part);
+    // The core pack row only means something while the headers are being
+    // copied into the project and a core pack is actually installed.
+    const corePackVersions = Array.isArray(state.corePackVersions)
+      ? state.corePackVersions
+      : [];
+    corePackField.wrapper.hidden = corePackVersions.length === 0
+      || state.selection.corePackInclude === false;
+    applyOptions(
+      corePackField.select,
+      corePackVersions,
+      state.selection.mcu.corePackVersion
+    );
     const device = selectedOption(state.devices, selection.part);
     const meta = device
       ? [device.description, device.detail].filter(Boolean).join(' · ')
@@ -559,9 +579,8 @@
     const message = typeof value.message === 'string' ? value.message : '';
     showNotice(operationNotice, message, tone);
     const files = Array.isArray(value.files) ? value.files : [];
-    if (files.length > 0) {
-      showFiles(files);
-    }
+    // A failed or empty result must not leave the previous run's list visible.
+    showFiles(files);
     render();
     focusInitiator();
   }

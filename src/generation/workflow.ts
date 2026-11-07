@@ -12,6 +12,12 @@ import { generateCMakePresets } from '../generator/presetsGenerator';
 import { generateGnuStartup } from '../generator/startupGenerator';
 import { generateSyscalls, generateSysmem, runtimeSourceNames } from '../generator/runtimeGenerator';
 import { generateToolchainFile } from '../generator/toolchainGenerator';
+import {
+  copyCoreHeaders,
+  coreProjectIncludeDir,
+  planCoreHeaderCopy,
+  type CoreHeaderCopy
+} from '../packs/corePack';
 import { configureCppProperties } from '../integration/cppProperties';
 import { getWorkspaceSettings } from '../integration/workspaceSettings';
 import {
@@ -60,8 +66,12 @@ export interface WorkflowResult {
 }
 
 export interface McuWorkflowOptions {
-  /** Absolute include directories outside the workspace, such as the CMSIS core pack. */
-  externalIncludeDirs?: string[];
+  /**
+   * Installed ARM CMSIS core pack to copy into the project. Its headers land in
+   * `CMSIS/Core/Include` and become an ordinary project include directory, so
+   * the generated project builds without pointing at extension storage.
+   */
+  corePack?: { includeDir: string; version: string };
   flash?: {
     target: FlashTargetProfile;
     probe: FlashProbeProfile;
@@ -92,17 +102,20 @@ function createMcuFiles(
   profile: DeviceProfile,
   project: ProjectDescription,
   existingCMakeContent: string | undefined,
-  options: McuWorkflowOptions
+  options: McuWorkflowOptions,
+  corePlan: CoreHeaderCopy[]
 ): GeneratedFile[] {
   const cmakeDir = join(root, 'cmake');
   const hasSource = (fileName: string): boolean => {
     const sourceBasename = basename(fileName).toLowerCase();
     return project.sources.some((source) => basename(source).toLowerCase() === sourceBasename);
   };
+  // Copied headers are an ordinary project directory, so the include stays
+  // relative and the project keeps building outside this machine.
   const files: GeneratedFile[] = [{
     path: join(root, 'CMakeLists.txt'),
     content: generateCMakeLists(projectName, project, profile, existingCMakeContent, {
-      paths: options.externalIncludeDirs
+      projectPaths: corePlan.length > 0 ? [coreProjectIncludeDir] : []
     })
   }];
 
@@ -192,19 +205,26 @@ export async function generateMcuWorkflow(
   const existingCMakeContent = await exists(cmakePath)
     ? await readFile(cmakePath, 'utf8')
     : undefined;
+  // The headers are copied before the overwrite check below, so existing
+  // copies are part of the question instead of being silently rewritten.
+  const corePlan = options.corePack
+    ? await planCoreHeaderCopy(options.corePack.includeDir, root)
+    : [];
   const generatedFiles = createMcuFiles(
     root,
     projectName,
     profile,
     project,
     existingCMakeContent,
-    options
+    options,
+    corePlan
   );
   const configPath = join(root, '.mcu-cmake.json');
   const settingsPath = join(root, '.vscode', 'settings.json');
   const cppPropertiesPath = join(root, '.vscode', 'c_cpp_properties.json');
   const existingFiles = await findExistingFiles([
     ...generatedFiles.map((file) => file.path),
+    ...corePlan.map((entry) => entry.target),
     settingsPath,
     cppPropertiesPath,
     configPath
@@ -253,6 +273,7 @@ export async function generateMcuWorkflow(
     content: configureCppProperties(cppPropertiesContent)
   };
   await writeGeneratedFiles([...generatedFiles, configFile, cppPropertiesFile]);
+  await copyCoreHeaders(corePlan);
   await host.updateSettings(getWorkspaceSettings());
   return {
     kind: 'mcu',
@@ -263,7 +284,9 @@ export async function generateMcuWorkflow(
       cppPropertiesFile,
       { path: settingsPath, content: '' }
     ].map((file) => toWorkspacePath(root, file.path)),
-    message: `已为 ${profile.part} 生成 CMake 工程，共扫描到 ${project.sources.length} 个源文件。`
+    message: options.corePack
+      ? `已为 ${profile.part} 生成 CMake 工程，共扫描到 ${project.sources.length} 个源文件，并写入 CMSIS 内核头文件（${options.corePack.version}）。`
+      : `已为 ${profile.part} 生成 CMake 工程，共扫描到 ${project.sources.length} 个源文件。`
   };
 }
 
