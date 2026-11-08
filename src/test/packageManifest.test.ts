@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -48,6 +48,18 @@ test('registers every contributed command in the extension host', () => {
     manifest.contributes.commands.map((command: { command: string }) => command.command),
     registered
   );
+});
+
+test('ships every icon the manifest contributes', () => {
+  const root = join(__dirname, '..', '..');
+  const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  const containers = manifest.contributes.viewsContainers.activitybar as Array<{ icon?: string }>;
+  for (const container of containers) {
+    assert.ok(container.icon, 'activity bar entry needs an icon');
+    // A missing file makes VS Code render an empty activity-bar slot with only a
+    // log error, which looks like the extension itself is broken.
+    assert.ok(existsSync(join(root, container.icon!)), `${container.icon} must exist`);
+  }
 });
 
 test('keeps the Marketplace icon square and below the upload size limit', () => {
