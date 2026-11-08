@@ -113,5 +113,14 @@ npm test
 需要 Node.js 22+。修改代码后先 `npm run compile`（或 `npm test`）再按 `F5`；
 启动配置不带 `preLaunchTask`，以免共享终端卡住让 F5 看起来没反应。
 
+打包扩展：
+
+```powershell
+npm run vsix
+```
+
+`fast-xml-parser` 是运行时依赖，必须打进 VSIX；不要给 vsce 加
+`--no-dependencies`，否则扩展能显示但激活会报 `Cannot find module`。
+
 更多文档：[架构](docs/architecture.md) ·
 [契约](docs/contracts.md) · [路线图](docs/roadmap.md)
