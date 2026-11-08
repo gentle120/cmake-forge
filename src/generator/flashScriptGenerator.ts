@@ -269,7 +269,7 @@ def main():
     openocd = find_openocd(args.openocd)
     firmware = find_firmware(args.firmware)
     if not openocd:
-        sys.exit("Error: OpenOCD was not found. Set --openocd or cmakeEmbedded.openocdPath.")
+        sys.exit("Error: OpenOCD was not found. Set --openocd or cmakeForge.openocdPath.")
     if not firmware:
         message = "specified firmware was not found" if args.firmware else "firmware was not found"
         sys.exit("Error: " + message + ". Set --firmware to an ELF, HEX, or BIN file.")
@@ -404,7 +404,7 @@ def main():
     jlink = find_jlink(args.jlink)
     firmware = find_firmware(args.firmware)
     if not jlink:
-        sys.exit("Error: J-Link Commander was not found. Set --jlink or cmakeEmbedded.jlinkPath.")
+        sys.exit("Error: J-Link Commander was not found. Set --jlink or cmakeForge.jlinkPath.")
     if not firmware:
         message = "specified firmware was not found" if args.firmware else "firmware was not found"
         sys.exit("Error: " + message + ". Set --firmware to an ELF or HEX file (BIN needs an address).")
@@ -539,7 +539,7 @@ def main():
     pyocd = find_pyocd(args.pyocd)
     firmware = find_firmware(args.firmware)
     if not pyocd:
-        sys.exit("Error: pyOCD was not found. Set --pyocd or cmakeEmbedded.pyocdPath.")
+        sys.exit("Error: pyOCD was not found. Set --pyocd or cmakeForge.pyocdPath.")
     if not firmware:
         message = "specified firmware was not found" if args.firmware else "firmware was not found"
         sys.exit("Error: " + message + ". Set --firmware to an ELF or HEX file.")

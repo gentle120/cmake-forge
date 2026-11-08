@@ -312,7 +312,7 @@ async function selectFlashTarget(): Promise<FlashTargetProfile | undefined> {
 }
 
 function getOpenOcdPath(): string {
-  return vscode.workspace.getConfiguration('cmakeEmbedded')
+  return vscode.workspace.getConfiguration('cmakeForge')
     .get<string>('openocdPath', 'openocd')?.trim() || 'openocd';
 }
 
@@ -322,7 +322,7 @@ function getOpenOcdPath(): string {
  * a flat directory of `<vendor>.<name>.<version>.pack` archives instead.
  */
 function getPackMirror(): string | undefined {
-  const configured = vscode.workspace.getConfiguration('cmakeEmbedded')
+  const configured = vscode.workspace.getConfiguration('cmakeForge')
     .get<string>('packMirror', '')?.trim();
   return configured ? configured : undefined;
 }
@@ -570,7 +570,7 @@ async function syncPackFileIndex(): Promise<void> {
 }
 
 function executablePaths(): FlashExecutablePaths {
-  const configuration = vscode.workspace.getConfiguration('cmakeEmbedded');
+  const configuration = vscode.workspace.getConfiguration('cmakeForge');
   return {
     jlink: configuration.get<string>('jlinkPath', 'JLink')?.trim() || 'JLink',
     pyocd: configuration.get<string>('pyocdPath', 'pyocd')?.trim() || 'pyocd'
@@ -770,7 +770,7 @@ async function mcuCorePackForGeneration(
     return { includeDir: pack.includeDir, version: pack.record.version };
   }
   void vscode.window.showWarningMessage(
-    '未安装 ARM CMSIS 内核包：生成的工程缺少 core_cm*.h，编译会失败。请点侧栏「安装内核包…」或运行「CMake Embedded: Install ARM CMSIS Core Pack」。'
+    '未安装 ARM CMSIS 内核包：生成的工程缺少 core_cm*.h，编译会失败。请点侧栏「安装内核包…」或运行「CMake Forge: Install ARM CMSIS Core Pack」。'
   );
   return undefined;
 }
@@ -1380,25 +1380,25 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
   context.subscriptions.push(
-    vscode.commands.registerCommand('cmakeEmbedded.generateMcu', () => generateProject()),
-    vscode.commands.registerCommand('cmakeEmbedded.generateLinux', () => generateLinuxProject()),
-    vscode.commands.registerCommand('cmakeEmbedded.generateNative', () => generateNativeProject()),
-    vscode.commands.registerCommand('cmakeEmbedded.generateFlashScript', () => generateFlashScriptOnly()),
+    vscode.commands.registerCommand('cmakeForge.generateMcu', () => generateProject()),
+    vscode.commands.registerCommand('cmakeForge.generateLinux', () => generateLinuxProject()),
+    vscode.commands.registerCommand('cmakeForge.generateNative', () => generateNativeProject()),
+    vscode.commands.registerCommand('cmakeForge.generateFlashScript', () => generateFlashScriptOnly()),
     vscode.commands.registerCommand(
-      'cmakeEmbedded.generateDebugConfiguration',
+      'cmakeForge.generateDebugConfiguration',
       () => generateDebugConfigurationOnly()
     ),
-    vscode.commands.registerCommand('cmakeEmbedded.importPack', () => importPackOnly()),
-    vscode.commands.registerCommand('cmakeEmbedded.installPackOnline', () => installPackOnlineOnly()),
-    vscode.commands.registerCommand('cmakeEmbedded.removePack', () => removePackOnly()),
-    vscode.commands.registerCommand('cmakeEmbedded.installCorePack', () => installCorePackOnly()),
+    vscode.commands.registerCommand('cmakeForge.importPack', () => importPackOnly()),
+    vscode.commands.registerCommand('cmakeForge.installPackOnline', () => installPackOnlineOnly()),
+    vscode.commands.registerCommand('cmakeForge.removePack', () => removePackOnly()),
+    vscode.commands.registerCommand('cmakeForge.installCorePack', () => installCorePackOnly()),
     vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebarProvider, {
       webviewOptions: { retainContextWhenHidden: true }
     }),
     sidebarProvider,
     vscode.workspace.onDidChangeWorkspaceFolders(() => sidebarProvider.refresh()),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration('cmakeEmbedded')) {
+      if (event.affectsConfiguration('cmakeForge')) {
         sidebarProvider.refresh();
       }
     })

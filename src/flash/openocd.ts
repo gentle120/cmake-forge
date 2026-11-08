@@ -57,5 +57,5 @@ export function resolveOpenOcdExecutable(
 /** Copy for a generation that will not be able to start OpenOCD on F5. */
 export function missingOpenOcdNotice(configured: string): string {
   const name = configured.trim() || 'openocd';
-  return `没有找到 OpenOCD（${name}）：按 F5 会立即退出。请在设置 cmakeEmbedded.openocdPath 里填写 openocd.exe 的完整路径，或把 OpenOCD 的 bin 目录加入 PATH 后重试。`;
+  return `没有找到 OpenOCD（${name}）：按 F5 会立即退出。请在设置 cmakeForge.openocdPath 里填写 openocd.exe 的完整路径，或把 OpenOCD 的 bin 目录加入 PATH 后重试。`;
 }

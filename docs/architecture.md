@@ -1,4 +1,4 @@
-# CMake Embedded Architecture
+# CMake Forge Architecture
 
 ## Purpose
 

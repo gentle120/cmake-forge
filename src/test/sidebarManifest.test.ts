@@ -6,12 +6,12 @@ import test from 'node:test';
 test('registers the CMake sidebar as an Activity Bar webview', () => {
   const manifest = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8'));
 
-  assert.equal(manifest.contributes.viewsContainers.activitybar[0].id, 'cmakeEmbedded');
-  assert.equal(manifest.contributes.viewsContainers.activitybar[0].title, 'CMake Embedded');
+  assert.equal(manifest.contributes.viewsContainers.activitybar[0].id, 'cmakeForge');
+  assert.equal(manifest.contributes.viewsContainers.activitybar[0].title, 'CMake Forge');
   assert.equal(manifest.contributes.viewsContainers.activitybar[0].icon, 'images/activity-icon.svg');
-  assert.equal(manifest.contributes.views.cmakeEmbedded[0].id, 'cmakeEmbedded.sidebar');
-  assert.equal(manifest.contributes.views.cmakeEmbedded[0].type, 'webview');
-  assert.ok(manifest.activationEvents.includes('onView:cmakeEmbedded.sidebar'));
+  assert.equal(manifest.contributes.views.cmakeForge[0].id, 'cmakeForge.sidebar');
+  assert.equal(manifest.contributes.views.cmakeForge[0].type, 'webview');
+  assert.ok(manifest.activationEvents.includes('onView:cmakeForge.sidebar'));
 });
 
 test('packages the local sidebar assets and Chinese default readme', () => {

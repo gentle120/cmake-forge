@@ -7,7 +7,7 @@ import {
   type FlashBackendId
 } from '../flash/backendProfiles';
 
-const generatedConfigurationName = 'CMake Embedded OpenOCD';
+const generatedConfigurationName = 'CMake Forge OpenOCD';
 
 export interface CortexDebugConfigurationOptions {
   openocdPath: string;

@@ -57,7 +57,7 @@ import {
   type SidebarSelection
 } from './state';
 
-const selectionKey = 'cmakeEmbedded.sidebarSelection.v1';
+const selectionKey = 'cmakeForge.sidebarSelection.v1';
 
 interface SidebarScanHost {
   scanProject(root: string, options?: { signal?: AbortSignal }): ReturnType<typeof scanProject>;
@@ -125,7 +125,7 @@ function normalizeResult(result: WorkflowResult): {
 }
 
 export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
-  static readonly viewType = 'cmakeEmbedded.sidebar';
+  static readonly viewType = 'cmakeForge.sidebar';
 
   private view?: vscode.WebviewView;
   private disposed = false;
@@ -794,13 +794,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   /** Absolute OpenOCD path from the extension settings, when configured. */
   private configuredOpenOcdPath(): string {
     const configured = vscode.workspace
-      .getConfiguration('cmakeEmbedded')
+      .getConfiguration('cmakeForge')
       .get<string>('openocdPath', 'openocd');
     return configured?.trim() || 'openocd';
   }
 
   private executablePaths(): FlashExecutablePaths {
-    const configuration = vscode.workspace.getConfiguration('cmakeEmbedded');
+    const configuration = vscode.workspace.getConfiguration('cmakeForge');
     return {
       jlink: configuration.get<string>('jlinkPath', 'JLink')?.trim() || 'JLink',
       pyocd: configuration.get<string>('pyocdPath', 'pyocd')?.trim() || 'pyocd'
@@ -983,7 +983,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     }
     if (message.type === 'importPack') {
       const result = await this.runGeneration('正在导入 Pack', async () => {
-        const commandResult = await vscode.commands.executeCommand<CommandResult>('cmakeEmbedded.importPack');
+        const commandResult = await vscode.commands.executeCommand<CommandResult>('cmakeForge.importPack');
         return { kind: 'mcu' as const, ...commandResult, files: [] };
       });
       // A successful import must land in front of the user immediately: the
@@ -997,7 +997,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     }
     if (message.type === 'installCorePack') {
       await this.runGeneration('正在安装 ARM CMSIS 内核包', async () => {
-        const commandResult = await vscode.commands.executeCommand<CommandResult>('cmakeEmbedded.installCorePack');
+        const commandResult = await vscode.commands.executeCommand<CommandResult>('cmakeForge.installCorePack');
         return { kind: 'mcu' as const, ...commandResult, files: [] };
       });
       // The include path the next generation writes depends on this result.
@@ -1007,7 +1007,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     }
     if (message.type === 'installPackOnline') {
       const result = await this.runGeneration('正在在线安装 Pack', async () => {
-        const commandResult = await vscode.commands.executeCommand<CommandResult>('cmakeEmbedded.installPackOnline');
+        const commandResult = await vscode.commands.executeCommand<CommandResult>('cmakeForge.installPackOnline');
         return { kind: 'mcu' as const, ...commandResult, files: [] };
       });
       if (result?.ok) {
@@ -1093,7 +1093,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
             ...result,
             warnings: [
               ...(result.warnings ?? []),
-              '未复制器件头/system 文件：该 Pack 没有可用的器件头，或扩展尚未重新加载。打开「输出 → CMake Embedded」可看到具体原因。'
+              '未复制器件头/system 文件：该 Pack 没有可用的器件头，或扩展尚未重新加载。打开「输出 → CMake Forge」可看到具体原因。'
             ]
           };
         }

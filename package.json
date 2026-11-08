@@ -1,12 +1,12 @@
 {
-  "name": "cmake-embedded",
-  "displayName": "CMake Embedded",
-  "description": "Generate ready-to-build CMake projects for desktop C/C++, MCU firmware, and Linux / SoC cross compilation.",
+  "name": "cmake-forge",
+  "displayName": "CMake Forge",
+  "description": "Generate ready-to-build CMake projects for ARM Cortex-M MCU firmware (chip data from CMSIS Packs), Linux / SoC cross compilation and desktop C/C++.",
   "version": "1.0.0",
   "publisher": "gentle120",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gentle120/CMake Embedded.git"
+    "url": "https://github.com/gentle120/cmake-forge.git"
   },
   "license": "MIT",
   "engines": {
@@ -24,7 +24,10 @@
     "stm32",
     "gd32",
     "linux",
-    "cross-compile"
+    "cross-compile",
+    "cmsis",
+    "arm",
+    "firmware"
   ],
   "extensionDependencies": [
     "ms-vscode.cmake-tools",
@@ -34,84 +37,84 @@
   "icon": "images/icon.png",
   "readme": "README.md",
   "activationEvents": [
-    "onView:cmakeEmbedded.sidebar"
+    "onView:cmakeForge.sidebar"
   ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "cmakeEmbedded",
-          "title": "CMake Embedded",
+          "id": "cmakeForge",
+          "title": "CMake Forge",
           "icon": "images/activity-icon.svg"
         }
       ]
     },
     "views": {
-      "cmakeEmbedded": [
+      "cmakeForge": [
         {
           "type": "webview",
-          "id": "cmakeEmbedded.sidebar",
+          "id": "cmakeForge.sidebar",
           "name": "生成配置"
         }
       ]
     },
     "commands": [
       {
-        "command": "cmakeEmbedded.generateMcu",
-        "title": "CMake Embedded: Generate MCU Project"
+        "command": "cmakeForge.generateMcu",
+        "title": "CMake Forge: Generate MCU Project"
       },
       {
-        "command": "cmakeEmbedded.generateLinux",
-        "title": "CMake Embedded: Generate Linux Project"
+        "command": "cmakeForge.generateLinux",
+        "title": "CMake Forge: Generate Linux Project"
       },
       {
-        "command": "cmakeEmbedded.generateNative",
-        "title": "CMake Embedded: Generate C/C++ Project"
+        "command": "cmakeForge.generateNative",
+        "title": "CMake Forge: Generate C/C++ Project"
       },
       {
-        "command": "cmakeEmbedded.generateFlashScript",
-        "title": "CMake Embedded: Generate OpenOCD Flash Script"
+        "command": "cmakeForge.generateFlashScript",
+        "title": "CMake Forge: Generate OpenOCD Flash Script"
       },
       {
-        "command": "cmakeEmbedded.generateDebugConfiguration",
-        "title": "CMake Embedded: Generate Cortex-Debug Configuration"
+        "command": "cmakeForge.generateDebugConfiguration",
+        "title": "CMake Forge: Generate Cortex-Debug Configuration"
       },
       {
-        "command": "cmakeEmbedded.importPack",
-        "title": "CMake Embedded: Import CMSIS Pack"
+        "command": "cmakeForge.importPack",
+        "title": "CMake Forge: Import CMSIS Pack"
       },
       {
-        "command": "cmakeEmbedded.installPackOnline",
-        "title": "CMake Embedded: Install Pack Online"
+        "command": "cmakeForge.installPackOnline",
+        "title": "CMake Forge: Install Pack Online"
       },
       {
-        "command": "cmakeEmbedded.removePack",
-        "title": "CMake Embedded: Remove Imported CMSIS Pack"
+        "command": "cmakeForge.removePack",
+        "title": "CMake Forge: Remove Imported CMSIS Pack"
       },
       {
-        "command": "cmakeEmbedded.installCorePack",
-        "title": "CMake Embedded: Install ARM CMSIS Core Pack"
+        "command": "cmakeForge.installCorePack",
+        "title": "CMake Forge: Install ARM CMSIS Core Pack"
       }
     ],
     "configuration": {
-      "title": "CMake Embedded",
+      "title": "CMake Forge",
       "properties": {
-        "cmakeEmbedded.openocdPath": {
+        "cmakeForge.openocdPath": {
           "type": "string",
           "default": "openocd",
           "description": "Path to the OpenOCD executable. Use openocd when it is available in PATH."
         },
-        "cmakeEmbedded.jlinkPath": {
+        "cmakeForge.jlinkPath": {
           "type": "string",
           "default": "JLink",
           "description": "J-Link Commander executable (JLink / JLink.exe / JLinkExe). Absolute path or a name found on PATH."
         },
-        "cmakeEmbedded.pyocdPath": {
+        "cmakeForge.pyocdPath": {
           "type": "string",
           "default": "pyocd",
           "description": "pyOCD executable used to flash CMSIS-Pack devices with ST-Link or DAPLink probes."
         },
-        "cmakeEmbedded.packMirror": {
+        "cmakeForge.packMirror": {
           "type": "string",
           "default": "",
           "description": "Pack 下载镜像根地址（可选）。形如 https://mirror.example.com/cmsis 的扁平目录，按 <vendor>.<name>.<version>.pack 提供文件。留空时直连官方 CDN。"

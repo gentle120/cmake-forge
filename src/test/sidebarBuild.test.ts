@@ -136,7 +136,7 @@ test('importing a Pack refreshes the catalog and auto-activates the best version
     await new Promise((resolve) => setTimeout(resolve, 30));
     provider.receive({ type: 'importPack' });
     await new Promise((resolve) => setTimeout(resolve, 120));
-    assert.deepEqual(commands, ['cmakeEmbedded.importPack']);
+    assert.deepEqual(commands, ['cmakeForge.importPack']);
     assert.deepEqual(activations, [['', 'GD:GD32F1xx_DFP', '2.4.1']]);
     const state = latestState(provider.messages);
     assert.equal(state?.selection.mcu.vendor, 'GD');
@@ -184,7 +184,7 @@ test('online install downloads from the index and auto-activates the best versio
     await new Promise((resolve) => setTimeout(resolve, 30));
     provider.receive({ type: 'installPackOnline' });
     await new Promise((resolve) => setTimeout(resolve, 120));
-    assert.deepEqual(commands, ['cmakeEmbedded.installPackOnline']);
+    assert.deepEqual(commands, ['cmakeForge.installPackOnline']);
     assert.deepEqual(activations, [['', 'Keil:TM4C_DFP', '1.1.0']]);
     const state = latestState(provider.messages);
     assert.equal(state?.selection.mcu.vendor, 'Keil');

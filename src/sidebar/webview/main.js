@@ -294,8 +294,8 @@
   backendDetailsHost.append(openocdGroup, settingsGroup);
 
   const settingsNotes = {
-    jlink: 'J-Link 路径由扩展设置 cmakeEmbedded.jlinkPath 提供，侧栏不保存该路径。',
-    pyocd: 'pyOCD 路径由扩展设置 cmakeEmbedded.pyocdPath 提供，侧栏不保存该路径。'
+    jlink: 'J-Link 路径由扩展设置 cmakeForge.jlinkPath 提供，侧栏不保存该路径。',
+    pyocd: 'pyOCD 路径由扩展设置 cmakeForge.pyocdPath 提供，侧栏不保存该路径。'
   };
 
   function saveSelection(selection) {

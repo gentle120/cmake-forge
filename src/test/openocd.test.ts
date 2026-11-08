@@ -37,6 +37,6 @@ test('finds a bare command name on PATH and honours the platform suffix', async 
 test('names the missing executable and the setting to fix in the warning', () => {
   const notice = missingOpenOcdNotice('D:/Tools/OpenOCD/bin/openocd.exe');
   assert.match(notice, /D:\/Tools\/OpenOCD\/bin\/openocd\.exe/);
-  assert.match(notice, /cmakeEmbedded\.openocdPath/);
+  assert.match(notice, /cmakeForge\.openocdPath/);
   assert.match(missingOpenOcdNotice('  '), /openocd/);
 });

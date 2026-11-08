@@ -1,4 +1,4 @@
-# CMake Embedded Contracts
+# CMake Forge Contracts
 
 ## Source Rules
 
@@ -16,7 +16,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - `registerDeviceProfiles()` 允许运行时追加档案；`unregisterDeviceProfilesByPack()` 按来源移除并恢复前一个来源，无前序来源时移除该型号；`listDeviceProfiles()/getDeviceProfile()` 签名稳定，返回防御性拷贝。
 - 注册表无内置芯片数据：所有 DeviceProfile 由 Pack 导入注入；无任何 Pack 时器件列表为空，但厂商下拉仍包含精选厂商（`curatedVendors`），持久化的 `builtin:` 选择落空为空选择。精选厂商在 Pack 扫描完成、注册表条目出现之前也视为有效厂商，不得因该窗口期而清空持久化的厂商/系列；初次打开且没有可用持久化厂商时，侧栏采用厂商列表第一项及其首个系列并持久化，保证系列下拉首次打开即可操作。
 - 厂商必须先在 `vendorRegistry` 注册（id 唯一，`getVendorMetadata` 未知 id 抛错）。
-- 命令 ID：`cmakeEmbedded.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/importPack/installPackOnline/removePack/installCorePack`；`package.json` 贡献的命令必须与 `extension.ts` 注册的命令一一对应。
+- 命令 ID：`cmakeForge.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/importPack/installPackOnline/removePack/installCorePack`；`package.json` 贡献的命令必须与 `extension.ts` 注册的命令一一对应。
 - 工作区可包含多个工程；扫描、生成、烧录与调试都以当前选中的工程根目录为边界，不跨工程合并源文件。目标工程按工作区持久化；发现结果只有一个时自动选择，多个时保留有效选择或等待用户选择。空工作区根目录仍作为可扫描目标保留；扫描返回零个源文件、头文件目录和宏，并明确提示没有 C/C++ 或汇编源文件。
 - 插件不提供构建命令、构建执行器或 ARM GNU 路径设置；配置、编译与调试分别由 CMake Tools 与 Cortex-Debug 拥有。生成产物只写可移植命令名 `arm-none-eabi-gcc/g++/objcopy/size`，不含机器绝对路径。
 - 生成文件落盘前必须经过覆盖确认（`shared/generatedFiles.ts`）：只有磁盘内容与新输出不同、或会被生成过程删除的文件才进入确认；内容完全一致的重新生成不提示、不重写。MCU/Linux/桌面三个方向与仅 flash.py 的生成共用这一判据。
@@ -43,7 +43,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - pyOCD 的 pack 参数必须是真实存在的 `.pack` 文件；导入设备没有归档时省略 `--pack`，不得生成指向虚拟路径的配置。
 - 在线 Pack 搜索复用同一 TTL 缓存的索引；取消进度通知必须中断索引读取与 Pack 下载（请求随调用方 signal 中止，不再继续到完成），且取消后不再发起后续请求；连接级失败（连接超时、连接被重置、域名暂不可解析等）自动重试一次，取消与其它错误不重试。每个可下载版本都保留为独立条目，不折叠为最新版本。
 - 「用户取消」与「请求超时」是两种不同结局，不得合并呈现：fetcher 自身计时器到期必须以超时失败告终（`RequestTimeoutError`，并说明等待了多久），不得报告为已取消；用户取消仍返回 `cancelled` 且不弹错误提示。两者在 undici 中都表现为 AbortError，因此判别只能发生在 fetcher 内部（`src/packs/fetcher.ts`）。
-- Pack 下载通道按顺序尝试：配置的镜像（`cmakeEmbedded.packMirror`，扁平目录按 `<vendor>.<name>.<version>.pack` 提供文件）→ 索引发布地址改写后的 CDN 目标 → 索引里发布的原始地址。改写只作用于 `https://www.keil.com/pack/` 前缀（其 302 指向 `keilpack.azureedge.net/pack/`），厂商自托管地址（GD32/ST 等）必须原样请求。任一候选失败换下一个，取消与超时立即结束、不再换候选。
+- Pack 下载通道按顺序尝试：配置的镜像（`cmakeForge.packMirror`，扁平目录按 `<vendor>.<name>.<version>.pack` 提供文件）→ 索引发布地址改写后的 CDN 目标 → 索引里发布的原始地址。改写只作用于 `https://www.keil.com/pack/` 前缀（其 302 指向 `keilpack.azureedge.net/pack/`），厂商自托管地址（GD32/ST 等）必须原样请求。任一候选失败换下一个，取消与超时立即结束、不再换候选。
 - 下载必须报告进度：通知显示「已下载 / 总大小（百分比）」，侧栏状态徽标同步同一文案（`operationProgress`），完成或失败后回到常规状态。总大小来自 `Content-Range` 或 `Content-Length`；无法获知总量时只报已下载字节且不显示百分比，不得伪造进度。
 - 大包（≥2 MB 且服务端支持 `Range`）按 1 MB 分段并发下载（最多 8 路），每段独立重试、独立失败；小包与不支持 Range 的主机仍走单次请求（`200` 响应视为完整归档，不得当作分片）。重组后必须校验总长度与分段齐全，缺段即失败。
 - 侧栏 MCU 选择为 vendor → series → pack → version → part：series 可在激活 Pack 前选择，来源为精选厂商系列目录（`src/devices/seriesCatalog.ts`，含各系列的 DFP 名与型号前缀）与本地包系列；选定系列后自动解析并激活本地对应 Pack（imported 按档案系列/型号前缀匹配，installed 按 DFP 名匹配），无匹配时提示确定性安装途径；part 按目录型号前缀或系列过滤；不保留跨 vendor 残留。
@@ -57,7 +57,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - 已安装 Pack 的身份取自 PDSC（`Dvendor`、包名、`release version`）；Keil 安装目录名或归档文件名不是最终身份，PDSC 无法解析的条目被跳过。
 - 目录选项的 `packFile` 是安装位置，不是导入档案的所有权键；导入档案的所有权键固定为 `packs/<vendor>/<file>.pack` 形式的扩展存储相对路径。切换 Pack 或版本时所有权键随之切换，目录中已加载的 `imported` 条目优先于持久化键，目录未加载时沿用持久化键。
 - 侧栏厂商列表按序包含：本地可用厂商（已导入档案、`parts` 非空的已导入记录、PDSC 解析出至少一个可导入设备的已安装 Pack，优先复用精选清单的友好标签），其后是精选芯片厂商清单（`src/devices/curatedVendors.ts`，本地暂缺的厂商带安装提示）；同一厂商本地来源优先且不重复出现；精选清单常驻，厂商下拉永不为空。
-- MCU 面板的「导入 Pack 包」「在线安装 Pack」按钮分别触发 `cmakeEmbedded.importPack` 与 `cmakeEmbedded.installPackOnline`；导入/安装成功后目录按厂商切换自动激活语义刷新（优先激活服务当前所选系列的 imported/installed 版本，否则取最新版本；可下载版本仍不自动下载），失败不改变有效选择。
+- MCU 面板的「导入 Pack 包」「在线安装 Pack」按钮分别触发 `cmakeForge.importPack` 与 `cmakeForge.installPackOnline`；导入/安装成功后目录按厂商切换自动激活语义刷新（优先激活服务当前所选系列的 imported/installed 版本，否则取最新版本；可下载版本仍不自动下载），失败不改变有效选择。
 - 在线索引用 CMSIS 公开 Pack 索引（`https://www.keil.com/pack/index.pidx`，单次拉取 + TTL 缓存），供「在线安装 Pack」按钮与 `Import CMSIS Pack` 命令使用；其 `<pindex><pdsc url vendor name version/>` 条目按 CMSIS 命名约定派生下载地址 `<root><vendor>.<name>.<version>.pack`，缺失任何身份字段的条目、标为 `deprecated` 的条目与完全重复的条目跳过。索引同时覆盖 Keil 自托管包与厂商自托管包（如 GigaDevice、STMicroelectronics），因此「在线安装」的候选按已选系列的目录 DFP 名优先、否则按已选厂商 vendorId 过滤，无匹配时给出官方下载页或索引兜底。下载得到的 Pack 以索引条目为身份来源导入（存档文件名不是身份来源），成功后自动激活。
 - 显式切换厂商时自动激活该厂商服务当前所选系列的可用版本（`imported`/`installed`，同版本 `imported` 优先；无系列匹配时取最新版本）；`downloadable` 版本不自动下载，启动时的目录刷新不自动激活。
 - 仅切换侧栏模式（mcu/linux/native）的保存按消息保留模式；MCU 字段重算不改写模式。
