@@ -60,7 +60,7 @@ export function renderSidebarHtml(
           <span class="ui-icon" data-icon="chip"></span>
         </div>
         <div class="brand-copy">
-          <span class="brand-kicker">CMake-Embedded</span>
+          <span class="brand-kicker">CMake Embedded</span>
           <h1>工程生成台</h1>
         </div>
       </div>

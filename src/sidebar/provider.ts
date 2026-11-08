@@ -1093,7 +1093,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
             ...result,
             warnings: [
               ...(result.warnings ?? []),
-              '未复制器件头/system 文件：该 Pack 没有可用的器件头，或扩展尚未重新加载。打开「输出 → CMake-Embedded」可看到具体原因。'
+              '未复制器件头/system 文件：该 Pack 没有可用的器件头，或扩展尚未重新加载。打开「输出 → CMake Embedded」可看到具体原因。'
             ]
           };
         }

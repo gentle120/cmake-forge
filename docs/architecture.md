@@ -1,4 +1,4 @@
-# CMake-Embedded Architecture
+# CMake Embedded Architecture
 
 ## Purpose
 

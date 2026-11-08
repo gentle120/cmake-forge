@@ -1,12 +1,12 @@
 {
   "name": "cmake-embedded",
-  "displayName": "CMake-Embedded",
+  "displayName": "CMake Embedded",
   "description": "Generate ready-to-build CMake projects for desktop C/C++, MCU firmware, and Linux / SoC cross compilation.",
-  "version": "2.2.2",
+  "version": "1.0.0",
   "publisher": "gentle120",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gentle120/CMake-Embedded.git"
+    "url": "https://github.com/gentle120/CMake Embedded.git"
   },
   "license": "MIT",
   "engines": {
@@ -41,7 +41,7 @@
       "activitybar": [
         {
           "id": "cmakeEmbedded",
-          "title": "CMake-Embedded",
+          "title": "CMake Embedded",
           "icon": "images/activity-icon.svg"
         }
       ]
@@ -58,43 +58,43 @@
     "commands": [
       {
         "command": "cmakeEmbedded.generateMcu",
-        "title": "CMake-Embedded: Generate MCU Project"
+        "title": "CMake Embedded: Generate MCU Project"
       },
       {
         "command": "cmakeEmbedded.generateLinux",
-        "title": "CMake-Embedded: Generate Linux Project"
+        "title": "CMake Embedded: Generate Linux Project"
       },
       {
         "command": "cmakeEmbedded.generateNative",
-        "title": "CMake-Embedded: Generate C/C++ Project"
+        "title": "CMake Embedded: Generate C/C++ Project"
       },
       {
         "command": "cmakeEmbedded.generateFlashScript",
-        "title": "CMake-Embedded: Generate OpenOCD Flash Script"
+        "title": "CMake Embedded: Generate OpenOCD Flash Script"
       },
       {
         "command": "cmakeEmbedded.generateDebugConfiguration",
-        "title": "CMake-Embedded: Generate Cortex-Debug Configuration"
+        "title": "CMake Embedded: Generate Cortex-Debug Configuration"
       },
       {
         "command": "cmakeEmbedded.importPack",
-        "title": "CMake-Embedded: Import CMSIS Pack"
+        "title": "CMake Embedded: Import CMSIS Pack"
       },
       {
         "command": "cmakeEmbedded.installPackOnline",
-        "title": "CMake-Embedded: Install Pack Online"
+        "title": "CMake Embedded: Install Pack Online"
       },
       {
         "command": "cmakeEmbedded.removePack",
-        "title": "CMake-Embedded: Remove Imported CMSIS Pack"
+        "title": "CMake Embedded: Remove Imported CMSIS Pack"
       },
       {
         "command": "cmakeEmbedded.installCorePack",
-        "title": "CMake-Embedded: Install ARM CMSIS Core Pack"
+        "title": "CMake Embedded: Install ARM CMSIS Core Pack"
       }
     ],
     "configuration": {
-      "title": "CMake-Embedded",
+      "title": "CMake Embedded",
       "properties": {
         "cmakeEmbedded.openocdPath": {
           "type": "string",

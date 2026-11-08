@@ -1,4 +1,4 @@
-# CMake-Embedded Roadmap
+# CMake Embedded Roadmap
 
 This file is a compact relay ledger, not a history log. Stable facts belong in `architecture.md` or `contracts.md`; completed history belongs in Git.
 

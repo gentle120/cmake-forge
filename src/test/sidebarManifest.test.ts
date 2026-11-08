@@ -7,7 +7,7 @@ test('registers the CMake sidebar as an Activity Bar webview', () => {
   const manifest = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8'));
 
   assert.equal(manifest.contributes.viewsContainers.activitybar[0].id, 'cmakeEmbedded');
-  assert.equal(manifest.contributes.viewsContainers.activitybar[0].title, 'CMake-Embedded');
+  assert.equal(manifest.contributes.viewsContainers.activitybar[0].title, 'CMake Embedded');
   assert.equal(manifest.contributes.viewsContainers.activitybar[0].icon, 'images/activity-icon.svg');
   assert.equal(manifest.contributes.views.cmakeEmbedded[0].id, 'cmakeEmbedded.sidebar');
   assert.equal(manifest.contributes.views.cmakeEmbedded[0].type, 'webview');

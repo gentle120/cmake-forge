@@ -1,4 +1,4 @@
-# CMake-Embedded Contracts
+# CMake Embedded Contracts
 
 ## Source Rules
 

@@ -38,4 +38,4 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" "cmake-embedded-${GITHUB_REF_NAME#v}.vsix" \
             --generate-notes \
-            --title "CMake-Embedded ${GITHUB_REF_NAME#v}"
+            --title "CMake Embedded ${GITHUB_REF_NAME#v}"

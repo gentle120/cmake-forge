@@ -1,6 +1,6 @@
 [中文主文档](README.md)
 
-# CMake-Embedded
+# CMake Embedded
 
 默认中文文档在 [README.md](README.md)，此文件只保留一份简短索引，避免两份文档
 内容逐渐不一致。

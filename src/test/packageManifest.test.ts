@@ -8,15 +8,15 @@ test('uses the extension name in command and settings display titles', () => {
   assert.deepEqual(
     manifest.contributes.commands.map((command: { title: string }) => command.title),
     [
-      'CMake-Embedded: Generate MCU Project',
-      'CMake-Embedded: Generate Linux Project',
-      'CMake-Embedded: Generate C/C++ Project',
-      'CMake-Embedded: Generate OpenOCD Flash Script',
-      'CMake-Embedded: Generate Cortex-Debug Configuration',
-      'CMake-Embedded: Import CMSIS Pack',
-      'CMake-Embedded: Install Pack Online',
-      'CMake-Embedded: Remove Imported CMSIS Pack',
-      'CMake-Embedded: Install ARM CMSIS Core Pack'
+      'CMake Embedded: Generate MCU Project',
+      'CMake Embedded: Generate Linux Project',
+      'CMake Embedded: Generate C/C++ Project',
+      'CMake Embedded: Generate OpenOCD Flash Script',
+      'CMake Embedded: Generate Cortex-Debug Configuration',
+      'CMake Embedded: Import CMSIS Pack',
+      'CMake Embedded: Install Pack Online',
+      'CMake Embedded: Remove Imported CMSIS Pack',
+      'CMake Embedded: Install ARM CMSIS Core Pack'
     ]
   );
   assert.ok(!manifest.contributes.commands.some((command: { command: string }) =>
@@ -24,7 +24,7 @@ test('uses the extension name in command and settings display titles', () => {
       .includes(command.command)
   ));
   assert.equal(manifest.contributes.configuration.properties['cmakeEmbedded.armToolchainPath'], undefined);
-  assert.equal(manifest.contributes.configuration.title, 'CMake-Embedded');
+  assert.equal(manifest.contributes.configuration.title, 'CMake Embedded');
   assert.ok(manifest.extensionDependencies.includes('ms-vscode.cmake-tools'));
   assert.ok(!manifest.extensionDependencies.includes('marus25.cortex-debug'));
 });

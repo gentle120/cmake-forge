@@ -13,7 +13,7 @@ test('generates a standard Cortex-Debug OpenOCD launch configuration', () => {
   const config = launch.configurations[0];
 
   assert.equal(launch.version, '0.2.0');
-  assert.equal(config.name, 'CMake-Embedded OpenOCD');
+  assert.equal(config.name, 'CMake Embedded OpenOCD');
   assert.equal(config.type, 'cortex-debug');
   assert.equal(config.request, 'launch');
   assert.equal(config.cwd, '${workspaceRoot}');
@@ -46,7 +46,7 @@ test('preserves user Cortex-Debug configurations and replaces its generated entr
     "version": "0.2.0",
     "configurations": [
       { "name": "User Debug", "type": "cortex-debug", },
-      { "name": "CMake-Embedded OpenOCD", "type": "cortex-debug", },
+      { "name": "CMake Embedded OpenOCD", "type": "cortex-debug", },
     ],
   }`;
   const launch = JSON.parse(generateCortexDebugLaunchJson(existing, {
@@ -59,7 +59,7 @@ test('preserves user Cortex-Debug configurations and replaces its generated entr
   // The generated entry is first so a plain F5 does not run a stale config
   // another extension left behind; the user's own entries keep their order.
   assert.deepEqual(launch.configurations.map((config: { name: string }) => config.name), [
-    'CMake-Embedded OpenOCD',
+    'CMake Embedded OpenOCD',
     'User Debug'
   ]);
   assert.equal(launch.configurations[0].serverpath, 'D:\\Tools\\OpenOCD\\bin\\openocd.exe');

@@ -1,4 +1,4 @@
-# CMake-Embedded
+# CMake Embedded
 
 用于 VS Code 的 CMake 工程生成插件，支持三个互相独立的方向：
 
@@ -13,7 +13,7 @@
 
 ## 快速开始
 
-安装后在活动栏点击 **CMake-Embedded** 图标，在侧栏选择方向与目标，点击「生成工程」。
+安装后在活动栏点击 **CMake Embedded** 图标，在侧栏选择方向与目标，点击「生成工程」。
 
 - 侧栏依次选择：**厂商 → 系列 → 芯片支持包 (Pack) → 版本 → 型号**；选择结果按工作区保存。
 - MCU 页面可单独生成 `flash.py` 或 Cortex-Debug 配置；命令面板入口全部保留。
@@ -42,7 +42,7 @@ MCU 额外需要 Cortex-Debug、OpenOCD，以及 Arm GNU Toolchain
 
 **F5 立刻退出** 通常是调试器进程没启动，按顺序检查：Cortex-Debug 是否安装、
 `cmakeEmbedded.openocdPath` 是否可执行、是否先构建过 `debug` 预设、
-`arm-none-eabi-gdb` 是否在 `PATH`、调试下拉是否选中 `CMake-Embedded OpenOCD`。
+`arm-none-eabi-gdb` 是否在 `PATH`、调试下拉是否选中 `CMake Embedded OpenOCD`。
 具体原因看「调试控制台」和「终端 → gdb-server」。
 
 生成的 MCU 工程目录：

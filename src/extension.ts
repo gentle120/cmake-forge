@@ -770,7 +770,7 @@ async function mcuCorePackForGeneration(
     return { includeDir: pack.includeDir, version: pack.record.version };
   }
   void vscode.window.showWarningMessage(
-    '未安装 ARM CMSIS 内核包：生成的工程缺少 core_cm*.h，编译会失败。请点侧栏「安装内核包…」或运行「CMake-Embedded: Install ARM CMSIS Core Pack」。'
+    '未安装 ARM CMSIS 内核包：生成的工程缺少 core_cm*.h，编译会失败。请点侧栏「安装内核包…」或运行「CMake Embedded: Install ARM CMSIS Core Pack」。'
   );
   return undefined;
 }

@@ -29,7 +29,7 @@ function outputChannel(): vscode.OutputChannel | undefined {
   if (!code || typeof factory !== 'function') {
     return undefined;
   }
-  channel ??= code.window.createOutputChannel('CMake-Embedded');
+  channel ??= code.window.createOutputChannel('CMake Embedded');
   return channel;
 }
 
