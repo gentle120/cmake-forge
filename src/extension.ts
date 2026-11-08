@@ -997,6 +997,12 @@ function describeImportFailure(error: unknown): string {
   if (/no devices section|No \.pdsc file found|no family vendor/.test(raw)) {
     return '这个包的 PDSC 没有任何芯片定义（CMSIS 组件包、中间件包或板级包不含可生成的芯片）。请改用芯片厂商的 DFP 器件包。';
   }
+  // A response without a numeric status means the request never reached the
+  // server intact (intercepted proxy, captive portal, blocked TLS). Name that
+  // rather than echoing the bare `HTTP undefined`.
+  if (/\bHTTP (undefined|NaN|0)\b/.test(raw)) {
+    return '在线索引请求没有拿到 HTTP 状态码，通常是代理/VPN 或防火墙拦截了请求。请检查代理设置后重试，也可用「导入 Pack 包」导入本地 .pack。';
+  }
   // "fetch failed" is undici's wrapper; the cause carries the actionable reason.
   if (/^fetch failed$/i.test(raw.trim())) {
     const code = (error as { cause?: { code?: string } } | undefined)?.cause?.code;

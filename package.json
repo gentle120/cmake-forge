@@ -2,7 +2,7 @@
   "name": "cmake-embedded",
   "displayName": "CMake-Embedded",
   "description": "Generate ready-to-build CMake projects for desktop C/C++, MCU firmware, and Linux / SoC cross compilation.",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "publisher": "gentle120",
   "repository": {
     "type": "git",

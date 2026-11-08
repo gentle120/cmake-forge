@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.2
+
+- 修复在线安装报「Failed to fetch pack index … HTTP undefined」：请求包装器用对象
+  展开复制 `Response`，而真实的 `Response` 把 `ok`/`status`/`headers` 放在原型上，
+  展开后状态丢失，所有在线索引请求都被判为失败。现在显式复制这些字段，在线安装
+  恢复正常；下载进度与分段下载同样受益。
+- 状态码缺失时的报错改为可执行的提示（代理/VPN/防火墙拦截，或改用本地导入）。
+
 ## 2.2.1
 
 - 修复打包的 VSIX 漏带运行时依赖 `fast-xml-parser`：扩展激活失败，点击活动栏后

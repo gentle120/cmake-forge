@@ -171,3 +171,31 @@ test('times out while the response body is still loading', async () => {
   const response = await fetcher('https://example.invalid/pack');
   await assert.rejects(response.arrayBuffer(), RequestTimeoutError);
 });
+
+test('passes the real response status through the body-tracking wrapper', async () => {
+  // A real Response keeps `ok`/`status`/`headers` on the prototype, so spreading
+  // it drops them and every failure surfaces as `HTTP undefined`.
+  class PrototypeResponse {
+    readonly headers = { get: () => null };
+    readonly body = null;
+    get ok(): boolean {
+      return false;
+    }
+    get status(): number {
+      return 503;
+    }
+    async text(): Promise<string> {
+      return '';
+    }
+    async arrayBuffer(): Promise<ArrayBuffer> {
+      return new ArrayBuffer(0);
+    }
+  }
+
+  const fetcher = createTimeoutFetcher(1000, async () => new PrototypeResponse());
+  const response = await fetcher('https://example.test/index.pidx');
+
+  assert.equal(response.ok, false);
+  assert.equal(response.status, 503);
+  assert.equal(typeof response.headers.get, 'function');
+});

@@ -160,8 +160,13 @@ function watchResponseBody(
   };
   const body = response.body;
   let reader: ReturnType<FetchResponseBody['getReader']> | undefined;
+  // Copy the status fields explicitly. A real `Response` (undici, Electron) keeps
+  // `ok`/`status`/`headers` on the prototype, so an object spread copies none of
+  // them and callers would report `HTTP undefined` for every failed download.
   return {
-    ...response,
+    ok: response.ok,
+    status: response.status,
+    headers: response.headers,
     body: body ? {
       getReader() {
         reader = reader ?? body.getReader();
