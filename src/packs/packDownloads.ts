@@ -67,6 +67,8 @@ const defaultConcurrency = 8;
 const chunkSize = 1024 * 1024;
 /** Attempts per chunk before the whole download is abandoned. */
 const chunkAttempts = 5;
+/** Hard cap for a ranged download, so a bogus Content-Range cannot force a huge allocation. */
+const maxArchiveBytes = 512 * 1024 * 1024;
 /** Backoff before retrying a chunk, so a blip is not hammered through instantly. */
 const chunkRetryDelayMs = 250;
 /** Progress callbacks are throttled; more than ~10/s only floods the UI. */
@@ -200,6 +202,11 @@ async function downloadRanged(
   head: Buffer
 ): Promise<Buffer> {
   const concurrency = Math.max(1, Math.min(Math.trunc(options.concurrency ?? defaultConcurrency), 16));
+  // The archive size arrives from the server; refuse absurd values instead of
+  // allocating an attacker- or corruption-controlled buffer up front.
+  if (totalBytes > maxArchiveBytes) {
+    throw new Error(`Pack 归档过大（${totalBytes} 字节），已超过 ${maxArchiveBytes} 字节上限。`);
+  }
   const output = Buffer.alloc(totalBytes);
   head.copy(output, 0);
 
@@ -266,6 +273,11 @@ async function downloadRanged(
         } catch (error) {
           lastError = error;
           if (isCancellationError(error) || options.signal?.aborted) {
+            throw error;
+          }
+          // A timeout already waited the full timeout window; retrying every
+          // chunk would multiply it by the attempt count.
+          if (error instanceof RequestTimeoutError) {
             throw error;
           }
           if (attempt < chunkAttempts - 1) {

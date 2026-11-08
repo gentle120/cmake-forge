@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import { hasImportablePackDevice, parsePack } from '../packs/packParser';
+import { crc32 } from '../packs/crc32';
 
 const fixturePath = join(__dirname, '..', '..', 'src', 'test', 'fixtures', 'ms32f031.pack');
 
@@ -12,12 +13,14 @@ function buildZip(entries: Array<{ name: string; data: string | Buffer }>): Buff
   let offset = 0;
   for (const entry of entries) {
     const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data, 'utf8');
+    const crc = crc32(data);
     const nameBuffer = Buffer.from(entry.name, 'utf8');
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(0, 6);
     local.writeUInt16LE(0, 8);
+    local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(data.length, 18);
     local.writeUInt32LE(data.length, 22);
     local.writeUInt16LE(nameBuffer.length, 26);
@@ -28,6 +31,7 @@ function buildZip(entries: Array<{ name: string; data: string | Buffer }>): Buff
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(0, 8);
     central.writeUInt16LE(0, 10);
+    central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(data.length, 20);
     central.writeUInt32LE(data.length, 24);
     central.writeUInt16LE(nameBuffer.length, 28);
@@ -384,4 +388,78 @@ test('expands DnameVariant entries and reads the series from a subFamily', () =>
   );
   assert.ok(pack.devices.every((device) => device.series === 'MS32F0' && device.core === 'cortex-m0'));
   assert.deepEqual(pack.devices[2].interruptHandlers, ['WWDG_IRQHandler']);
+});
+
+test('expands NXP-style <variant> nodes into orderable parts', () => {
+  const pdsc = wrapPdsc(`      <device Dname="FAM">
+        <processor Dcore="Cortex-M33" Dfpu="SP_FPU"/>
+        <memory name="PROGRAM_FLASH" start="0x00000000" size="0x00010000"/>
+        <memory name="SRAM" start="0x20000000" size="0x00008000"/>
+        <variant Dvariant="FAM100"><compile header="inc/fam.h" define="FAM100"/></variant>
+        <variant Dvariant="FAM200"><compile header="inc/fam.h" define="FAM200"/></variant>
+        <debug svd="fam.svd"/>
+      </device>`);
+  const pack = parsePack(buildZip([
+    { name: 'Vendor.FAM_DFP.pdsc', data: pdsc },
+    { name: 'inc/fam.h', data: '#define FAM 1\n' },
+    { name: 'fam.svd', data: cortexSvd }
+  ]));
+
+  assert.deepEqual(pack.devices.map((device) => device.part), ['FAM100', 'FAM200']);
+  const first = pack.devices[0];
+  // `name=` memory attributes and the device-level memory map are shared by all
+  // variants; the header/define come from the variant's own <compile>.
+  assert.deepEqual(first.flash, { origin: 0, length: 0x10000 });
+  assert.deepEqual(first.ram, { origin: 0x20000000, length: 0x8000 });
+  assert.equal(first.core, 'cortex-m33');
+  assert.equal(first.header, 'fam.h');
+  assert.deepEqual(first.defines, ['FAM100']);
+});
+
+test('ignores comments and reserved slots in a startup vector table', () => {
+  const pdsc = wrapPdsc(`      <device Dname="MS32F031A6A0ZW">
+        <processor Dcore="Cortex-M0" Dfpu="0"/>
+        <memory id="IROM1" start="0x08000000" size="0x8000"/>
+        <memory id="IRAM1" start="0x20000000" size="0x2000"/>
+      </device>`);
+  const startup = `__Vectors:
+  .word _estack
+  .word Reset_Handler
+  .word 0     /* Reserved */
+  .word WWDG_IRQHandler
+  .word 0 /* Reserved */
+  .size __Vectors, .-__Vectors
+`;
+  const pack = parsePack(buildZip([
+    { name: 'Vendor.MS_DFP.pdsc', data: pdsc },
+    { name: 'startup_MS32F031A6A0ZW.S', data: startup }
+  ]));
+
+  assert.deepEqual(pack.devices[0].interruptHandlers, ['WWDG_IRQHandler']);
+});
+
+test('derives the register-file selector define from the device header', () => {
+  const pdsc = wrapPdsc(`      <device Dname="PY32F001Cx4">
+        <processor Dcore="Cortex-M0+" Dfpu="0"/>
+        <memory id="IROM1" start="0x08000000" size="0x4000"/>
+        <memory id="IRAM1" start="0x20000000" size="0xC00"/>
+        <compile header="inc/py32f0xx.h"/>
+        <debug svd="fam.svd"/>
+      </device>`);
+  const header = `#if defined(PY32F001x4)
+#include "py32f001x4.h"
+#elif defined(PY32F030x6)
+#include "py32f030x6.h"
+#else
+#error "Please select first the target"
+#endif
+`;
+  const pack = parsePack(buildZip([
+    { name: 'Vendor.PY32_DFP.pdsc', data: pdsc },
+    { name: 'inc/py32f0xx.h', data: header },
+    { name: 'fam.svd', data: cortexSvd }
+  ]));
+
+  // `x` is the vendor's package-letter wildcard: PY32F001Cx4 -> PY32F001x4.
+  assert.deepEqual(pack.devices[0].defines, ['PY32F001x4']);
 });

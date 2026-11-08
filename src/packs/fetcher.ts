@@ -1,4 +1,4 @@
-import type { FetchLike } from './fetchTypes';
+import type { FetchLike, FetchResponseBody, FetchResponseLike } from './fetchTypes';
 
 /**
  * Connection-level failures worth one more attempt. The CMSIS index host and the
@@ -98,9 +98,22 @@ export function createTimeoutFetcher(
           callerSignal.addEventListener('abort', forwardAbort, { once: true });
         }
       }
+      let cleanedUp = false;
+      const cleanup = (): void => {
+        if (cleanedUp) {
+          return;
+        }
+        cleanedUp = true;
+        clearTimeout(timer);
+        callerSignal?.removeEventListener('abort', forwardAbort);
+      };
       try {
-        return await fetchImpl(url, { ...init, signal: controller.signal });
+        const response = await fetchImpl(url, { ...init, signal: controller.signal });
+        // fetch() resolves on the response headers. Keep the timeout armed until
+        // the body is actually consumed, otherwise a stalled transfer hangs.
+        return watchResponseBody(response, timeoutMs, () => timedOut, cleanup);
       } catch (error) {
+        cleanup();
         // A timeout is a failure, not a user action: convert it before anyone can
         // mistake the shared AbortError for a cancellation.
         if (timedOut && !callerSignal?.aborted) {
@@ -110,10 +123,57 @@ export function createTimeoutFetcher(
           throw error;
         }
       } finally {
-        clearTimeout(timer);
-        callerSignal?.removeEventListener('abort', forwardAbort);
+        // Covers paths that never reached a returned response (already cleaned up
+        // idempotently). A returned response keeps the timer until its body ends.
+        if (timedOut || callerSignal?.aborted) {
+          cleanup();
+        }
       }
     }
+  };
+}
+
+/**
+ * Wraps the body accessors so the request timeout also covers the transfer.
+ *
+ * `fetch` resolves as soon as headers arrive; without the wrappers the timer
+ * would be cleared while the payload is still arriving and a stalled body could
+ * hang the install forever.
+ */
+function watchResponseBody(
+  response: FetchResponseLike,
+  timeoutMs: number,
+  timedOut: () => boolean,
+  cleanup: () => void
+): FetchResponseLike {
+  const guard = async <T>(work: Promise<T>): Promise<T> => {
+    try {
+      return await work;
+    } catch (error) {
+      if (timedOut() && !(error instanceof RequestTimeoutError)) {
+        throw new RequestTimeoutError(timeoutMs);
+      }
+      throw error;
+    } finally {
+      cleanup();
+    }
+  };
+  const body = response.body;
+  let reader: ReturnType<FetchResponseBody['getReader']> | undefined;
+  return {
+    ...response,
+    body: body ? {
+      getReader() {
+        reader = reader ?? body.getReader();
+        const current = reader;
+        return {
+          read: () => guard(current.read()),
+          releaseLock: () => current.releaseLock()
+        };
+      }
+    } : null,
+    text: () => guard(response.text()),
+    arrayBuffer: () => guard(response.arrayBuffer())
   };
 }
 

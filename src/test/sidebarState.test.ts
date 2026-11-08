@@ -47,7 +47,25 @@ test('defaults to an empty MCU selection until a Pack provides devices', () => {
   assert.equal(selection.mcu.version, '');
   assert.equal(selection.mcu.series, '');
   assert.equal(selection.mcu.part, '');
-  assert.equal(selection.flash.enabled, false);
+});
+
+test('keeps a curated vendor before its pack registry entry exists', () => {
+  // GigaDevice is curated but not registered by these fixtures, exactly the
+  // state of the registry while the first sidebar render happens: the persisted
+  // vendor must survive so the series dropdown stays selectable.
+  const selection = sanitizeSidebarSelection({
+    mode: 'mcu',
+    mcu: { vendor: 'GigaDevice', series: '' }
+  });
+
+  assert.equal(selection.mcu.vendor, 'GigaDevice');
+  assert.equal(selection.mcu.series, 'F1x');
+
+  const state = buildSidebarState('workspace', selection);
+  assert.deepEqual(state.series.map((option) => option.value), [
+    'F1x', 'F3x', 'F4x', 'E10x', 'E23x', 'E50x', 'L23x', 'W51x'
+  ]);
+  assert.equal(state.selection.mcu.series, 'F1x');
 });
 
 test('a persisted builtin selection collapses to an empty MCU column', () => {
@@ -103,8 +121,7 @@ test('replaces stale MCU values with empty fields when no Pack owns the selectio
     mode: 'linux',
     mcu: { vendor: 'bad', packId: 'bad', series: 'bad', part: 'bad' },
     linux: { toolchainFamily: 'bad' },
-    debugEnabled: 'yes',
-    flash: { enabled: true, targetId: 'bad', probeId: 'bad', openocdPath: '  ' }
+    flash: { targetId: 'bad', probeId: 'bad', openocdPath: '  ' }
   });
 
   assert.equal(selection.mode, 'linux');
@@ -113,8 +130,6 @@ test('replaces stale MCU values with empty fields when no Pack owns the selectio
   assert.equal(selection.mcu.series, '');
   assert.equal(selection.mcu.part, '');
   assert.equal(selection.linux.toolchainFamily, 'loongson');
-  assert.equal(selection.debugEnabled, false);
-  assert.equal(selection.flash.enabled, false);
   assert.equal(selection.flash.probeId, 'stlink');
   assert.equal(selection.flash.openocdPath, 'openocd');
 });
@@ -251,7 +266,8 @@ test('a series persisted as the pack Dfamily text renders under its catalog id',
     assert.deepEqual(state.series.map((option) => option.label), [
       'STM32F0', 'STM32F1', 'STM32F2', 'STM32F3', 'STM32F4', 'STM32F7',
       'STM32G0', 'STM32G4', 'STM32H7', 'STM32L0', 'STM32L1', 'STM32L4',
-      'STM32L5', 'STM32U5', 'STM32WB', 'STM32WL'
+      'STM32L5', 'STM32U5', 'STM32WB', 'STM32WL', 'STM32C0', 'STM32H5',
+      'STM32U0', 'STM32WBA'
     ]);
   } finally {
     unregisterDeviceProfilesByPack(packFile);
@@ -499,4 +515,43 @@ test('a persisted profile owner that contradicts the selected Pack is corrected'
   } finally {
     unregisterDeviceProfilesByPack('packs/STM/B_DFP.pack');
   }
+});
+
+test('keeps the persisted Pack selection until the catalog has loaded', () => {
+  const selection = sanitizeSidebarSelection({
+    mode: 'mcu',
+    mcu: {
+      vendor: 'GD',
+      packId: 'GD:GD32F10x_DFP',
+      version: '2.0.3',
+      sourcePack: 'packs/GigaDevice/GigaDevice.GD32F10x_DFP.2.0.3.pack',
+      series: 'GD32F1',
+      part: 'GD32F101C4'
+    }
+  }, undefined, [], true);
+
+  // Before the Pack catalog arrives there is nothing to validate against; the
+  // values must survive so the panel does not reset on every host start.
+  assert.equal(selection.mcu.packId, 'GD:GD32F10x_DFP');
+  assert.equal(selection.mcu.version, '2.0.3');
+  assert.equal(selection.mcu.part, 'GD32F101C4');
+  assert.equal(selection.mcu.sourcePack, 'packs/GigaDevice/GigaDevice.GD32F10x_DFP.2.0.3.pack');
+
+  // Once the catalog is known, the same value is validated normally.
+  const validated = sanitizeSidebarSelection({
+    mcu: { vendor: 'GD', packId: 'GD:GD32F10x_DFP', version: '2.0.3', series: 'GD32F1', part: 'GD32F101C4' }
+  }, undefined, [], false);
+  assert.equal(validated.mcu.packId, '');
+});
+
+test('trims the persisted Linux sysroot', () => {
+  const selection = sanitizeSidebarSelection({
+    mode: 'linux',
+    linux: { toolchainFamily: 'arm', targetType: 'shared', sysroot: '  /opt/sysroot  ' }
+  });
+  assert.equal(selection.linux.sysroot, '/opt/sysroot');
+  assert.equal(selection.linux.targetType, 'shared');
+
+  const cleared = sanitizeSidebarSelection({ mode: 'linux', linux: { sysroot: '' } });
+  assert.equal(cleared.linux.sysroot, '');
 });

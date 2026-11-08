@@ -1,6 +1,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import type { AdditionalMemoryRegion, MemoryRegion } from '../devices/deviceProfiles';
 import { readZipEntries } from './zipReader';
+import { isDeviceSupportEntry } from './deviceSupport';
 
 export interface PackDeviceCandidate {
   part: string;
@@ -8,6 +9,8 @@ export interface PackDeviceCandidate {
   series: string;
   core: string;
   fpu: string;
+  /** Device header basename declared by `<compile header="...">`, if any. */
+  header?: string;
   flash: MemoryRegion;
   ram: MemoryRegion;
   additionalMemory: AdditionalMemoryRegion[];
@@ -90,6 +93,35 @@ const RAM_MEMORY_IDS: Record<string, true> = {
   SRAM: true
 };
 
+/**
+ * Classifies a PDSC `<memory id>`.
+ *
+ * Vendors do not stick to CMSIS' short ids: NXP uses `PROGRAM_FLASH` and
+ * `SRAM`, some packs add `FLASH_BANK1`/`ROM_2` or `DTCM`. Without this the
+ * profile validation rejects the whole pack ("flash memory region is invalid").
+ */
+function classifyMemory(id: string): 'flash' | 'ram' | 'other' {
+  const upper = id.toUpperCase();
+  if (FLASH_MEMORY_IDS[upper]) {
+    return 'flash';
+  }
+  if (RAM_MEMORY_IDS[upper]) {
+    return 'ram';
+  }
+  if (/(^|_)(FLASH|ROM)(_|$)/.test(upper) || upper.includes('FLASH')) {
+    return 'flash';
+  }
+  if (upper.includes('RAM') || upper.includes('IRAM')) {
+    return 'ram';
+  }
+  return 'other';
+}
+
+/** Extra RAM names that are not the main SRAM (USB buffers, external SDRAM…). */
+function isSecondaryRam(upperId: string): boolean {
+  return /SDRAM|PSRAM|EXTERNAL|USB|BACKUP|RETENTION|CCM|OCRAM2/.test(upperId);
+}
+
 type XmlNode = Record<string, unknown>;
 
 interface ProcessorAttributes {
@@ -148,7 +180,8 @@ export function isPackDeviceSourceEntry(name: string): boolean {
   const lower = name.toLowerCase();
   return lower.endsWith('.pdsc')
     || lower.endsWith('.svd')
-    || /(^|\/)startup[^/]*\.s$/.test(lower);
+    || /(^|\/)startup[^/]*\.s$/.test(lower)
+    || isDeviceSupportEntry(name);
 }
 
 /**
@@ -231,7 +264,7 @@ export function parsePackEntries(entries: Array<{ name: string; data: Buffer }>)
     throw new Error('PDSC has no devices section');
   }
 
-  const vendorName = textOf(families[0]['@_Dvendor']);
+  const vendorName = textOf(families[0]['@_Dvendor']) ?? textOf(packageNode.vendor);
   if (!vendorName) {
     throw new Error('PDSC has no family vendor (Dvendor)');
   }
@@ -240,21 +273,23 @@ export function parsePackEntries(entries: Array<{ name: string; data: Buffer }>)
   for (const family of families) {
     const familyName = textOf(family['@_Dfamily']) ?? textOf(family['@_Dname']) ?? '';
     const familyDefines = definesFromCompileNodes(family);
+    const familyHeader = headerFromCompileNodes(family);
     // <processor Dcore> may sit on the family or subFamily instead of the
     // device (Sinomcu and other vendor packs do this); devices inherit it.
     const familyProcessor = processorAttributes(family);
     for (const device of asNodeArray(family.device)) {
-      collectDeviceCandidates(entries, device, familyName, familyName, familyDefines, familyProcessor, devices);
+      collectDeviceCandidates(entries, device, familyName, familyName, familyDefines, familyHeader, familyProcessor, devices);
     }
     for (const subFamily of asNodeArray(family.subFamily)) {
       const subFamilyName = textOf(subFamily['@_Dname']) ?? '';
       const subFamilyDefines = [...familyDefines, ...definesFromCompileNodes(subFamily)];
+      const subFamilyHeader = headerFromCompileNodes(subFamily) ?? familyHeader;
       const subFamilyProcessor = {
         ...familyProcessor,
         ...processorAttributes(subFamily)
       };
       for (const device of asNodeArray(subFamily.device)) {
-        collectDeviceCandidates(entries, device, familyName, subFamilyName || familyName, subFamilyDefines, subFamilyProcessor, devices);
+        collectDeviceCandidates(entries, device, familyName, subFamilyName || familyName, subFamilyDefines, subFamilyHeader, subFamilyProcessor, devices);
       }
     }
   }
@@ -287,6 +322,7 @@ function collectDeviceCandidates(
   familyName: string,
   seriesName: string,
   inheritedDefines: string[],
+  inheritedHeader: string | undefined,
   inheritedProcessor: ProcessorAttributes,
   out: PackDeviceCandidate[]
 ): void {
@@ -306,6 +342,7 @@ function collectDeviceCandidates(
   // Vendor packs mark "no FPU" inconsistently: NO_FPU, 0, or omission.
   const fpu = dfpu === '' || dfpu === 'NO_FPU' || dfpu === '0' ? '' : dfpu;
 
+  const header = headerFromCompileNodes(device) ?? inheritedHeader;
   const names = [baseName, ...variantNames].filter((name) => name.length > 0);
   const partNames = names.length > 0 ? names : [''];
   if (!core) {
@@ -316,6 +353,7 @@ function collectDeviceCandidates(
         series: seriesName,
         core: '',
         fpu: '',
+        header,
         flash: { origin: 0, length: 0 },
         ram: { origin: 0, length: 0 },
         additionalMemory: [],
@@ -327,24 +365,92 @@ function collectDeviceCandidates(
   }
 
   const memory = collectMemoryRegions(device);
-  const defines = dedupePreservingOrder([...inheritedDefines, ...definesFromCompileNodes(device)]);
-  const interruptHandlers = resolveInterruptHandlers(entries, device, baseName);
+  const deviceDefines = dedupePreservingOrder([...inheritedDefines, ...definesFromCompileNodes(device)]);
 
-  for (const part of names) {
-    out.push({
+  // NXP and Microchip name the real orderable parts with nested
+  // `<variant Dvariant="…">` nodes that carry their own `<compile>` header and
+  // define; the enclosing `<device Dname>` is only the family grouping.
+  const variants = asNodeArray(device.variant);
+  const partEntries: Array<{ part: string; header: string | undefined; defines: string[] }> = [];
+  for (const variant of variants) {
+    const part = textOf(variant['@_Dvariant']) ?? '';
+    if (!part) {
+      continue;
+    }
+    partEntries.push({
       part,
+      header: headerFromCompileNodes(variant) ?? header,
+      defines: dedupePreservingOrder([...deviceDefines, ...definesFromCompileNodes(variant)])
+    });
+  }
+  if (partEntries.length === 0) {
+    for (const part of names) {
+      partEntries.push({ part, header, defines: dedupePreservingOrder(deviceDefines) });
+    }
+  }
+
+  for (const entry of partEntries) {
+    const interruptHandlers = resolveInterruptHandlers(entries, device, entry.part)
+      ?? resolveInterruptHandlers(entries, device, baseName);
+    out.push({
+      part: entry.part,
       family: familyName,
       series: seriesName,
       core,
       fpu,
+      header: entry.header,
       flash: memory.flash,
       ram: memory.ram,
       additionalMemory: memory.additional,
-      defines,
+      defines: withSelectorDefine(entries, entry.header, entry.part, entry.defines),
       interruptHandlers,
       error: interruptHandlers ? undefined : 'no interrupt source'
     });
   }
+}
+
+/**
+ * Adds the part name as a preprocessor define when the device header selects
+ * its register file with `defined(PART)` guards and the PDSC forgot to declare
+ * `<compile define>` (Puya's PY32F0xx does exactly this).
+ */
+function withSelectorDefine(
+  entries: Array<{ name: string; data: Buffer }>,
+  header: string | undefined,
+  part: string,
+  defines: string[]
+): string[] {
+  if (!header || defines.length > 0 || part.length === 0) {
+    return defines;
+  }
+  const base = header.replace(/\\/g, '/').split('/').pop()?.toLowerCase() ?? '';
+  const entry = entries.find((candidate) =>
+    candidate.name.replace(/\\/g, '/').split('/').pop()?.toLowerCase() === base
+  );
+  if (!entry) {
+    return defines;
+  }
+  const text = entry.data.toString('utf8');
+  if (new RegExp(`defined\\s*\\(\\s*${part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\)`).test(text)) {
+    return [part];
+  }
+  // Vendor selector chains use a package wildcard: `#if defined(PY32F001x4)`
+  // serves Dname `PY32F001Cx4` (the `x` covers the package letter). Accept the
+  // longest `defined(TOKEN)` whose `x` wildcards match the part exactly.
+  const tokens = new Set<string>();
+  for (const match of text.matchAll(/defined\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)/g)) {
+    tokens.add(match[1]);
+  }
+  const wildcardMatch = [...tokens]
+    .filter((token) => {
+      const pattern = `^${[...token].map((char) =>
+        (char === 'x' || char === 'X'
+          ? '[A-Za-z0-9]+'
+          : char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('')}$`;
+      return new RegExp(pattern, 'i').test(part);
+    })
+    .sort((left, right) => right.length - left.length)[0];
+  return wildcardMatch ? [wildcardMatch] : defines;
 }
 
 function collectMemoryRegions(device: XmlNode): {
@@ -354,11 +460,12 @@ function collectMemoryRegions(device: XmlNode): {
 } {
   let flash: MemoryRegion = { origin: 0, length: 0 };
   let hasFlash = false;
-  const ramCandidates: Array<MemoryRegion & { access: AdditionalMemoryRegion['attributes'] }> = [];
+  const ramCandidates: Array<MemoryRegion & { id: string; access: AdditionalMemoryRegion['attributes'] }> = [];
   const additional: AdditionalMemoryRegion[] = [];
 
   for (const memoryNode of asNodeArray(device.memory)) {
-    const id = textOf(memoryNode['@_id']) ?? `MEM${additional.length + 1}`;
+    // CMSIS names the region `id`; NXP and Microchip use `name`.
+    const id = textOf(memoryNode['@_id']) ?? textOf(memoryNode['@_name']) ?? `MEM${additional.length + 1}`;
     const origin = numberValue(memoryNode['@_start']);
     const length = numberValue(memoryNode['@_size']);
     if (origin === undefined || length === undefined || length <= 0) {
@@ -369,8 +476,13 @@ function collectMemoryRegions(device: XmlNode): {
     const access = (textOf(memoryNode['@_access']) ?? '').toLowerCase();
     const attributes: AdditionalMemoryRegion['attributes'] =
       access === 'rx' || access === 'rwx' ? access : 'rw';
-    const upperId = id.toUpperCase();
-    if (FLASH_MEMORY_IDS[upperId]) {
+    // `alias` regions repeat another region at a second address; the startup and
+    // linker must use one of them, not both.
+    if (memoryNode['@_alias']) {
+      continue;
+    }
+    const kind = classifyMemory(id);
+    if (kind === 'flash') {
       // The first ROM-class region is the boot flash; later banks become extra.
       if (!hasFlash) {
         flash = { origin, length };
@@ -378,16 +490,23 @@ function collectMemoryRegions(device: XmlNode): {
       } else {
         additional.push({ name: id, attributes, origin, length });
       }
-    } else if (RAM_MEMORY_IDS[upperId]) {
-      ramCandidates.push({ origin, length, access: attributes });
+    } else if (kind === 'ram') {
+      ramCandidates.push({ id, origin, length, access: attributes });
     } else {
       additional.push({ name: id, attributes, origin, length });
     }
   }
 
+  // The main SRAM is the largest RAM-class region, but USB/SDRAM buffers and
+  // CCM regions must not win that comparison. Only fall back to the full pool
+  // when every region looks secondary (odd vendor naming).
+  const ramPool = ramCandidates.some((candidate) => !isSecondaryRam(candidate.id.toUpperCase()))
+    ? ramCandidates.filter((candidate) => !isSecondaryRam(candidate.id.toUpperCase()))
+    : ramCandidates;
   let ramIndex = -1;
-  for (let index = 0; index < ramCandidates.length; index += 1) {
-    if (ramIndex === -1 || ramCandidates[index].length > ramCandidates[ramIndex].length) {
+  for (const candidate of ramPool) {
+    const index = ramCandidates.indexOf(candidate);
+    if (ramIndex === -1 || candidate.length > ramCandidates[ramIndex].length) {
       ramIndex = index;
     }
   }
@@ -396,7 +515,15 @@ function collectMemoryRegions(device: XmlNode): {
     : { origin: ramCandidates[ramIndex].origin, length: ramCandidates[ramIndex].length };
   for (const [index, candidate] of ramCandidates.entries()) {
     if (index !== ramIndex) {
-      additional.push({ name: 'RAM_EXTRA', attributes: candidate.access, origin: candidate.origin, length: candidate.length });
+      // Keep the vendor's own name for extra banks (TCMSRAM, QRAM) when it is
+      // usable as a linker region; only collisions get the generic fallback.
+      const upperId = candidate.id.trim().toUpperCase();
+      const reserved = upperId === '' || upperId === 'RAM' || upperId === 'FLASH'
+        || additional.some((region) => region.name === candidate.id);
+      const suffix = reserved
+        ? (additional.some((region) => region.name === 'RAM_EXTRA') ? `RAM_EXTRA${index}` : 'RAM_EXTRA')
+        : candidate.id;
+      additional.push({ name: suffix, attributes: candidate.access, origin: candidate.origin, length: candidate.length });
     }
   }
   return { flash, ram, additional };
@@ -492,7 +619,12 @@ function collectStartupCandidates(
 }
 
 function interruptsFromStartupFile(startup: string): string[] {
-  const lines = startup.split(/\r?\n/);
+  // Strip comments first: vendor tables write `DCD 0 /* Reserved */`, and the
+  // trailing comment would otherwise become an "interrupt handler" name.
+  const lines = startup
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '')
+    .split(/\r?\n/);
   const startIndex = lines.findIndex((line) => /^\s*(g_pfnVectors|__Vectors):/.test(line));
   if (startIndex < 0) {
     return [];
@@ -534,6 +666,23 @@ function definesFromCompileNodes(node: XmlNode): string[] {
   return defines;
 }
 
+/**
+ * Device header basename declared by a `<compile header="...">` node.
+ *
+ * The header is what the user's `#include "gd32f10x.h"` resolves to; it is also
+ * the anchor for the `system_<stem>.h`/`.c` support files the generated project
+ * copies, so the first declaration wins (device before family).
+ */
+function headerFromCompileNodes(node: XmlNode): string | undefined {
+  for (const compile of asNodeArray(node.compile)) {
+    const header = textOf(compile['@_header']);
+    if (header) {
+      return header.split(/[\\/]/).pop() ?? header;
+    }
+  }
+  return undefined;
+}
+
 function dedupePreservingOrder(values: string[]): string[] {
   return [...new Set(values)];
 }
@@ -568,7 +717,14 @@ function numberValue(value: unknown): number | undefined {
     return Number.isInteger(value) ? value : undefined;
   }
   if (typeof value === 'string') {
-    const parsed = parseInt(value, 0);
+    // PDSC sizes are plain decimal or 0x-prefixed hex. `parseInt(value, 0)`
+    // silently turns a unit-suffixed value such as `1M` into 1, which would
+    // shrink a memory region by a factor of a million, so anything that is not
+    // a complete number is rejected instead.
+    const text = value.trim();
+    const parsed = /^0x[0-9a-f]+$/i.test(text)
+      ? Number.parseInt(text.slice(2), 16)
+      : /^\d+$/.test(text) ? Number(text) : Number.NaN;
     return Number.isInteger(parsed) ? parsed : undefined;
   }
   return undefined;

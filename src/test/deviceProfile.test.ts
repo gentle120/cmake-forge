@@ -186,7 +186,6 @@ test('pack choices preserve origin and every selectable version', () => {
     online: [{
       name: 'STM32F1xx_DFP',
       version: '1.2.0',
-      description: 'STM32 F1 device family',
       packUrl: 'https://packs.example/STM32F1xx_DFP.1.2.0.pack',
       vendorName: 'STMicroelectronics'
     }]
@@ -321,7 +320,6 @@ test('an installed version is not duplicated by a downloadable entry of the same
     online: [{
       name: 'STM32F1xx_DFP',
       version: '1.1.0',
-      description: 'same version',
       packUrl: 'https://packs.example/STM32F1xx_DFP.1.1.0.pack',
       vendorName: 'STMicroelectronics'
     }]

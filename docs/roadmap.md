@@ -14,4 +14,5 @@ This file is a compact relay ledger, not a history log. Stable facts belong in `
 
 ## Next Batch
 
-- Objective: None scheduled.
+- Objective: 按需补充精选厂商/系列，并用真实 DFP 验证生成工程编译（大 Pack 走镜像或本地导入）。
+- Status: `ready`

@@ -296,3 +296,16 @@ test('lists the remembered family first and marks it', () => {
   assert.deepEqual(choices.map((choice) => choice.remembered), [true, false, false, false]);
   assert.match(choices[0].detail, /^Last used/);
 });
+
+test('writes CMAKE_SYSROOT and find-root modes when a sysroot is selected', () => {
+  const file = generateLinuxToolchainFile(createLinuxToolchain('arm', { sysroot: '/opt/arm-sysroot' }));
+
+  assert.match(file, /set\(CMAKE_SYSROOT "\/opt\/arm-sysroot"\)/);
+  assert.match(file, /set\(CMAKE_FIND_ROOT_PATH "\$\{CMAKE_SYSROOT\}"\)/);
+  assert.match(file, /CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER/);
+  assert.match(file, /CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY/);
+});
+
+test('omits the sysroot block when no sysroot is selected', () => {
+  assert.doesNotMatch(generateLinuxToolchainFile(createLinuxToolchain('arm')), /CMAKE_SYSROOT/);
+});

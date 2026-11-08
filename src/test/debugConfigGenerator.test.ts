@@ -27,6 +27,19 @@ test('generates a standard Cortex-Debug OpenOCD launch configuration', () => {
   assert.equal(config.runToEntryPoint, 'main');
 });
 
+test('uses the concrete preset ELF path when the generator supplies one', () => {
+  const launch = JSON.parse(generateCortexDebugLaunchJson(undefined, {
+    openocdPath: 'openocd',
+    target: getFlashTargetProfile('stm32f1xx'),
+    probe: getFlashProbeProfile('stlink'),
+    executable: '${workspaceFolder}/build/debug/project.elf'
+  }));
+  // `${command:cmake.launchTargetPath}` is empty when CMake Tools has no launch
+  // target (for example in the Extension Development Host); the presets always
+  // build into build/debug, so the concrete path always resolves.
+  assert.equal(launch.configurations[0].executable, '${workspaceFolder}/build/debug/project.elf');
+});
+
 test('preserves user Cortex-Debug configurations and replaces its generated entry', () => {
   const existing = `{
     // Keep user configurations and JSONC comments valid.
@@ -43,14 +56,16 @@ test('preserves user Cortex-Debug configurations and replaces its generated entr
     searchDirs: ['D:\\Tools\\OpenOCD\\scripts']
   }));
 
+  // The generated entry is first so a plain F5 does not run a stale config
+  // another extension left behind; the user's own entries keep their order.
   assert.deepEqual(launch.configurations.map((config: { name: string }) => config.name), [
-    'User Debug',
-    'CMake-Embedded OpenOCD'
+    'CMake-Embedded OpenOCD',
+    'User Debug'
   ]);
-  assert.equal(launch.configurations[1].serverpath, 'D:\\Tools\\OpenOCD\\bin\\openocd.exe');
-  assert.equal(launch.configurations[1].cwd, '${workspaceRoot}');
-  assert.deepEqual(launch.configurations[1].searchDir, ['D:\\Tools\\OpenOCD\\scripts']);
-  assert.deepEqual(launch.configurations[1].configFiles, [
+  assert.equal(launch.configurations[0].serverpath, 'D:\\Tools\\OpenOCD\\bin\\openocd.exe');
+  assert.equal(launch.configurations[0].cwd, '${workspaceRoot}');
+  assert.deepEqual(launch.configurations[0].searchDir, ['D:\\Tools\\OpenOCD\\scripts']);
+  assert.deepEqual(launch.configurations[0].configFiles, [
     'interface/jlink.cfg',
     'target/stm32f4x.cfg'
   ]);

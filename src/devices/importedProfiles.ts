@@ -1,7 +1,17 @@
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve, sep } from 'node:path';
-import { parsePack, parsePackEntries, isPackDeviceSourceEntry, type PackDeviceCandidate } from '../packs/packParser';
+import {
+  parsePackEntries,
+  isPackDeviceSourceEntry,
+  type PackDeviceCandidate
+} from '../packs/packParser';
 import { findAdjacentPackArchive, readDirectoryEntries } from '../packs/packFs';
+import {
+  annotateDeviceHeaders,
+  removeDeviceSupportSnapshot,
+  writeDeviceSupportSnapshot
+} from '../packs/deviceSupport';
+import { readZipEntries } from '../packs/zipReader';
 import {
   packNameFromFileName,
   packVendorDisplayName,
@@ -24,6 +34,11 @@ export interface ImportedPackRecord {
   source: 'archive' | 'directory';
   /** Absolute path to the real .pack archive used by pyOCD, when available. */
   archiveFile?: string;
+  /**
+   * Directory a directory-sourced Pack was imported from. Kept so the device
+   * support snapshot can be rebuilt when the record predates it.
+   */
+  sourceRoot?: string;
   vendorName: string;
   importedAt: string;
   parts: string[];
@@ -71,7 +86,9 @@ export async function importPack(
   metadata?: PackIdentityMetadata
 ): Promise<ImportPackResult> {
   return queueStoreWrite(storageRoot, async () => {
-    const { vendorName, devices } = parsePack(buffer, isPackDeviceSourceEntry);
+    const entries = readZipEntries(buffer, isPackDeviceSourceEntry);
+    const { vendorName, devices } = parsePackEntries(entries);
+    annotateDeviceHeaders(devices, entries);
     return importParsedPack(
       devices,
       vendorName,
@@ -81,6 +98,8 @@ export async function importPack(
       async (packDir, packFile) => {
         await writeFile(join(packDir, packFile), buffer);
       },
+      entries,
+      undefined,
       undefined,
       metadata
     );
@@ -100,10 +119,22 @@ export async function importPackDirectory(
   return queueStoreWrite(storageRoot, async () => {
     const entries = await readDirectoryEntries(root, isPackDeviceSourceEntry);
     const { vendorName, devices } = parsePackEntries(entries);
+    annotateDeviceHeaders(devices, entries);
     const fileName = basename(pdscPath).replace(/\.pdsc$/i, '.pack');
-    return importParsedPack(devices, vendorName, fileName, storageRoot, SOURCE_DIRECTORY, async () => {
-      // Directory packs stay where the pack manager put them.
-    }, await findAdjacentPackArchive(root), metadata);
+    return importParsedPack(
+      devices,
+      vendorName,
+      fileName,
+      storageRoot,
+      SOURCE_DIRECTORY,
+      async () => {
+        // Directory packs stay where the pack manager put them.
+      },
+      entries,
+      await findAdjacentPackArchive(root),
+      root,
+      metadata
+    );
   });
 }
 
@@ -170,6 +201,16 @@ function copyRecord(record: ImportedPackRecord, storageRoot: string): ImportedPa
   };
 }
 
+/** True when the Pack ships the header a device declares. */
+function packContainsHeader(entries: Array<{ name: string }>, header: string): boolean {
+  const normalized = header.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+  const base = normalized.split('/').pop() ?? normalized;
+  return entries.some((entry) => {
+    const name = entry.name.replace(/\\/g, '/').toLowerCase();
+    return name === normalized || name.endsWith(`/${base}`) || name.split('/').pop() === base;
+  });
+}
+
 async function importParsedPack(
   devices: PackDeviceCandidate[],
   vendorName: string,
@@ -177,7 +218,9 @@ async function importParsedPack(
   storageRoot: string,
   source: 'archive' | 'directory',
   storePackFile: (packDir: string, packFile: string) => Promise<void>,
+  entries: Array<{ name: string; data: Buffer }>,
   archiveFile?: string,
+  sourceRoot?: string,
   metadata?: PackIdentityMetadata
 ): Promise<ImportPackResult> {
   const vendorLabel = packVendorDisplayName(vendorName);
@@ -202,6 +245,10 @@ async function importParsedPack(
       result.skipped.push({ part: device.part || '(unnamed device)', reason: 'no interrupt source' });
       continue;
     }
+    if (device.header && !packContainsHeader(entries, device.header)) {
+      result.skipped.push({ part: device.part, reason: `device header ${device.header} is missing from the Pack` });
+      continue;
+    }
     const profile = packDeviceToProfile(device, vendorId, vendorLabel);
     try {
       validateDeviceProfile(profile);
@@ -221,6 +268,9 @@ async function importParsedPack(
   const packDir = join(storageRoot, 'packs', vendorId);
   await mkdir(packDir, { recursive: true });
   await storePackFile(packDir, packFile);
+  // Snapshot the device header and system files next to the archive: a later
+  // generation must not depend on the Pack install still being available.
+  await writeDeviceSupportSnapshot(storageRoot, packFilePath, entries);
 
   store.packs = store.packs.filter((record) => record.packFile !== packFilePath);
   store.profiles = store.profiles.filter((stored) => stored.packFile !== packFilePath);
@@ -234,6 +284,7 @@ async function importParsedPack(
       : source === SOURCE_ARCHIVE
         ? runtimeArchivePath(storageRoot, packFilePath)
         : undefined,
+    sourceRoot,
     vendorName: vendorLabel,
     importedAt: new Date().toISOString(),
     parts: result.imported
@@ -322,7 +373,20 @@ export async function removePack(storageRoot: string, packFile: string): Promise
         await rm(packPath, { force: true });
       }
     }
+    await removeDeviceSupportSnapshot(storageRoot, normalized);
   });
+}
+
+/**
+ * Driver-library switches a DFP may declare.
+ *
+ * The generated project ships the device header, not the vendor's StdPeriph
+ * library, so keeping `USE_STDPERIPH_DRIVER` makes the device header include a
+ * `*_conf.h` that pulls in driver headers which are intentionally absent.
+ * Users who add their own driver folder add the define back themselves.
+ */
+function withoutDriverSwitches(defines: string[]): string[] {
+  return defines.filter((define) => !/^USE_(STD|STANDARD)_?PERIPH(ERAL)?_DRIVER$/i.test(define));
 }
 
 function packDeviceToProfile(device: PackDeviceCandidate, vendorId: string, vendorName: string): DeviceProfile {
@@ -334,7 +398,7 @@ function packDeviceToProfile(device: PackDeviceCandidate, vendorId: string, vend
     core: device.core,
     architecture: 'arm',
     toolchainPrefix: 'arm-none-eabi',
-    defines: [...device.defines],
+    defines: withoutDriverSwitches(device.defines),
     compilerFlags: compilerFlagsFor(device.core, device.fpu),
     flash: { ...device.flash },
     ram: { ...device.ram },
@@ -343,12 +407,13 @@ function packDeviceToProfile(device: PackDeviceCandidate, vendorId: string, vend
     gnuStartupFileName: `startup_${device.part}.S`,
     toolchainFileName: `${packVendorId(vendorName + device.family).toLowerCase()}-toolchain.cmake`,
     interruptHandlers: [...(device.interruptHandlers ?? [])],
-    debugTarget: debugTargetForSeries(device.series)
+    debugTarget: debugTargetForSeries(device.series, vendorId),
+    deviceHeader: device.header
   };
 }
 
 /** Cores that can carry an FPU at all; a Dfpu claim on other cores is pack junk. */
-const FPU_CAPABLE_CORES = new Set(['cortex-m4', 'cortex-m7', 'cortex-m33', 'cortex-m35p', 'cortex-m55']);
+const FPU_CAPABLE_CORES = new Set(['cortex-m4', 'cortex-m7', 'cortex-m33', 'cortex-m35p', 'cortex-m52', 'cortex-m55', 'cortex-m85']);
 
 function compilerFlagsFor(core: string, fpu: string): string[] {
   const flags = [`-mcpu=${core}`, '-mthumb'];
@@ -367,7 +432,18 @@ function compilerFlagsFor(core: string, fpu: string): string[] {
   return flags;
 }
 
-function debugTargetForSeries(series: string): string | undefined {
+function debugTargetForSeries(series: string, vendorId: string): string | undefined {
+  // Only ST and GigaDevice publish DFP families whose OpenOCD target names are
+  // known here. Third-party STM32-compatible vendors must not inherit an ST
+  // target just because their series text happens to start with `STM32`.
+  const vendor = vendorId.toLowerCase();
+  const knownVendor = vendor.includes('stmicro')
+    || vendor === 'st'
+    || vendor.includes('gigadevice')
+    || vendor === 'gd';
+  if (!knownVendor) {
+    return undefined;
+  }
   // OpenOCD names the L0/L1 targets without the trailing x. GD32 families use
   // the same Cortex-M peripherals as their STM32 counterparts, so the GD32
   // prefix bridges to the matching STM32 target config.
@@ -486,13 +562,31 @@ async function writeStore(storageRoot: string, store: PackStoreFile): Promise<vo
       await rename(temporary, target);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      // POSIX replaces atomically; Windows reports EEXIST/EPERM and needs no target left behind.
-      if (code === 'EEXIST' || code === 'EPERM') {
-        await rm(target, { force: true });
-      } else {
+      if (code !== 'EEXIST' && code !== 'EPERM') {
         throw error;
       }
-      await rename(temporary, target);
+      // Windows cannot rename over an existing file. Move the current store
+      // aside first and restore it when the new one cannot be installed, so a
+      // failure never leaves the Pack store missing.
+      const backup = `${target}.${process.pid}.${Date.now()}.bak`;
+      let backedUp = false;
+      try {
+        await rename(target, backup);
+        backedUp = true;
+      } catch {
+        // No current store (or it vanished): nothing to back up.
+      }
+      try {
+        await rename(temporary, target);
+      } catch (installError) {
+        if (backedUp) {
+          await rename(backup, target).catch(() => {});
+        }
+        throw installError;
+      }
+      if (backedUp) {
+        await rm(backup, { force: true });
+      }
     }
   } catch (error) {
     await rm(temporary, { force: true });

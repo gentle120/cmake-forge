@@ -4,15 +4,13 @@ export interface FlashProbeProfile {
   id: FlashProbeId;
   label: string;
   interfaceConfig: string;
-  /** Probe identifier understood by pyOCD; undefined when pyOCD cannot drive the probe. */
-  pyocdProbe?: string;
 }
 
 const flashProbeProfiles: FlashProbeProfile[] = [
   { id: 'jlink-ob', label: 'J-Link OB', interfaceConfig: 'interface/jlink.cfg' },
   { id: 'jlink', label: 'J-Link', interfaceConfig: 'interface/jlink.cfg' },
-  { id: 'stlink', label: 'ST-Link', interfaceConfig: 'interface/stlink.cfg', pyocdProbe: 'stlink' },
-  { id: 'daplink', label: 'DapLink', interfaceConfig: 'interface/cmsis-dap.cfg', pyocdProbe: 'cmsis-dap' }
+  { id: 'stlink', label: 'ST-Link', interfaceConfig: 'interface/stlink.cfg' },
+  { id: 'daplink', label: 'DapLink', interfaceConfig: 'interface/cmsis-dap.cfg' }
 ];
 
 export function listFlashProbeProfiles(): FlashProbeProfile[] {

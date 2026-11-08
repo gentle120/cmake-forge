@@ -38,14 +38,77 @@ const STM32_SERIES: Array<[string, string]> = [
   ['F0x', 'STM32F0'], ['F1x', 'STM32F1'], ['F2x', 'STM32F2'], ['F3x', 'STM32F3'],
   ['F4x', 'STM32F4'], ['F7x', 'STM32F7'], ['G0x', 'STM32G0'], ['G4x', 'STM32G4'],
   ['H7x', 'STM32H7'], ['L0x', 'STM32L0'], ['L1x', 'STM32L1'], ['L4x', 'STM32L4'],
-  ['L5x', 'STM32L5'], ['U5x', 'STM32U5'], ['WBx', 'STM32WB'], ['WLx', 'STM32WL']
+  ['L5x', 'STM32L5'], ['U5x', 'STM32U5'], ['WBx', 'STM32WB'], ['WLx', 'STM32WL'],
+  ['C0x', 'STM32C0'], ['H5x', 'STM32H5'], ['U0x', 'STM32U0'], ['WBAx', 'STM32WBA']
 ];
 
 const GD32_SERIES: Array<[string, string, string]> = [
   ['F1x', 'GD32F1', 'GD32F10x_DFP'],
   ['F3x', 'GD32F3', 'GD32F30x_DFP'],
-  ['F4x', 'GD32F4', 'GD32F4xx_DFP']
+  ['F4x', 'GD32F4', 'GD32F4xx_DFP'],
+  ['E10x', 'GD32E10', 'GD32E10x_DFP'],
+  ['E23x', 'GD32E23', 'GD32E23x_DFP'],
+  ['E50x', 'GD32E50', 'GD32E50x_DFP'],
+  ['L23x', 'GD32L23', 'GD32L23x_DFP'],
+  ['W51x', 'GD32W51', 'GD32W51x_DFP']
 ];
+
+/**
+ * `[series id, label, part prefix, DFP pack name]`.
+ *
+ * The DFP name is filled in only when one Pack clearly serves the whole series;
+ * otherwise it stays empty and the pack dropdown lists every Pack of the vendor
+ * (the part list then filters by the prefix). Part prefixes are the real CMSIS
+ * part-number stems, because the sidebar filters a Pack's parts with
+ * `part.startsWith(prefix)`.
+ */
+type SeriesRow = [string, string, string, string?];
+
+const NXP_SERIES: SeriesRow[] = [
+  ['LPC55', 'LPC55', 'LPC55'],
+  ['LPC54', 'LPC54', 'LPC54'],
+  ['LPC17', 'LPC17', 'LPC17'],
+  ['LPC11', 'LPC11', 'LPC11'],
+  ['LPC8', 'LPC8', 'LPC8'],
+  ['RT1xxx', 'i.MX RT', 'MIMXRT'],
+  ['MCX', 'MCX', 'MCX'],
+  ['KLx', 'Kinetis KL', 'MKL'],
+  ['KVx', 'Kinetis KV', 'MKV'],
+  ['KEx', 'Kinetis KE', 'MKE'],
+  ['Kx', 'Kinetis K', 'MK']
+];
+
+const NORDIC_SERIES: SeriesRow[] = [
+  ['nRF51', 'nRF51', 'nRF51', 'nRF_DeviceFamilyPack'],
+  ['nRF52', 'nRF52', 'nRF52', 'nRF_DeviceFamilyPack'],
+  ['nRF53', 'nRF53', 'nRF53', 'nRF_DeviceFamilyPack'],
+  ['nRF54', 'nRF54', 'nRF54', 'nRF_DeviceFamilyPack'],
+  ['nRF91', 'nRF91', 'nRF91', 'nRF_DeviceFamilyPack']
+];
+const MICROCHIP_SERIES: SeriesRow[] = [
+  ['SAMD21', 'SAM D21', 'ATSAMD21', 'SAMD21_DFP'],
+  ['SAMD51', 'SAM D51', 'ATSAMD51', 'SAMD51_DFP'],
+  ['SAME70', 'SAM E70', 'ATSAME70', 'SAME70_DFP'],
+  ['SAMC21', 'SAM C21', 'ATSAMC21', 'SAMC21_DFP'],
+  ['PIC32', 'PIC32', 'PIC32']
+];
+function seriesRows(rows: SeriesRow[]): CuratedSeries[] {
+  return rows.map(([series, label, partPrefix, packName]) => ({
+    series,
+    label,
+    partPrefix,
+    packName: packName ?? ''
+  }));
+}
+
+/** STM32 part prefix: `F1x` → `STM32F1`, but `WBAx` needs the full `STM32WBA`. */
+function stm32PartPrefix(series: string): string {
+  return series === 'WBAx' ? 'STM32WBA' : `STM32${series.slice(0, 2)}`;
+}
+
+function packNameForStm32(series: string): string {
+  return `${stm32PartPrefix(series)}xx_DFP`;
+}
 
 const seriesCatalog: VendorSeriesCatalog[] = [
   {
@@ -54,8 +117,8 @@ const seriesCatalog: VendorSeriesCatalog[] = [
     series: STM32_SERIES.map(([series, label]) => ({
       series,
       label,
-      partPrefix: `STM32${series.slice(0, 2)}`,
-      packName: `STM32${series.slice(0, 2)}xx_DFP`
+      partPrefix: stm32PartPrefix(series),
+      packName: packNameForStm32(series)
     }))
   },
   {
@@ -69,12 +132,17 @@ const seriesCatalog: VendorSeriesCatalog[] = [
     }))
   },
   {
-    // WCH's DFP naming is not verifiable from public sources; the series is
-    // offered but pack determination falls back to installation guidance.
-    vendorId: 'WCH',
-    downloadPage: 'https://www.wch.cn/downloads/',
-    series: [{ series: 'F1x', label: 'CH32F1', partPrefix: 'CH32F1', packName: '' }]
-  }
+    vendorId: 'NXP',
+    series: seriesRows(NXP_SERIES)
+  },
+  {
+    vendorId: 'NordicSemiconductor',
+    series: seriesRows(NORDIC_SERIES)
+  },
+  {
+    vendorId: 'Microchip',
+    series: seriesRows(MICROCHIP_SERIES)
+  },
 ];
 
 /** Returns the catalog series of one vendor; '' vendor or unknown → []. */
@@ -119,8 +187,16 @@ export function seriesServesProfile(
     return true;
   }
   const catalog = findCatalogSeries(vendorId, series);
-  return catalog !== undefined
-    && profile.part.toUpperCase().startsWith(catalog.partPrefix.toUpperCase());
+  if (!catalog) {
+    return false;
+  }
+  const part = profile.part.toUpperCase();
+  // Longest matching prefix wins: vendor catalogs nest (`MK` for Kinetis K,
+  // `MKL` for Kinetis KL), so the shorter prefix must not claim the other.
+  const matching = seriesCatalogFor(vendorId)
+    .filter((entry) => part.startsWith(entry.partPrefix.toUpperCase()))
+    .sort((left, right) => right.partPrefix.length - left.partPrefix.length)[0];
+  return matching?.series === series;
 }
 
 /**

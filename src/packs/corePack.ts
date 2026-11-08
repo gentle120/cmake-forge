@@ -200,20 +200,135 @@ export interface CoreHeaderCopy {
   relative: string;
 }
 
+/** Core header that implements each supported core name, if the pack ships it. */
+const coreHeaderByCore: Record<string, string> = {
+  'cortex-m0': 'core_cm0.h',
+  'cortex-m0plus': 'core_cm0plus.h',
+  'cortex-m1': 'core_cm1.h',
+  'cortex-m3': 'core_cm3.h',
+  'cortex-m4': 'core_cm4.h',
+  'cortex-m7': 'core_cm7.h',
+  'cortex-m23': 'core_cm23.h',
+  'cortex-m33': 'core_cm33.h',
+  'cortex-m35p': 'core_cm35p.h',
+  'cortex-m52': 'core_cm52.h',
+  'cortex-m55': 'core_cm55.h',
+  'cortex-m85': 'core_cm85.h',
+  'sc000': 'core_sc000.h',
+  'sc300': 'core_sc300.h'
+};
+
 /**
- * Files a generation copies into the project: every header of the installed core
- * pack, mirrored under `CMSIS/Include` (one flat include directory, so generated
- * projects do not carry the pack's internal `CMSIS/Core/Include` nesting).
+ * Headers one core actually needs: the mapped core header plus every header it
+ * includes (CMSIS 4's `core_cmFunc.h`, CMSIS 6's `m-profile/armv7m_mpu.h`, and
+ * so on).
+ *
+ * Copying the whole `Core/Include` directory drags every other core's headers
+ * into the project — roughly 3 MB of `core_cm0.h` … `core_cm85.h` files that can
+ * never be compiled against the selected device. The closure keeps the project
+ * limited to the headers the device header really pulls in.
+ */
+async function neededCoreHeaders(includeDir: string, core: string): Promise<Set<string> | undefined> {
+  const base = coreHeaderByCore[core.trim().toLowerCase()];
+  if (!base) {
+    return undefined;
+  }
+  const available: string[] = [];
+  const collect = async (directory: string, prefix: string): Promise<void> => {
+    let dirents;
+    try {
+      dirents = await readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const dirent of dirents) {
+      const relative = prefix === '' ? dirent.name : `${prefix}/${dirent.name}`;
+      if (dirent.isDirectory()) {
+        await collect(join(directory, dirent.name), relative);
+      } else if (dirent.isFile() && relative.toLowerCase().endsWith('.h')) {
+        available.push(relative);
+      }
+    }
+  };
+  await collect(includeDir, '');
+  const byLowerPath = new Map(available.map((relative) => [relative.toLowerCase(), relative]));
+  const byLowerBasename = new Map<string, string>();
+  for (const relative of available) {
+    const basename = relative.split('/').pop()!.toLowerCase();
+    if (!byLowerBasename.has(basename)) {
+      byLowerBasename.set(basename, relative);
+    }
+  }
+  if (!byLowerPath.has(base.toLowerCase())) {
+    return undefined;
+  }
+
+  const needed = new Set<string>();
+  const queue: Array<{ from: string; name: string }> = [
+    { from: '', name: base },
+    { from: '', name: 'cmsis_compiler.h' },
+    { from: '', name: 'cmsis_version.h' }
+  ];
+  while (queue.length > 0) {
+    const request = queue.shift()!;
+    const included = request.name.replace(/\\/g, '/');
+    // `#include "m-profile/armv7m_mpu.h"` resolves next to the including header
+    // first and against the include root afterwards, exactly like the compiler.
+    const candidates = included.includes('/')
+      ? [
+          join(request.from, included).replace(/\\/g, '/'),
+          included
+        ]
+      : [included];
+    const resolved = candidates
+      .map((candidate) => byLowerPath.get(candidate.toLowerCase())
+        ?? byLowerBasename.get((candidate.split('/').pop() ?? '').toLowerCase()))
+      .find((candidate) => candidate !== undefined);
+    if (!resolved || needed.has(resolved)) {
+      continue;
+    }
+    needed.add(resolved);
+    let content: string;
+    try {
+      content = await readFile(join(includeDir, resolved), 'utf8');
+    } catch {
+      continue;
+    }
+    const directory = resolved.includes('/') ? resolved.slice(0, resolved.lastIndexOf('/')) : '';
+    for (const match of content.matchAll(/#\s*include\s+"([^"]+)"/g)) {
+      const included = match[1].replace(/\\/g, '/');
+      // The project builds with arm-none-eabi-gcc only, so the armclang, clang
+      // and IAR variants `cmsis_compiler.h` selects between (and the A/R profile
+      // trees) are dead weight.
+      if (/(^|\/)(cmsis_(armclang|clang|iccarm)[^/]*\.h|a-profile\/|r-profile\/)/i.test(included)) {
+        continue;
+      }
+      queue.push({ from: directory, name: included });
+    }
+  }
+  return needed;
+}
+
+/**
+ * Files a generation copies into the project: the core headers the selected
+ * core needs, mirrored under `CMSIS/Include` (one flat include directory, so
+ * generated projects do not carry the pack's internal `CMSIS/Core/Include`
+ * nesting).
  *
  * The plan is computed before the overwrite check so an existing project's
  * headers take part in it, and the copy is byte-for-byte: a CMSIS header carries
  * its own encoding and must not be rewritten as a UTF-8 string.
+ *
+ * Without a known core (a custom profile) every header is copied, which is the
+ * safe behaviour for an unfamiliar core name.
  */
 export async function planCoreHeaderCopy(
   includeDir: string,
   projectRoot: string,
-  targetDir = coreProjectIncludeDir
+  targetDir = coreProjectIncludeDir,
+  core?: string
 ): Promise<CoreHeaderCopy[]> {
+  const needed = core ? await neededCoreHeaders(includeDir, core) : undefined;
   const plan: CoreHeaderCopy[] = [];
   const walk = async (directory: string, prefix: string): Promise<void> => {
     let dirents;
@@ -228,6 +343,9 @@ export async function planCoreHeaderCopy(
       if (dirent.isDirectory()) {
         await walk(source, relative);
       } else if (dirent.isFile() && relative.toLowerCase().endsWith('.h')) {
+        if (needed && !needed.has(relative)) {
+          continue;
+        }
         plan.push({
           source,
           target: join(projectRoot, targetDir, relative),

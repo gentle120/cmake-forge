@@ -1,5 +1,5 @@
 import type { DeviceProfile, DeviceSeries, DeviceVendor } from './deviceProfiles';
-import { getVendorMetadata } from './vendorRegistry';
+import { getVendorMetadata, hasVendor } from './vendorRegistry';
 import { comparePackVersions } from '../shared/packVersion';
 
 export type DevicePackOrigin = 'installed' | 'imported' | 'downloadable';
@@ -48,17 +48,22 @@ export interface DevicePackCatalogInput {
   online: Array<{
     name: string;
     version: string;
-    description: string;
     packUrl: string;
     vendorName: string;
   }>;
 }
 
 export function listDeviceVendors(profiles: DeviceProfile[]): DeviceVendor[] {
-  return [...new Set(profiles.map((profile) => profile.vendor))]
-    .sort((left, right) =>
-      getVendorMetadata(left).order - getVendorMetadata(right).order
-    );
+  // A profile whose vendor is not registered yet (restore order during startup)
+  // must not abort the whole list: skip it until its pack registration lands.
+  return [...new Set(
+    profiles
+      .filter((profile) => hasVendor(profile.vendor))
+      .map((profile) => profile.vendor)
+  )].sort((left, right) =>
+    getVendorMetadata(left).order - getVendorMetadata(right).order
+    || left.localeCompare(right)
+  );
 }
 
 export function listDeviceSeries(profiles: DeviceProfile[], vendor: DeviceVendor): DeviceSeries[] {
@@ -128,8 +133,7 @@ export function buildDevicePackOptions(input: DevicePackCatalogInput): DevicePac
         name: pack.name,
         version: pack.version,
         origin: 'downloadable',
-        packUrl: pack.packUrl,
-        description: pack.description
+        packUrl: pack.packUrl
       });
     }
   }

@@ -1,5 +1,6 @@
 import { readdir } from 'node:fs/promises';
 import { basename, dirname, join, relative, sep } from 'node:path';
+import { ignoredDirectories, sourceExtensions } from './scanRules';
 
 export type WorkspaceProjectMarker =
   | 'cmake'
@@ -27,26 +28,6 @@ export class WorkspaceProjectsCancelledError extends Error {
   }
 }
 
-const ignoredDirectories = new Set([
-  '.git',
-  '.vscode',
-  '.cmsis',
-  '.eide',
-  '.pack',
-  '.cache',
-  'build',
-  'CMakeFiles',
-  'cmake-build-debug',
-  'cmake-build-release',
-  'cmake',
-  '_cmake',
-  'node_modules',
-  'out',
-  'objects',
-  'listings'
-]);
-
-const sourceExtensions = new Set(['.c', '.cc', '.cpp', '.cxx', '.s']);
 const keilContainers = new Set(['mdk-arm', 'mdk', 'project', 'projects']);
 const iarContainers = new Set(['ewarm', 'iar', 'project', 'projects']);
 

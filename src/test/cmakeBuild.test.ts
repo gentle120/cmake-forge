@@ -38,16 +38,33 @@ async function ensureFixturePackRegistered(): Promise<void> {
   await fixturePackRegistered;
 }
 
-async function buildMinimalFirmware(part: string): Promise<void> {
+async function buildMinimalFirmware(part: string, options: { deviceFiles?: boolean } = {}): Promise<void> {
   await ensureFixturePackRegistered();
   const root = await mkdtemp(join(tmpdir(), 'mcu-cmake-build-'));
   const profile = getDeviceProfile(part);
   try {
+    // Device support files mirror what a Pack import copies into a project:
+    // a device header, its system header, and the SystemInit source.
+    if (options.deviceFiles) {
+      await mkdir(join(root, 'CMSIS', 'Device', 'Include'), { recursive: true });
+      await mkdir(join(root, 'CMSIS', 'Device', 'Source'), { recursive: true });
+      await writeFile(join(root, 'CMSIS', 'Device', 'Include', 'Example.h'), '#define EXAMPLE_VALUE 7\n');
+      await writeFile(join(root, 'CMSIS', 'Device', 'Include', 'system_example.h'), 'void SystemInit(void);\n');
+      await writeFile(
+        join(root, 'CMSIS', 'Device', 'Source', 'system_example.c'),
+        '#include "Example.h"\nvoid SystemInit(void) { }\n'
+      );
+    }
     await writeFile(join(root, 'CMakeLists.txt'), generateCMakeLists('firmware', {
       sources: ['main.c', 'startup.s'],
       includeDirs: [],
       defines: []
-    }, profile));
+    }, profile, undefined, options.deviceFiles
+      ? {
+          projectPaths: ['CMSIS/Device/Include'],
+          generatedSources: ['CMSIS/Device/Source/system_example.c']
+        }
+      : {}));
     await mkdir(join(root, 'cmake'), { recursive: true });
     await mkdir(join(root, 'system'), { recursive: true });
     await writeFile(join(root, 'cmake', profile.toolchainFileName), generateToolchainFile(profile));
@@ -55,7 +72,11 @@ async function buildMinimalFirmware(part: string): Promise<void> {
     await writeFile(join(root, profile.gnuStartupFileName), generateGnuStartup(profile));
     await writeFile(join(root, 'system', 'syscalls.c'), generateSyscalls());
     await writeFile(join(root, 'system', 'sysmem.c'), generateSysmem());
-    await writeFile(join(root, 'main.c'), 'void SystemInit(void) {}\nvolatile int initialized_data = 1;\nint main(void) { return initialized_data; }\n');
+    // Without device files the startup's weak SystemInit must carry the link;
+    // binutils 2.44+ otherwise reports "Unknown destination type (ARM/Thumb)".
+    await writeFile(join(root, 'main.c'), options.deviceFiles
+      ? '#include "Example.h"\nvolatile int initialized_data = EXAMPLE_VALUE;\nint main(void) { return initialized_data; }\n'
+      : 'volatile int initialized_data = 1;\nint main(void) { return initialized_data; }\n');
     await writeFile(join(root, 'startup.s'), '');
 
     const buildDir = join(root, 'build');
@@ -76,6 +97,10 @@ async function buildMinimalFirmware(part: string): Promise<void> {
 
 test('generated files configure and build a minimal GD32F103 firmware', firmwareBuildOptions, async () => {
   await buildMinimalFirmware('GD32F103C8T6');
+});
+
+test('a copied device header and system source compile into the firmware', firmwareBuildOptions, async () => {
+  await buildMinimalFirmware('GD32F103C8T6', { deviceFiles: true });
 });
 
 test('generated files configure and build a minimal STM32F407 firmware', firmwareBuildOptions, async () => {

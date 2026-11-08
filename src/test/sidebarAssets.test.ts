@@ -28,8 +28,7 @@ interface SidebarSelection {
   mcu: { vendor: string; packId: string; version: string; series: string; part: string };
   linux: { toolchainFamily: string };
   native: { targetType: string; cStandard: number; cxxStandard: number };
-  debugEnabled: boolean;
-  flash: { enabled: boolean; targetId: string; probeId: string; openocdPath: string; backend: string };
+  flash: { targetId: string; probeId: string; openocdPath: string; backend: string };
 }
 
 interface SidebarState {
@@ -86,9 +85,8 @@ function baseState(overrides: Partial<SidebarState> = {}): SidebarState {
       },
       linux: { toolchainFamily: 'loongson' },
       native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
-      debugEnabled: false,
       corePackInclude: true,
-      flash: { enabled: false, targetId: 'stm32f1xx', probeId: 'stlink', openocdPath: 'openocd', backend: 'openocd' }
+      flash: { targetId: 'stm32f1xx', probeId: 'stlink', openocdPath: 'openocd', backend: 'openocd' }
     },
     ...overrides
   };
@@ -211,7 +209,7 @@ test('MCU selection follows vendor, series, Pack, version, and device order', ()
     series: [{ value: 'F1x', label: 'F1x' }]
   }));
   const selects = harness.element('target-host').querySelectorAll('select');
-  assert.equal(selects.length, 6);
+  assert.equal(selects.length, 5);
   const [vendor, series, pack, version, device] = selects;
   assert.equal(vendor.value, 'STM');
   assert.equal(series.value, 'F1x');
@@ -412,8 +410,7 @@ test('the core pack include switch persists the user choice', () => {
   assert.equal(saved?.type, 'saveSelection');
   assert.equal(saved?.selection.corePackInclude, false);
   // Unrelated selections must keep their previous values while the switch flips.
-  assert.equal(saved?.selection.debugEnabled, false);
-  assert.equal(saved?.selection.flash.enabled, false);
+  assert.equal(saved?.selection.flash.targetId, 'stm32f1xx');
 
   harness.send({
     type: 'state',
@@ -601,4 +598,65 @@ test('changed option labels redraw an already rendered dropdown', () => {
   const refreshed = harness.element('target-host').querySelectorAll('select')[2];
   assert.equal(refreshed.querySelectorAll('option').length, 1);
   assert.equal(refreshed.querySelectorAll('option')[0].textContent, '内置（已更新）');
+});
+
+test('the version select asks for a pick when the selection owns no version', () => {
+  const base = baseState();
+  const harness = startSidebar(baseState({
+    versions: [
+      { value: '2.4.1', label: '2.4.1', description: 'installed' },
+      { value: '2.3.0', label: '2.3.0', description: 'installed' }
+    ],
+    pendingPackId: 'STM:STM32F1xx_DFP',
+    selection: {
+      ...base.selection,
+      mcu: { ...base.selection.mcu, packId: 'STM:STM32F1xx_DFP', version: '' }
+    }
+  }));
+
+  const versionSelect = harness.element('target-host').querySelectorAll('select')[3];
+  assert.equal(versionSelect.value, '');
+  assert.equal(versionSelect.querySelectorAll('option')[0].textContent, '— 选择版本 —');
+
+  versionSelect.value = '2.4.1';
+  versionSelect.dispatch('change');
+  const activation = harness.posted.at(-1) as { type?: string; packId?: string; version?: string };
+  assert.equal(activation.type, 'activatePack');
+  assert.equal(activation.packId, 'STM:STM32F1xx_DFP');
+  assert.equal(activation.version, '2.4.1');
+});
+
+test('renders generated files as a collapsible tree grouped by directory', () => {
+  const harness = startSidebar(baseState());
+  const generate = harness.element('generate-project');
+  generate.dispatch('click', { target: generate });
+  harness.send({
+    type: 'operationFinished',
+    result: {
+      ok: true,
+      message: '已生成',
+      files: [
+        'CMakeLists.txt',
+        'CMSIS/Include/core_cm3.h',
+        'CMSIS/Include/m-profile/armv7m_mpu.h',
+        'CMSIS/Device/Include/gd32f10x.h'
+      ]
+    }
+  });
+
+  const tree = harness.element('generated-files');
+  // CMSIS, CMSIS/Include, CMSIS/Include/m-profile, CMSIS/Device, CMSIS/Device/Include
+  assert.equal(tree.querySelectorAll('details').length, 5);
+  // The test shim only matches simple selectors (`.class`, `tag`, `tag[attr]`).
+  assert.equal(tree.querySelectorAll('.file-tree-file').length, 4);
+  assert.equal(tree.querySelectorAll('.file-tree-group').length, 5);
+
+  const summaries = Array.from(tree.querySelectorAll('summary')).map((node) => node.textContent ?? '');
+  assert.ok(summaries.some((text) => text.includes('CMSIS/')));
+  assert.ok(summaries.some((text) => text.includes('m-profile/')));
+  // File rows use the basename and keep the full path in the tooltip.
+  const fileRows = Array.from(tree.querySelectorAll('.file-tree-file'));
+  const deviceRow = fileRows.find((node) => (node.textContent ?? '').includes('gd32f10x.h'));
+  assert.ok(deviceRow);
+  assert.equal(deviceRow!.querySelector('span[title]')?.getAttribute('title'), 'CMSIS/Device/Include/gd32f10x.h');
 });

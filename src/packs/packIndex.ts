@@ -9,7 +9,6 @@ export type { FetchLike } from './fetchTypes';
 export interface PackIndexPack {
   name: string;
   version: string;
-  description: string;
   packUrl: string;
   vendorName: string;
 }
@@ -120,7 +119,6 @@ export async function listPackIndexPacks(
     packs.push({
       name,
       version,
-      description: '',
       packUrl: `${root}${vendor}.${name}.${version}.pack`,
       vendorName: vendor
     });
@@ -154,7 +152,7 @@ export function selectPacksForSelection(
   );
 }
 
-/** Case-insensitive substring search over vendor name, pack name, and description. */
+/** Case-insensitive substring search over vendor name and pack name. */
 export async function searchPacks(
   fetcher: FetchLike,
   keyword: string,
@@ -172,13 +170,13 @@ export async function searchPacks(
     .filter((pack) =>
       needle.length === 0 ||
       pack.vendorName.toLowerCase().includes(needle) ||
-      pack.name.toLowerCase().includes(needle) ||
-      pack.description.toLowerCase().includes(needle)
+      pack.name.toLowerCase().includes(needle)
     )
     .sort((left, right) => (
       left.vendorName.localeCompare(right.vendorName)
       || left.name.localeCompare(right.name)
-      || comparePackVersions(left.version, right.version)
+      // Newest version first, matching the Pack/version dropdowns.
+      || comparePackVersions(right.version, left.version)
     ));
 }
 

@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { listVendorMetadata, vendorRegistryVersion } from '../devices/vendorRegistry';
+import { headerExtensions, ignoredDirectories, sourceExtensions } from './scanRules';
 
 export interface ProjectDescription {
   sources: string[];
@@ -23,27 +24,6 @@ export class ScanCancelledError extends Error {
   }
 }
 
-const ignoredDirectories = new Set([
-  '.git',
-  '.vscode',
-  '.cmsis',
-  '.eide',
-  '.pack',
-  '.cache',
-  'build',
-  'CMakeFiles',
-  'cmake-build-debug',
-  'cmake-build-release',
-  'cmake',
-  '_cmake',
-  'node_modules',
-  'out',
-  'objects',
-  'listings'
-]);
-
-const sourceExtensions = new Set(['.c', '.cc', '.cpp', '.cxx', '.s']);
-const headerExtensions = new Set(['.h', '.hh', '.hpp', '.hxx']);
 const protectedDefines = new Set(['USE_HAL_DRIVER']);
 
 function toProjectPath(root: string, filePath: string): string {

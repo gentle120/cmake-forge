@@ -159,7 +159,7 @@ ${[...new Set(fixtureDevices.map((device) => device.family))].map((family) => {
   const subFamilies = [...new Set(familyDevices.map((device) => device.subFamily))];
   return subFamilies.map((subFamily) => `    <family Dvendor="Example:4711" Dfamily="${family}">
       <subFamily DsubFamily="${subFamily}">
-${familyDevices.filter((device) => device.subFamily === subFamily).map((device) => `        <compile define="${device.define}"/>
+${familyDevices.filter((device) => device.subFamily === subFamily).map((device) => `        <compile define="${device.define}" header="Example.h"/>
         <device Dname="${device.name}">
           <processor Dcore="${device.core}"${device.fpu ? ` Dfpu="${device.fpu}"` : ''}/>
           <memory id="IROM1" start="0x08000000" size="${device.flash}"/>
@@ -183,6 +183,10 @@ ${(device.additional ?? []).map((region) =>
 export function fixturePackBuffer(): Buffer {
   return buildZip([
     { name: 'Example.F1_DFP.pdsc', data: fixturePdsc },
-    { name: 'STM32F103.svd', data: fixtureSvd }
+    { name: 'STM32F103.svd', data: fixtureSvd },
+    // The device header and system files a generation copies into the project.
+    { name: 'Device/Include/Example.h', data: '#define EXAMPLE_DEVICE 1\n' },
+    { name: 'Device/Include/system_example.h', data: 'void SystemInit(void);\n' },
+    { name: 'Device/Source/system_example.c', data: '#include "Example.h"\nvoid SystemInit(void) { }\n' }
   ]);
 }

@@ -31,6 +31,11 @@ export interface DeviceProfile {
   toolchainFileName: string;
   interruptHandlers: string[];
   debugTarget?: string;
+  /**
+   * Device header basename declared by the Pack (`gd32f10x.h`), used to copy the
+   * matching header and `system_<stem>.c`/`.h` into generated projects.
+   */
+  deviceHeader?: string;
 }
 
 import { validateDeviceProfile } from './profileValidation';
@@ -156,6 +161,11 @@ export function getDeviceProfileForPack(part: string, sourcePack: string): Devic
     throw new Error(`Unsupported MCU: ${part} in Pack ${sourcePack}`);
   }
   return profile;
+}
+
+/** Pack source that registered the part's imported profile, when there is one. */
+export function devicePackSourceForPart(part: string): string | undefined {
+  return importedSourceByPart.get(part.trim().toUpperCase());
 }
 
 /** True when the current registry entry came from an imported pack. */

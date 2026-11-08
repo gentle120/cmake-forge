@@ -16,6 +16,14 @@ export interface CortexDebugConfigurationOptions {
   searchDirs?: string[];
   backend?: FlashBackendId;
   device?: { part: string; core: string; packFile?: string };
+  /**
+   * ELF path the debugger loads. The generated presets always build into
+   * `${workspaceFolder}/build/<preset>/`, so a concrete path works even when
+   * CMake Tools has no active launch target (for example inside the Extension
+   * Development Host, where `${command:cmake.launchTargetPath}` resolves to
+   * nothing and the session closes immediately).
+   */
+  executable?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -123,7 +131,7 @@ function createConfiguration(options: CortexDebugConfigurationOptions): Record<s
     type: 'cortex-debug',
     request: 'launch',
     cwd: '${workspaceRoot}',
-    executable: '${command:cmake.launchTargetPath}',
+    executable: options.executable ?? '${command:cmake.launchTargetPath}',
     runToEntryPoint: 'main',
     showDevDebugOutput: 'none',
     toolchainPrefix: 'arm-none-eabi'
@@ -170,6 +178,9 @@ export function generateCortexDebugLaunchJson(
   document.configurations = configurations.filter((configuration) => (
     !isRecord(configuration) || configuration.name !== generatedConfigurationName
   ));
-  (document.configurations as unknown[]).push(createConfiguration(options));
+  // The generated entry goes first: `F5` without an explicit selection picks the
+  // first configuration, and a stale entry from another extension (a C/C++
+  // Runner `cppdbg` config, for example) would then fail within a second.
+  (document.configurations as unknown[]).unshift(createConfiguration(options));
   return `${JSON.stringify(document, null, 2)}\n`;
 }

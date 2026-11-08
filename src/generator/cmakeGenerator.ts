@@ -5,15 +5,18 @@ import { cmakeString, projectPath } from '../shared/cmakeText';
 import { preserveUserCodeSection, userCodeSection } from '../shared/userCodeSection';
 
 /**
- * Extra include directories beyond the scanned ones.
+ * Extra include directories and sources beyond the scanned ones.
  *
  * `paths` are absolute directories outside the project and are emitted verbatim;
  * `projectPaths` are relative to the project root and go through
- * `MCU_PROJECT_ROOT` like the scanned include directories do.
+ * `MCU_PROJECT_ROOT` like the scanned include directories do. `generatedSources`
+ * are generated project-relative sources (the copied `system_*.c`) that the
+ * workspace scan cannot know about.
  */
 export interface AdditionalIncludeDirs {
   paths?: string[];
   projectPaths?: string[];
+  generatedSources?: string[];
 }
 
 export function generateCMakeLists(
@@ -38,13 +41,26 @@ export function generateCMakeLists(
       sources.push(runtimeSourceName);
     }
   }
+  // The copied device system source is generated, so it is not in the scan.
+  for (const generatedSource of externalDirs.generatedSources ?? []) {
+    if (!sources.some((source) => source.toLowerCase() === generatedSource.toLowerCase())) {
+      sources.push(generatedSource);
+    }
+  }
   const hasCxx = sources.some((source) => /\.(cc|cpp|cxx)$/i.test(source));
   const languages = hasCxx ? 'C CXX ASM' : 'C ASM';
   const defines = [...new Set([...profile.defines, ...project.defines])]
     .filter((define) => !['VECT_TAB_OFFSET', 'STM32_HAL_LEGACY', 'HSE_VALUE', 'LSE_VALUE'].includes(define.split('=', 1)[0]))
     .sort();
   const defineBlock = defines.map((define) => `    ${define}`).join('\n');
-  const sourceBlock = sources
+  // A regenerated project scans its own generated runtime sources, so the raw
+  // source list order changes between the first and second generation. Order and
+  // de-duplicate deterministically or CMakeLists.txt would differ on every run
+  // and ask the user to overwrite identical output.
+  const orderedSources = [...new Map(
+    sources.map((source) => [source.toLowerCase(), source])
+  ).values()].sort((left, right) => left.toLowerCase().localeCompare(right.toLowerCase()));
+  const sourceBlock = orderedSources
     .map((source) => `    ${projectPath('MCU_PROJECT_ROOT', source)}`)
     .join('\n');
   const projectIncludes = project.includeDirs.length === 0

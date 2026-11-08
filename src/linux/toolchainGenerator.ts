@@ -37,7 +37,8 @@ export function createLinuxToolchain(
     cxxOnlyFlags: overrides.cxxOnlyFlags?.trim() ?? defaults.cxxOnlyFlags,
     cFlags: normalizedFlags(overrides.cFlags),
     cxxFlags: normalizedFlags(overrides.cxxFlags),
-    linkerFlags: normalizedFlags(overrides.linkerFlags)
+    linkerFlags: normalizedFlags(overrides.linkerFlags),
+    sysroot: overrides.sysroot?.trim() || undefined
   };
 }
 
@@ -65,6 +66,19 @@ export function generateLinuxToolchainFile(toolchain: LinuxToolchain): string {
     // Assembly must see the same architecture, ABI and PIC settings as C, because
     // Linux user space assembly is normally PIC aware and branches on __PIC__.
     `set(CMAKE_ASM_FLAGS_INIT "\${TARGET_FLAGS}")`,
+    '',
+    ...(toolchain.sysroot
+      ? [
+        '',
+        '# Target root: headers and libraries are searched below it only.',
+        `set(CMAKE_SYSROOT ${cmakeQuote(toolchain.sysroot)})`,
+        'set(CMAKE_FIND_ROOT_PATH "${CMAKE_SYSROOT}")',
+        'set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)',
+        'set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)',
+        'set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)',
+        'set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)'
+      ]
+      : []),
     '',
     '# Keep the optimization settings in the toolchain.',
     'set(CMAKE_C_FLAGS_DEBUG "-Og -g3")',

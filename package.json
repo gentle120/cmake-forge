@@ -2,7 +2,7 @@
   "name": "cmake-embedded",
   "displayName": "CMake-Embedded",
   "description": "Generate ready-to-build CMake projects for desktop C/C++, MCU firmware, and Linux / SoC cross compilation.",
-  "version": "2.1.3",
+  "version": "2.2.0",
   "publisher": "gentle120",
   "repository": {
     "type": "git",
@@ -10,7 +10,8 @@
   },
   "license": "MIT",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.85.0",
+    "node": ">=22.0.0"
   },
   "categories": [
     "Other",
@@ -30,7 +31,7 @@
     "ms-vscode.cpptools"
   ],
   "main": "./out/extension.js",
-  "icon": "images/cmake-embedded-icon.png",
+  "icon": "images/icon.png",
   "readme": "README.md",
   "activationEvents": [
     "onView:cmakeEmbedded.sidebar"

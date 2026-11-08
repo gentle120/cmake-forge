@@ -1,16 +1,20 @@
 /** Builds a ZIP archive with stored (uncompressed) entries for pack fixtures. */
+import { crc32 } from '../../packs/crc32';
+
 export function buildZip(entries: Array<{ name: string; data: string }>): Buffer {
   const localChunks: Buffer[] = [];
   const centralChunks: Buffer[] = [];
   let offset = 0;
   for (const entry of entries) {
     const data = Buffer.from(entry.data, 'utf8');
+    const crc = crc32(data);
     const nameBuffer = Buffer.from(entry.name, 'utf8');
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(0, 6);
     local.writeUInt16LE(0, 8);
+    local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(data.length, 18);
     local.writeUInt32LE(data.length, 22);
     local.writeUInt16LE(nameBuffer.length, 26);
@@ -21,6 +25,7 @@ export function buildZip(entries: Array<{ name: string; data: string }>): Buffer
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(0, 8);
     central.writeUInt16LE(0, 10);
+    central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(data.length, 20);
     central.writeUInt32LE(data.length, 24);
     central.writeUInt16LE(nameBuffer.length, 28);

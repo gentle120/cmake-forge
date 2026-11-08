@@ -32,6 +32,9 @@ export function generateLinuxProjectConfig(
       toolchainConfig.binDir = toolchain.binDir;
     }
   }
+  if (toolchain.sysroot) {
+    toolchainConfig.sysroot = toolchain.sysroot;
+  }
 
   const config = {
     projectName,
@@ -44,7 +47,8 @@ export function generateLinuxProjectConfig(
       targetName: structure.targetName,
       targetType: structure.targetType,
       cStandard: structure.cStandard,
-      cxxStandard: structure.cxxStandard
+      cxxStandard: structure.cxxStandard,
+      ...(structure.sysroot ? { sysroot: structure.sysroot } : {})
     },
     integration: getLinuxWorkspaceIntegration(),
     generatedFiles,

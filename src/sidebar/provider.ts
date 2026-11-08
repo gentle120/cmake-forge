@@ -4,7 +4,8 @@ import { randomBytes } from 'node:crypto';
 import {
   getDeviceProfileForPack,
   isRuntimeDeviceProfile,
-  listDeviceProfilesForPack
+  listDeviceProfilesForPack,
+  type DeviceProfile
 } from '../devices/deviceProfiles';
 import type { DevicePackOption } from '../devices/deviceSelection';
 import { comparePackVersions } from '../shared/packVersion';
@@ -12,7 +13,11 @@ import { getVendorMetadata, hasVendor } from '../devices/vendorRegistry';
 import { canonicalSeriesId, findCatalogSeries, seriesServesProfile } from '../devices/seriesCatalog';
 import type { CorePackStatus } from '../packs/corePack';
 import { getFlashProbeProfile } from '../flash/probeProfiles';
-import { getFlashTargetProfile } from '../flash/targets/targetProfiles';
+import {
+  getFlashTargetProfile,
+  listFlashTargetVendors,
+  type FlashTargetProfile
+} from '../flash/targets/targetProfiles';
 import {
   backendSupportsProbe,
   defaultBackendFor,
@@ -32,6 +37,8 @@ import {
 import { discoverLinuxToolchains } from '../linux/discovery';
 import { createLinuxToolchain } from '../linux/toolchainGenerator';
 import { describeNativeProject } from '../native/projectStructure';
+import type { DeviceSupportFile } from '../packs/deviceSupport';
+import { logLine, showLog } from '../integration/output';
 import { scanProject, ScanCancelledError } from '../scanner/projectScanner';
 import {
   reconcileProjectRoot,
@@ -85,6 +92,17 @@ export interface SidebarProviderDependencies {
     includeCorePack: boolean,
     version: string
   ): Promise<{ includeDir: string; version: string } | undefined>;
+  /**
+   * Confirms the Cortex-Debug adapter is installed before a configuration that
+   * cannot run is written. Injected so the provider stays testable outside the
+   * VS Code host; absent means "assume installed".
+   */
+  ensureCortexDebugInstalled?(): Promise<boolean>;
+  /**
+   * Device header and `system_*` snapshot of the selected Pack, copied into the
+   * generated project. Absent in tests that do not exercise the copy.
+   */
+  deviceSupportFilesForPart?(part: string, sourcePack?: string): Promise<DeviceSupportFile[]>;
 }
 
 function workspaceName(): string {
@@ -126,6 +144,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private corePackVersions: SidebarOption[] = [];
   private packCatalogRequest = 0;
   private lastBusyHintAt = 0;
+  private pendingPosts: unknown[] = [];
   private readonly viewDisposables: vscode.Disposable[] = [];
 
   constructor(
@@ -133,8 +152,23 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     private readonly dependencies: SidebarProviderDependencies
   ) {
     this.selectionValue = sanitizeSidebarSelection(
-      context.workspaceState.get(selectionKey)
+      context.workspaceState.get(selectionKey),
+      undefined,
+      [],
+      true
     );
+    // The sidebar default is the bare command `openocd`; when the user configured
+    // an absolute OpenOCD path in the settings, that path is what the generated
+    // launch.json must pass as `serverpath` (a bare name is only found on PATH).
+    if (this.selectionValue.flash.openocdPath === 'openocd') {
+      const configured = this.configuredOpenOcdPath();
+      if (configured !== 'openocd') {
+        this.selectionValue = {
+          ...this.selectionValue,
+          flash: { ...this.selectionValue.flash, openocdPath: configured }
+        };
+      }
+    }
     this.pendingPackId = this.selectionValue.mcu.packId;
   }
 
@@ -146,6 +180,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     };
     const nonce = randomBytes(16).toString('base64');
     view.webview.html = renderSidebarHtml(view.webview, this.context.extensionUri, nonce);
+    this.flushPendingPosts();
     this.postState();
 
     const messageDisposable = view.webview.onDidReceiveMessage((value) => {
@@ -172,7 +207,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   }
 
   selection(): SidebarSelection {
-    return sanitizeSidebarSelection(this.selectionValue, this.selectionValue, this.packOptions);
+    return sanitizeSidebarSelection(
+      this.selectionValue,
+      this.selectionValue,
+      this.packOptions,
+      this.packOptions.length === 0
+    );
   }
 
   /**
@@ -202,15 +242,30 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   }
 
   refresh(): void {
-    this.postState();
+    // One state post after the refresh, not one before and several after: the
+    // webview re-renders the whole panel per message, so duplicate posts are
+    // visible as flicker.
     // A sidebar operation refreshes the catalog once it has finished; reloading
     // it here would repeat the installed-Pack scan while that operation runs.
     if (this.busy) {
+      this.postState();
       return;
     }
+    // Workspace folders can be added or removed while the view stays open; the
+    // project list must follow without waiting for a window reload.
+    const discovery = this.discoveringProjects
+      ? Promise.resolve()
+      : this.discoverProjects().catch((error) => {
+          const text = error instanceof Error ? error.message : String(error);
+          this.post({ type: 'notification', level: 'error', message: text });
+          this.discoveringProjects = false;
+        });
     // The core-pack state changes only on install, but it is cached, so a stale
     // copy would survive a manual storage cleanup.
-    void this.refreshCorePackNotice().then(() => this.postState());
+    const corePack = this.refreshCorePackNotice();
+    void Promise.all([discovery, corePack])
+      .then(() => this.postState())
+      .catch(() => this.postState());
     void this.refreshPackCatalog(this.selectionValue.mcu.vendor);
   }
 
@@ -223,8 +278,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   }
 
   private post(message: unknown): void {
-    if (!this.disposed && this.view) {
-      void this.view.webview.postMessage(message);
+    if (this.disposed) {
+      return;
+    }
+    if (!this.view) {
+      // The view resolves after activation; early progress and notifications
+      // are queued instead of being dropped. The window is small and bounded.
+      this.pendingPosts.push(message);
+      if (this.pendingPosts.length > 20) {
+        this.pendingPosts.shift();
+      }
+      return;
+    }
+    void this.view.webview.postMessage(message);
+  }
+
+  private flushPendingPosts(): void {
+    const queued = this.pendingPosts.splice(0);
+    for (const message of queued) {
+      this.post(message);
     }
   }
 
@@ -356,7 +428,27 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       if (vendorResult) {
         this.vendorOptions = vendorResult.vendors;
       }
+      // First open without a usable persisted vendor: adopt the first offered
+      // vendor so the series dropdown is operable instead of staying empty.
+      if (this.selectionValue.mcu.vendor === '' && this.vendorOptions?.length) {
+        const adopted = this.vendorOptions[0].value;
+        this.selectionValue = sanitizeSidebarSelection({
+          ...this.selectionValue,
+          mcu: { ...this.selectionValue.mcu, vendor: adopted, series: '' }
+        }, this.selectionValue);
+        await this.context.workspaceState.update(selectionKey, this.selectionValue);
+        await this.refreshPackCatalog(adopted);
+        return;
+      }
       this.packOptions = catalogResult.options;
+      // The persisted selection was kept unvalidated until the catalog arrived;
+      // now drop whatever it no longer offers (a removed builtin Pack, an old
+      // version) and pick the version the catalog actually has.
+      this.selectionValue = sanitizeSidebarSelection(
+        this.selectionValue,
+        this.selectionValue,
+        this.packOptions
+      );
       this.packCatalogNotice = catalogResult.notice || vendorResult?.notice || '';
       // Only Packs that serve the selected series are offered: with a series
       // chosen first, an unrelated DFP is not a valid choice — selecting one
@@ -662,6 +754,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         type: 'operationFinished',
         result: normalized
       });
+      for (const warning of result.warnings ?? []) {
+        this.post({ type: 'notification', level: 'warning', message: warning });
+      }
       return normalized;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -679,6 +774,29 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     const family = this.selectionValue.linux.toolchainFamily;
     const hit = this.dependencies.discoverToolchains().find((candidate) => candidate.family === family);
     return hit ?? createLinuxToolchain(family);
+  }
+
+  private async deviceSupportFiles(): Promise<DeviceSupportFile[]> {
+    const { part, sourcePack } = this.selectionValue.mcu;
+    if (!part || !this.dependencies.deviceSupportFilesForPart) {
+      return [];
+    }
+    try {
+      return await this.dependencies.deviceSupportFilesForPart(part, sourcePack);
+    } catch (error) {
+      // Device files are an enhancement: a Pack without a declared header must
+      // not fail the generation, the startup's weak SystemInit still links.
+      logLine(`[device] ${part}: ${error instanceof Error ? error.message : String(error)}`);
+      return [];
+    }
+  }
+
+  /** Absolute OpenOCD path from the extension settings, when configured. */
+  private configuredOpenOcdPath(): string {
+    const configured = vscode.workspace
+      .getConfiguration('cmakeEmbedded')
+      .get<string>('openocdPath', 'openocd');
+    return configured?.trim() || 'openocd';
   }
 
   private executablePaths(): FlashExecutablePaths {
@@ -710,11 +828,41 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     return {
       target: getFlashTargetProfile(selection.targetId),
       probe,
-      openocdPath: selection.openocdPath,
+      openocdPath: selection.openocdPath === 'openocd'
+        ? this.configuredOpenOcdPath()
+        : selection.openocdPath,
       backend,
       device,
       executables: this.executablePaths()
     };
+  }
+
+  /**
+   * Warns when the selected vendor has no curated OpenOCD target mapping.
+   *
+   * The flash/debug generators always produce *some* configuration; without a
+   * mapping it would silently be an STM32/GD32 target for a chip from another
+   * vendor. The generated files stay usable, but the user has to fix the
+   * `configFiles` / `target` entry for the real part.
+   */
+  private flashTargetVendorWarning(target: FlashTargetProfile): string | undefined {
+    const { part, sourcePack } = this.selectionValue.mcu;
+    if (!part || !sourcePack) {
+      return undefined;
+    }
+    let profile: DeviceProfile;
+    try {
+      profile = getDeviceProfileForPack(part, sourcePack);
+    } catch {
+      return undefined;
+    }
+    const metadata = getVendorMetadata(profile.vendor);
+    const keys = [metadata.label, metadata.id, ...metadata.definePrefixes]
+      .map((value) => value.toUpperCase());
+    if (listFlashTargetVendors().some((vendor) => keys.includes(vendor.toUpperCase()))) {
+      return undefined;
+    }
+    return `「${metadata.label}」暂无内置 OpenOCD target 映射：已按 ${target.label} 生成，请按实际芯片修改 launch.json 的 configFiles / flash.py 的 target。`;
   }
 
   private selectedDeviceProfile() {
@@ -738,7 +886,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     const { vendor, series } = this.selectionValue.mcu;
     const catalog = findCatalogSeries(vendor, series);
     if (catalog?.packName) {
-      return `「${catalog.label}」系列需要 ${catalog.packName}：请先点「在线安装 Pack…」下载导入，再生成工程。`;
+      return `「${catalog.label}」系列需要 ${catalog.packName}：点「在线安装 Pack…」可直接下载导入，或用 Keil Pack Installer 安装后重选系列，也可点「导入 Pack 包」导入已下载的 .pack。`;
     }
     return '请先选择可用的芯片支持包与型号，再生成工程。';
   }
@@ -770,13 +918,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       });
       void this.refreshPackCatalog(this.selectionValue.mcu.vendor);
       this.postState();
-      if (this.selectionValue.debugEnabled) {
-        this.post({
-          type: 'notification',
-          level: 'info',
-          message: '下次生成工程时会同时更新 Cortex-Debug 配置。'
-        });
-      }
       return;
     }
     if (message.type === 'saveSelection') {
@@ -803,6 +944,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           versions: options.versions,
           notice: this.packCatalogNotice
         });
+        // Choosing a Pack must make its devices available instead of leaving
+        // the version select showing an option the selection does not own:
+        // an imported or installed version is activated (imported if needed)
+        // right away. Downloadable versions still wait for an explicit pick.
+        const candidate = this.packOptions
+          .filter((option) => option.packId === message.packId
+            && (option.origin === 'imported' || option.origin === 'installed'))
+          .sort((left, right) =>
+            comparePackVersions(right.version, left.version)
+            || (left.origin === 'imported' ? -1 : right.origin === 'imported' ? 1 : 0)
+          )[0];
+        if (candidate) {
+          await this.activatePack(candidate.packId, candidate.version);
+        }
       }
       return;
     }
@@ -910,45 +1065,46 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           return generateNativeWorkflow(this.workflowHost(), structure);
         }
         if (this.selectionValue.mode === 'linux') {
-          return generateLinuxWorkflow(this.workflowHost(), this.toolchainForSelection());
+          return generateLinuxWorkflow(this.workflowHost(), this.toolchainForSelection(), {
+            targetType: this.selectionValue.linux.targetType,
+            sysroot: this.selectionValue.linux.sysroot
+          });
         }
         const profile = this.selectedDeviceProfile();
-        const flash = this.selectionValue.flash.enabled
-          ? this.flashGenerationOptions()
-          : undefined;
-        const project = await generateMcuWorkflow(this.workflowHost(), profile, {
-          flash,
+        // flash.py and the Cortex-Debug configuration have their own buttons;
+        // generating the project no longer writes them implicitly.
+        const deviceSupport = await this.deviceSupportFiles();
+        const result = await generateMcuWorkflow(this.workflowHost(), profile, {
           corePack: this.dependencies.corePackForGeneration
             ? await this.dependencies.corePackForGeneration(
                 this.selectionValue.corePackInclude !== false,
                 this.selectionValue.mcu.corePackVersion
               )
-            : undefined
+            : undefined,
+          deviceSupport
         });
-        if (!project.ok || !this.selectionValue.debugEnabled || !flash) {
-          return project;
+        // An empty device-file set is legitimate for a Pack without a declared
+        // device header, but it also silently produces a project without real
+        // `SystemInit`; name it so the sidebar explains instead of leaving the
+        // user to compare directories.
+        if (deviceSupport.length === 0 && this.dependencies.deviceSupportFilesForPart) {
+          showLog();
+          return {
+            ...result,
+            warnings: [
+              ...(result.warnings ?? []),
+              '未复制器件头/system 文件：该 Pack 没有可用的器件头，或扩展尚未重新加载。打开「输出 → CMake-Embedded」可看到具体原因。'
+            ]
+          };
         }
-        const debug = await generateDebugWorkflow(
-          this.workflowHost(),
-          flash.target,
-          flash.probe,
-          flash.openocdPath,
-          flash.backend,
-          flash.device
-        );
-        return {
-          ...project,
-          ok: debug.ok,
-          files: [...new Set([...project.files, ...debug.files])],
-          message: `${project.message} ${debug.message}`
-        };
+        return result;
       });
       return;
     }
     if (message.type === 'generateFlashScript') {
-      await this.runGeneration('正在生成 flash.py', () => {
+      await this.runGeneration('正在生成 flash.py', async () => {
         const flash = this.flashGenerationOptions();
-        return generateFlashWorkflow(
+        const result = await generateFlashWorkflow(
           this.workflowHost(),
           flash.target,
           flash.probe,
@@ -957,11 +1113,26 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           flash.device,
           flash.executables
         );
+        const warning = flash.backend === 'openocd'
+          ? this.flashTargetVendorWarning(flash.target)
+          : undefined;
+        return warning
+          ? { ...result, warnings: [...(result.warnings ?? []), warning] }
+          : result;
       });
       return;
     }
     if (message.type === 'generateDebugConfiguration') {
       await this.runGeneration('正在生成调试配置', async () => {
+        if (this.dependencies.ensureCortexDebugInstalled
+          && !(await this.dependencies.ensureCortexDebugInstalled())) {
+          return {
+            kind: 'debug' as const,
+            ok: false,
+            files: [],
+            message: '已取消：需要先安装 Cortex-Debug，否则按 F5 调试会话会立即退出。'
+          };
+        }
         const flash = this.flashGenerationOptions();
         const debug = await generateDebugWorkflow(
           this.workflowHost(),
@@ -971,9 +1142,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           flash.backend,
           flash.device
         );
+        const warning = flash.backend === 'openocd'
+          ? this.flashTargetVendorWarning(flash.target)
+          : undefined;
         return {
           ...debug,
-          files: [...new Set(debug.files)]
+          files: [...new Set(debug.files)],
+          ...(warning ? { warnings: [...(debug.warnings ?? []), warning] } : {})
         };
       });
       return;

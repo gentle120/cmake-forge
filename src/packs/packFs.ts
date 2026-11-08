@@ -99,7 +99,10 @@ export async function findAdjacentPackArchive(root: string): Promise<string | un
   }
   const parent = join(root, '..');
   const parentNames = await safeReaddir(parent);
-  const name = root.replace(/\\/g, '/').split('/').pop();
+  // A directory path may be given with a trailing separator; strip it before
+  // taking the last segment or every parent-level archive lookup misses.
+  const trimmed = root.replace(/[\\/]+$/, '');
+  const name = trimmed.replace(/\\/g, '/').split('/').pop();
   const candidates = parentNames
     .filter((entry) => name && entry.startsWith(`${name}.`) && entry.toLowerCase().endsWith('.pack'))
     .map((entry) => join(parent, entry))

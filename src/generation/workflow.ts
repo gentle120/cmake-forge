@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import type { DeviceProfile } from '../devices/deviceProfiles';
 import type { FlashProbeProfile } from '../flash/probeProfiles';
@@ -18,8 +18,14 @@ import {
   planCoreHeaderCopy,
   type CoreHeaderCopy
 } from '../packs/corePack';
+import {
+  deviceIncludeDir,
+  deviceSourceDir,
+  type DeviceSupportFile
+} from '../packs/deviceSupport';
 import { configureCppProperties } from '../integration/cppProperties';
 import { getWorkspaceSettings } from '../integration/workspaceSettings';
+import { missingOpenOcdNotice, resolveOpenOcdExecutable } from '../flash/openocd';
 import {
   configureNativeCppProperties,
   getNativeWorkspaceSettings
@@ -34,6 +40,7 @@ import { generateLinuxToolchainFile } from '../linux/toolchainGenerator';
 import {
   linuxConfigFileName,
   linuxToolchainFileName,
+  type LinuxTargetType,
   type LinuxToolchain,
   type LinuxToolchainHit
 } from '../linux/types';
@@ -42,7 +49,6 @@ import { generateNativeCMakePresets } from '../native/presetsGenerator';
 import { nativeConfigFileName, type NativeProjectStructure } from '../native/types';
 import type { ProjectDescription } from '../scanner/projectScanner';
 import {
-  findExistingFiles,
   toWorkspacePath,
   writeGeneratedFiles,
   type GeneratedFile
@@ -63,6 +69,8 @@ export interface WorkflowResult {
   cancelled?: boolean;
   files: string[];
   message: string;
+  /** Non-fatal problems the caller should surface next to the result. */
+  warnings?: string[];
 }
 
 export interface McuWorkflowOptions {
@@ -72,6 +80,13 @@ export interface McuWorkflowOptions {
    * the generated project builds without pointing at extension storage.
    */
   corePack?: { includeDir: string; version: string };
+  /**
+   * Device header and `system_*.c`/`.h` snapshot taken from the selected Pack.
+   * Without them a generated project has no `SystemInit` and no device header;
+   * the startup's weak default keeps it linking, but the vendor clock setup and
+   * register definitions only come from these files.
+   */
+  deviceSupport?: DeviceSupportFile[];
   flash?: {
     target: FlashTargetProfile;
     probe: FlashProbeProfile;
@@ -91,9 +106,125 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
+/** True when the file already holds exactly the content about to be written. */
+async function hasSameContent(filePath: string, content: string | Buffer): Promise<boolean> {
+  try {
+    const current = await readFile(filePath);
+    return Buffer.isBuffer(content)
+      ? current.equals(content)
+      : current.toString('utf8') === content;
+  } catch {
+    // A missing or unreadable file always needs the write.
+    return false;
+  }
+}
+
+/**
+ * Files of a generation whose on-disk content differs from the new output.
+ *
+ * Regenerating an unchanged project must not ask for confirmation, and a file
+ * that is missing has nothing to confirm either: both are reported here as
+ * "no overwrite needed" so the caller only prompts when something is lost.
+ */
+async function filesNeedingOverwrite(files: GeneratedFile[]): Promise<string[]> {
+  const changed: string[] = [];
+  for (const file of files) {
+    if (await exists(file.path) && !(await hasSameContent(file.path, file.content))) {
+      changed.push(file.path);
+    }
+  }
+  return changed;
+}
+
 export function projectNameFromRoot(root: string): string {
   const name = basename(root).replace(/[^A-Za-z0-9_-]/g, '_');
   return name || 'firmware';
+}
+
+/**
+ * Copies recorded by a previous generation that the current one no longer
+ * writes (a core-pack version change drops headers, a pack switch drops the
+ * previous device header and system source).
+ *
+ * Only directories the generator owns are cleaned: a stale `core_cm*.h` or
+ * `system_*.c` left behind would still be compiled, and the two files must not
+ * drift apart from the selected series.
+ */
+async function findObsoleteCopies(
+  root: string,
+  configPath: string,
+  keepRelatives: string[],
+  managedPrefixesLower: string[]
+): Promise<string[]> {
+  let recorded: string[] = [];
+  try {
+    const parsed = JSON.parse(await readFile(configPath, 'utf8')) as { generatedFiles?: unknown };
+    recorded = Array.isArray(parsed.generatedFiles)
+      ? parsed.generatedFiles.filter((value): value is string => typeof value === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+  const keep = new Set(keepRelatives.map((relative) => relative.replace(/\\/g, '/').toLowerCase()));
+  const obsolete: string[] = [];
+  for (const relative of recorded) {
+    const normalized = relative.replace(/\\/g, '/').toLowerCase();
+    if (keep.has(normalized)) {
+      continue;
+    }
+    if (!managedPrefixesLower.some((prefix) => normalized.startsWith(prefix))) {
+      continue;
+    }
+    const absolute = join(root, relative);
+    if (await exists(absolute)) {
+      obsolete.push(absolute);
+    }
+  }
+  return obsolete;
+}
+
+/**
+ * The scanned project without the copied core-header directory.
+ *
+ * After the first generation those headers exist in the project and the scanner
+ * reports `CMSIS/Include` as a normal include directory. The generated
+ * CMakeLists adds it explicitly as a project path, so keeping the scanned copy
+ * would change the include block between the first and second generation and
+ * ask the user to overwrite an otherwise identical file.
+ */
+function generatedProjectOf(
+  project: ProjectDescription,
+  corePlan: CoreHeaderCopy[],
+  deviceSupport: DeviceSupportFile[]
+): ProjectDescription {
+  const strip = (value: string): string => {
+    const normalized = value.split(String.fromCharCode(92)).join('/');
+    return (normalized.endsWith('/') ? normalized.slice(0, -1) : normalized).toLowerCase();
+  };
+  // The copied CMSIS directories and the device system source are generated on
+  // every run; a scan of the project sees them as ordinary sources and include
+  // directories, which would change the CMakeLists between runs and ask to
+  // overwrite identical output.
+  const managedIncludes = new Set<string>();
+  if (corePlan.length > 0) {
+    managedIncludes.add(coreProjectIncludeDir.toLowerCase());
+  }
+  if (deviceSupport.some((file) => file.relative.startsWith(`${deviceIncludeDir}/`))) {
+    managedIncludes.add(deviceIncludeDir.toLowerCase());
+  }
+  const managedSourcePrefix = `${deviceSourceDir.toLowerCase()}/`;
+  // Sub-directories of a managed include root come from the same copy (the
+  // scanner reports `CMSIS/Include/m-profile` separately) and must not leak into
+  // the generated include list.
+  const isManagedInclude = (directory: string): boolean => {
+    const normalized = strip(directory);
+    return [...managedIncludes].some((managed) => normalized === managed || normalized.startsWith(`${managed}/`));
+  };
+  return {
+    ...project,
+    includeDirs: project.includeDirs.filter((directory) => !isManagedInclude(directory)),
+    sources: project.sources.filter((source) => !strip(source).startsWith(managedSourcePrefix))
+  };
 }
 
 function createMcuFiles(
@@ -103,7 +234,8 @@ function createMcuFiles(
   project: ProjectDescription,
   existingCMakeContent: string | undefined,
   options: McuWorkflowOptions,
-  corePlan: CoreHeaderCopy[]
+  corePlan: CoreHeaderCopy[],
+  deviceSupport: DeviceSupportFile[]
 ): GeneratedFile[] {
   const cmakeDir = join(root, 'cmake');
   const hasSource = (fileName: string): boolean => {
@@ -114,8 +246,14 @@ function createMcuFiles(
   // relative and the project keeps building outside this machine.
   const files: GeneratedFile[] = [{
     path: join(root, 'CMakeLists.txt'),
-    content: generateCMakeLists(projectName, project, profile, existingCMakeContent, {
-      projectPaths: corePlan.length > 0 ? [coreProjectIncludeDir] : []
+    content: generateCMakeLists(projectName, generatedProjectOf(project, corePlan, deviceSupport), profile, existingCMakeContent, {
+      projectPaths: [
+        ...(corePlan.length > 0 ? [coreProjectIncludeDir] : []),
+        ...(deviceSupport.some((file) => file.relative.startsWith(`${deviceIncludeDir}/`)) ? [deviceIncludeDir] : [])
+      ],
+      generatedSources: deviceSupport
+        .filter((file) => file.relative.startsWith(`${deviceSourceDir}/`))
+        .map((file) => file.relative)
     })
   }];
 
@@ -167,6 +305,113 @@ function createMcuFiles(
   return files;
 }
 
+/**
+ * Drops the Pack's device support files when the project already ships them.
+ *
+ * Projects migrated from a vendor firmware repository usually import their own
+ * `CMSIS/GD/<series>/Include` and `Source/system_<stem>.c`. Copying the DFP copy
+ * next to those compiles `SystemInit` twice, mixes register definitions from two
+ * header versions, and the link fails — the debugger then has no executable.
+ */
+async function deviceSupportWithoutProjectCopies(
+  root: string,
+  project: ProjectDescription,
+  files: DeviceSupportFile[]
+): Promise<{ files: DeviceSupportFile[]; reused: string[] }> {
+  if (files.length === 0) {
+    return { files, reused: [] };
+  }
+  const sourceNames = new Set(project.sources.map((source) => basename(source).toLowerCase()));
+  const includeEntries = project.includeDirs
+    .map((directory) => {
+      const normalized = directory.replace(/\\/g, '/');
+      return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+    })
+    .filter((directory) => directory.length > 0 && !isAbsolute(directory));
+  const headerProvided = async (relative: string): Promise<boolean> => {
+    const name = basename(relative);
+    for (const directory of includeEntries) {
+      if (await exists(join(root, directory, name))) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Only the device header and the system source identify "the project already
+  // has device support". Auxiliary headers (`RTE_Components.h`, the vendor
+  // umbrella and the single RCU header) are commonly shipped by a driver
+  // library the project already contains; seeing one must not suppress the
+  // device header itself.
+  const isPrimarySupportFile = (relative: string): boolean => {
+    if (relative.startsWith(`${deviceSourceDir}/`)) {
+      return true;
+    }
+    const name = basename(relative).toLowerCase();
+    return !/^(rte_components|.*_libopt|.*_rcu|.*_rcc)\.h$/.test(name);
+  };
+
+  for (const file of files) {
+    if (!isPrimarySupportFile(file.relative)) {
+      continue;
+    }
+    const name = basename(file.relative).toLowerCase();
+    const provided = file.relative.startsWith(`${deviceSourceDir}/`)
+      ? sourceNames.has(name)
+      : await headerProvided(file.relative);
+    if (provided) {
+      return { files: [], reused: files.map((entry) => entry.relative) };
+    }
+  }
+  return { files, reused: [] };
+}
+
+/**
+ * Warns when a copied vendor umbrella header (`*_conf.h`) pulls in a driver
+ * library the project does not contain.
+ *
+ * Some vendor device headers force `USE_STDPERIPH_DRIVER` themselves and then
+ * include a configuration header that lists peripheral driver headers. The
+ * generator does not copy driver libraries, so the build only works after the
+ * user adds that driver folder to the project (or their own configuration
+ * header).
+ */
+async function missingUmbrellaIncludes(
+  root: string,
+  project: ProjectDescription,
+  files: DeviceSupportFile[]
+): Promise<string[]> {
+  const umbrella = files.find((file) => /_conf\.h$/i.test(file.relative));
+  if (!umbrella) {
+    return [];
+  }
+  const known = new Set(files.map((file) => basename(file.relative).toLowerCase()));
+  const includeEntries = project.includeDirs
+    .map((directory) => directory.replace(/\\/g, '/'))
+    .map((directory) => (directory.endsWith('/') ? directory.slice(0, -1) : directory))
+    .filter((directory) => directory.length > 0 && !isAbsolute(directory));
+  const available = new Set<string>();
+  for (const directory of includeEntries) {
+    let names: string[];
+    try {
+      names = await readdir(join(root, directory));
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      available.add(name.toLowerCase());
+    }
+  }
+  const missing: string[] = [];
+  for (const match of umbrella.content.toString('utf8').matchAll(/#\s*include\s+"([^"]+)"/g)) {
+    const name = (match[1].replace(/\\/g, '/').split('/').pop() ?? match[1]).toLowerCase();
+    if (!known.has(name) && !available.has(name)) {
+      missing.push(name);
+    }
+  }
+  return [...new Set(missing)];
+}
+
 export async function generateMcuWorkflow(
   host: ProjectWorkflowHost,
   profile: DeviceProfile,
@@ -205,11 +450,21 @@ export async function generateMcuWorkflow(
   const existingCMakeContent = await exists(cmakePath)
     ? await readFile(cmakePath, 'utf8')
     : undefined;
-  // The headers are copied before the overwrite check below, so existing
-  // copies are part of the question instead of being silently rewritten.
+  // The headers are copied into the project like any other generated file, so
+  // they take part in the overwrite check and the reported file list.
   const corePlan = options.corePack
-    ? await planCoreHeaderCopy(options.corePack.includeDir, root)
+    ? await planCoreHeaderCopy(options.corePack.includeDir, root, coreProjectIncludeDir, profile.core)
     : [];
+  // The guard must look at the project *without* the generator-owned CMSIS
+  // directories: otherwise a previous generation's own copies look like
+  // user-provided files and the next run stops refreshing them.
+  const deviceSupportPlan = await deviceSupportWithoutProjectCopies(
+    root,
+    generatedProjectOf(project, corePlan, options.deviceSupport ?? []),
+    options.deviceSupport ?? []
+  );
+  const deviceSupport = deviceSupportPlan.files;
+  const missingUmbrella = await missingUmbrellaIncludes(root, project, deviceSupport);
   const generatedFiles = createMcuFiles(
     root,
     projectName,
@@ -217,19 +472,73 @@ export async function generateMcuWorkflow(
     project,
     existingCMakeContent,
     options,
-    corePlan
+    corePlan,
+    deviceSupport
   );
   const configPath = join(root, '.mcu-cmake.json');
   const settingsPath = join(root, '.vscode', 'settings.json');
   const cppPropertiesPath = join(root, '.vscode', 'c_cpp_properties.json');
-  const existingFiles = await findExistingFiles([
-    ...generatedFiles.map((file) => file.path),
-    ...corePlan.map((entry) => entry.target),
-    settingsPath,
-    cppPropertiesPath,
-    configPath
-  ]);
-  if (existingFiles.length > 0 && !(await host.confirmOverwrite(existingFiles))) {
+  const cppPropertiesContent = await exists(cppPropertiesPath)
+    ? await readFile(cppPropertiesPath, 'utf8')
+    : undefined;
+  const cppPropertiesFile: GeneratedFile = {
+    path: cppPropertiesPath,
+    content: configureCppProperties(cppPropertiesContent)
+  };
+
+  // Regenerating an unchanged project must not ask for confirmation, so only
+  // files whose content actually differs are offered for overwrite.
+  const changedFiles = await filesNeedingOverwrite([...generatedFiles, cppPropertiesFile]);
+  const changedCorePlan: CoreHeaderCopy[] = [];
+  const copyCorePlan: CoreHeaderCopy[] = [];
+  for (const entry of corePlan) {
+    if (await exists(entry.target)) {
+      const source = await readFile(entry.source);
+      if (await hasSameContent(entry.target, source)) {
+        // Identical copy: do not rewrite it and do not ask about it.
+        continue;
+      }
+      changedCorePlan.push(entry);
+    }
+    copyCorePlan.push(entry);
+  }
+  const changedDeviceFiles: DeviceSupportFile[] = [];
+  const copyDeviceFiles: DeviceSupportFile[] = [];
+  for (const file of deviceSupport) {
+    const target = join(root, file.relative);
+    const current = await exists(target) ? await readFile(target) : undefined;
+    if (current && current.equals(file.content)) {
+      // Identical copy: leave it alone so editors and the C/C++ index are not
+      // reloaded on every generation.
+      continue;
+    }
+    if (current) {
+      changedDeviceFiles.push(file);
+    }
+    copyDeviceFiles.push(file);
+  }
+  const managedPrefixes = [
+    ...(corePlan.length > 0 ? [`${coreProjectIncludeDir.toLowerCase()}/`] : []),
+    ...(deviceSupport.some((file) => file.relative.startsWith(`${deviceIncludeDir}/`))
+      ? [`${deviceIncludeDir.toLowerCase()}/`]
+      : []),
+    ...(deviceSupport.some((file) => file.relative.startsWith(`${deviceSourceDir}/`))
+      ? [`${deviceSourceDir.toLowerCase()}/`]
+      : [])
+  ];
+  const obsoleteCopies = await findObsoleteCopies(
+    root,
+    configPath,
+    [...corePlan.map((entry) => entry.relative), ...deviceSupport.map((file) => file.relative)],
+    managedPrefixes
+  );
+  const overwrittenFiles = [
+    ...changedFiles,
+    ...changedCorePlan.map((entry) => entry.target),
+    ...changedDeviceFiles.map((file) => join(root, file.relative)),
+    ...obsoleteCopies
+  ];
+  if (overwrittenFiles.length > 0 && !(await host.confirmOverwrite(overwrittenFiles))) {
     return {
       kind: 'mcu',
       ok: false,
@@ -237,6 +546,11 @@ export async function generateMcuWorkflow(
       files: [],
       message: '已取消覆盖。'
     };
+  }
+  // Files the current Pack or core version no longer ships are removed after the
+  // same confirmation: the copy directories are owned by the generator.
+  for (const obsolete of obsoleteCopies) {
+    await rm(obsolete, { force: true });
   }
 
   await mkdir(join(root, 'cmake'), { recursive: true });
@@ -249,10 +563,12 @@ export async function generateMcuWorkflow(
       profile,
       [
         ...generatedFiles.map((file) => toWorkspacePath(root, file.path)),
+        ...corePlan.map((entry) => toWorkspacePath(root, entry.target)),
+        ...deviceSupport.map((file) => file.relative),
         toWorkspacePath(root, settingsPath),
         toWorkspacePath(root, cppPropertiesPath)
       ],
-      existingFiles.map((filePath) => toWorkspacePath(root, filePath)),
+      overwrittenFiles.map((filePath) => toWorkspacePath(root, filePath)),
       options.flash
         ? {
             script: 'flash.py',
@@ -265,15 +581,13 @@ export async function generateMcuWorkflow(
         : undefined
     )
   };
-  const cppPropertiesContent = await exists(cppPropertiesPath)
-    ? await readFile(cppPropertiesPath, 'utf8')
-    : undefined;
-  const cppPropertiesFile: GeneratedFile = {
-    path: cppPropertiesPath,
-    content: configureCppProperties(cppPropertiesContent)
-  };
   await writeGeneratedFiles([...generatedFiles, configFile, cppPropertiesFile]);
-  await copyCoreHeaders(corePlan);
+  await copyCoreHeaders(copyCorePlan);
+  for (const file of copyDeviceFiles) {
+    const target = join(root, file.relative);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, file.content);
+  }
   await host.updateSettings(getWorkspaceSettings());
   return {
     kind: 'mcu',
@@ -282,17 +596,42 @@ export async function generateMcuWorkflow(
       ...generatedFiles,
       configFile,
       cppPropertiesFile,
-      { path: settingsPath, content: '' }
+      { path: settingsPath, content: '' },
+      ...corePlan.map((entry) => ({ path: entry.target, content: '' })),
+      ...deviceSupport.map((file) => ({ path: join(root, file.relative), content: '' }))
     ].map((file) => toWorkspacePath(root, file.path)),
-    message: options.corePack
-      ? `已为 ${profile.part} 生成 CMake 工程，共扫描到 ${project.sources.length} 个源文件，并写入 CMSIS 内核头文件（${options.corePack.version}）。`
-      : `已为 ${profile.part} 生成 CMake 工程，共扫描到 ${project.sources.length} 个源文件。`
+    warnings: (() => {
+      const warnings: string[] = [];
+      if (deviceSupportPlan.reused.length > 0) {
+        warnings.push(`工程里已有该系列的器件头/ system 文件（${deviceSupportPlan.reused.map((relative) => basename(relative)).join('、')}），本次未重复复制，避免 SystemInit 被编译两次。`);
+      }
+      if (missingUmbrella.length > 0) {
+        warnings.push(`器件头通过厂商配置头引入了外设驱动库（${missingUmbrella.slice(0, 4).join('、')}${missingUmbrella.length > 4 ? '…' : ''}），本插件不复制驱动库：请把厂商驱动目录加入工程 include 路径后再编译。`);
+      }
+      return warnings.length > 0 ? warnings : undefined;
+    })(),
+    message: [
+      `已为 ${profile.part} 生成 CMake 工程，共扫描到 ${project.sources.length} 个源文件`,
+      options.corePack ? `，写入 ${profile.core} 内核头文件（${options.corePack.version}）` : '',
+      deviceSupport.length > 0 ? `，并复制该系列的器件头文件与 system 启动文件` : '',
+      '。'
+    ].join('')
   };
+}
+
+export interface LinuxWorkflowOptions {
+  /** Output kind; falls back to the previous generation, then an executable. */
+  targetType?: LinuxTargetType;
+  /** Preprocessor definitions; falls back to the previous generation. */
+  defines?: string[];
+  /** Target root; falls back to the previous generation. */
+  sysroot?: string;
 }
 
 export async function generateLinuxWorkflow(
   host: ProjectWorkflowHost,
-  toolchain: LinuxToolchain | LinuxToolchainHit
+  toolchain: LinuxToolchain | LinuxToolchainHit,
+  options: LinuxWorkflowOptions = {}
 ): Promise<WorkflowResult> {
   const root = host.workspaceRoot();
   if (!root) {
@@ -324,10 +663,13 @@ export async function generateLinuxWorkflow(
 
   const configPath = join(root, linuxConfigFileName);
   const saved = await readLinuxProjectConfig(configPath);
+  const sysroot = options.sysroot?.trim() || saved?.sysroot;
   const structure = describeLinuxProject(
     project,
     projectNameFromRoot(root),
-    saved?.defines ?? []
+    options.defines ?? saved?.defines ?? [],
+    options.targetType ?? saved?.targetType ?? 'executable',
+    sysroot
   );
   const cmakePath = join(root, 'CMakeLists.txt');
   const existingCMakeContent = await exists(cmakePath)
@@ -344,17 +686,21 @@ export async function generateLinuxWorkflow(
     },
     {
       path: join(root, 'cmake', linuxToolchainFileName),
-      content: generateLinuxToolchainFile(toolchain)
+      content: generateLinuxToolchainFile({ ...toolchain, sysroot })
     }
   ];
   const settingsPath = join(root, '.vscode', 'settings.json');
   const cppPropertiesPath = join(root, '.vscode', 'c_cpp_properties.json');
-  const existingFiles = await findExistingFiles([
-    ...generatedFiles.map((file) => file.path),
-    settingsPath,
-    cppPropertiesPath,
-    configPath
-  ]);
+  const cppPropertiesFile: GeneratedFile = {
+    path: cppPropertiesPath,
+    content: configureLinuxCppProperties(
+      await exists(cppPropertiesPath) ? await readFile(cppPropertiesPath, 'utf8') : undefined,
+      toolchain
+    )
+  };
+  // Same rule as the MCU direction: only content that actually changes is
+  // offered for overwrite, so an unchanged regeneration runs silently.
+  const existingFiles = await filesNeedingOverwrite([...generatedFiles, cppPropertiesFile]);
   if (existingFiles.length > 0 && !(await host.confirmOverwrite(existingFiles))) {
     return {
       kind: 'linux',
@@ -378,13 +724,6 @@ export async function generateLinuxWorkflow(
       ],
       existingFiles.map((filePath) => toWorkspacePath(root, filePath))
     )
-  };
-  const cppPropertiesContent = await exists(cppPropertiesPath)
-    ? await readFile(cppPropertiesPath, 'utf8')
-    : undefined;
-  const cppPropertiesFile: GeneratedFile = {
-    path: cppPropertiesPath,
-    content: configureLinuxCppProperties(cppPropertiesContent, toolchain)
   };
   await mkdir(join(root, 'cmake'), { recursive: true });
   await mkdir(join(root, '.vscode'), { recursive: true });
@@ -433,12 +772,15 @@ export async function generateNativeWorkflow(
   const configPath = join(root, nativeConfigFileName);
   const settingsPath = join(root, '.vscode', 'settings.json');
   const cppPropertiesPath = join(root, '.vscode', 'c_cpp_properties.json');
-  const existingFiles = await findExistingFiles([
-    ...generatedFiles.map((file) => file.path),
-    settingsPath,
-    cppPropertiesPath,
-    configPath
-  ]);
+  const cppPropertiesFile: GeneratedFile = {
+    path: cppPropertiesPath,
+    content: configureNativeCppProperties(
+      await exists(cppPropertiesPath) ? await readFile(cppPropertiesPath, 'utf8') : undefined
+    )
+  };
+  // Only content that actually changes needs a confirmation, as in the MCU and
+  // Linux directions.
+  const existingFiles = await filesNeedingOverwrite([...generatedFiles, cppPropertiesFile]);
   if (existingFiles.length > 0 && !(await host.confirmOverwrite(existingFiles))) {
     return {
       kind: 'native',
@@ -470,13 +812,6 @@ export async function generateNativeWorkflow(
       ],
       overwrittenFiles: existingFiles.map((filePath) => toWorkspacePath(root, filePath))
     }, null, 2)}\n`
-  };
-  const cppPropertiesContent = await exists(cppPropertiesPath)
-    ? await readFile(cppPropertiesPath, 'utf8')
-    : undefined;
-  const cppPropertiesFile: GeneratedFile = {
-    path: cppPropertiesPath,
-    content: configureNativeCppProperties(cppPropertiesContent)
   };
   await mkdir(join(root, '.vscode'), { recursive: true });
   await writeGeneratedFiles([...generatedFiles, configFile, cppPropertiesFile]);
@@ -513,7 +848,16 @@ export async function generateFlashWorkflow(
     };
   }
   const flashPath = join(root, 'flash.py');
-  const existingFiles = await findExistingFiles([flashPath]);
+  const script = generateFlashScript(
+    projectNameFromRoot(root),
+    target,
+    probe,
+    openocdPath,
+    backend,
+    device,
+    executables
+  );
+  const existingFiles = await filesNeedingOverwrite([{ path: flashPath, content: script }]);
   if (existingFiles.length > 0 && !(await host.confirmOverwrite(existingFiles))) {
     return {
       kind: 'flash',
@@ -523,19 +867,11 @@ export async function generateFlashWorkflow(
       message: '已取消覆盖 flash.py。'
     };
   }
-  await writeFile(
-    flashPath,
-    generateFlashScript(
-      projectNameFromRoot(root),
-      target,
-      probe,
-      openocdPath,
-      backend,
-      device,
-      executables
-    ),
-    'utf8'
-  );
+  // An unchanged script needs no write either: keep the file's timestamp so a
+  // rerun does not look like it produced new output.
+  if (existingFiles.length > 0 || !(await hasSameContent(flashPath, script))) {
+    await writeFile(flashPath, script, 'utf8');
+  }
   return {
     kind: 'flash',
     ok: true,
@@ -546,22 +882,52 @@ export async function generateFlashWorkflow(
   };
 }
 
-async function findOpenOcdSearchDirs(openocdPath: string): Promise<string[]> {
-  if (!isAbsolute(openocdPath)) {
-    return [];
+/**
+ * OpenOCD script roots for the generated Cortex-Debug configuration.
+ *
+ * Mirrors the order the generated flash.py uses, because both must resolve the
+ * same interface/target files: `OPENOCD_SCRIPTS`, then the layouts around the
+ * executable (Windows zip, Linux packages, macOS Homebrew).
+ */
+async function findOpenOcdSearchDirs(
+  openocdPath: string,
+  environment: NodeJS.ProcessEnv = process.env
+): Promise<string[]> {
+  const candidates: string[] = [];
+  const environmentRoot = environment.OPENOCD_SCRIPTS?.trim();
+  if (environmentRoot) {
+    candidates.push(environmentRoot);
   }
-  const prefix = dirname(dirname(openocdPath));
-  const candidates = [
-    join(prefix, 'scripts'),
-    join(prefix, 'share', 'openocd', 'scripts'),
-    join(prefix, 'openocd', 'scripts')
-  ];
-  for (const candidate of candidates) {
+  if (isAbsolute(openocdPath)) {
+    const prefix = dirname(dirname(openocdPath));
+    candidates.push(
+      join(prefix, 'scripts'),
+      join(prefix, 'share', 'openocd', 'scripts'),
+      join(prefix, 'openocd', 'scripts'),
+      join(dirname(openocdPath), 'scripts')
+    );
+  }
+  for (const candidate of new Set(candidates)) {
     if (await exists(join(candidate, 'target'))) {
       return [candidate];
     }
   }
   return [];
+}
+
+/** True when one of the generated presets has produced a debug/release ELF. */
+async function hasBuiltExecutable(root: string): Promise<boolean> {
+  for (const preset of ['debug', 'release']) {
+    try {
+      const files = await readdir(join(root, 'build', preset));
+      if (files.some((name) => name.toLowerCase().endsWith('.elf'))) {
+        return true;
+      }
+    } catch {
+      // The preset has not been configured yet.
+    }
+  }
+  return false;
 }
 
 export async function generateDebugWorkflow(
@@ -591,16 +957,33 @@ export async function generateDebugWorkflow(
     probe,
     backend,
     device,
+    // The presets always build into build/<preset>/, so the executable does not
+    // depend on CMake Tools having a selected launch target.
+    executable: `\${workspaceFolder}/build/debug/${projectNameFromRoot(root)}.elf`,
     searchDirs: backend === 'openocd' ? await findOpenOcdSearchDirs(openocdPath) : []
   });
   await mkdir(join(root, '.vscode'), { recursive: true });
-  await writeFile(launchPath, content, 'utf8');
+  // launch.json is merged rather than replaced, so an identical merge result
+  // needs no write and keeps the file's modification time intact.
+  if (content !== existingContent) {
+    await writeFile(launchPath, content, 'utf8');
+  }
+  const warnings: string[] = [];
+  if (backend === 'openocd' && !resolveOpenOcdExecutable(openocdPath)) {
+    warnings.push(missingOpenOcdNotice(openocdPath));
+  }
+  // `${command:cmake.launchTargetPath}` resolves to an empty path until a preset
+  // has been built, which also closes the F5 session immediately.
+  if (!(await hasBuiltExecutable(root))) {
+    warnings.push('还没有构建产物：按 F5 前先构建（cmake --build --preset debug），否则调试会话会立即退出。');
+  }
   return {
     kind: 'debug',
     ok: true,
     files: ['.vscode/launch.json'],
     message: backend === 'openocd'
       ? `已生成 ${target.label} 和 ${probe.label} 的 Cortex-Debug 配置。`
-      : `已生成 ${device?.part ?? target.label} 的 Cortex-Debug（${backend}）配置。`
+      : `已生成 ${device?.part ?? target.label} 的 Cortex-Debug（${backend}）配置。`,
+    warnings: warnings.length > 0 ? warnings : undefined
   };
 }

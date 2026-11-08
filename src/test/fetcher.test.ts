@@ -149,3 +149,25 @@ test('describes how long the timeout waited in user-facing copy', () => {
   assert.match(describeTimeout(new RequestTimeoutError(600_000)), /10 分钟/);
   assert.match(describeTimeout(new RequestTimeoutError(500)), /500 毫秒/);
 });
+
+test('times out while the response body is still loading', async () => {
+  // fetch() resolves on headers; without the body wrapper a stalled transfer
+  // would ignore the timeout entirely.
+  const fetcher = createTimeoutFetcher(20, async (_url, init) => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    body: null,
+    text: async () => '',
+    arrayBuffer: () => new Promise<ArrayBuffer>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      });
+    })
+  }));
+
+  const response = await fetcher('https://example.invalid/pack');
+  await assert.rejects(response.arrayBuffer(), RequestTimeoutError);
+});

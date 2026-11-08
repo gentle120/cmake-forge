@@ -25,6 +25,17 @@ test('generates a GNU assembler startup file for a Pack-derived profile', () => 
   assert.match(startup, /\.weak USART1_IRQHandler/);
 });
 
+test('ships a weak, typed SystemInit so a project without the vendor system file links', () => {
+  const startup = generateGnuStartup(fixtureDeviceProfile());
+
+  // binutils 2.44+ reports "Unknown destination type (ARM/Thumb)" for a call to
+  // an untyped or undefined symbol, so the weak default is both defined and
+  // tagged as a function; the project's own SystemInit still overrides it.
+  assert.match(startup, /\.weak SystemInit/);
+  assert.match(startup, /\.thumb_func\s*\n\.type SystemInit, %function/);
+  assert.match(startup, /SystemInit:\s*\n\s*bx lr/);
+});
+
 test('emits Cortex-M3 assembly settings and the profile vector table', () => {
   const startup = generateGnuStartup(fixtureDeviceProfile());
 

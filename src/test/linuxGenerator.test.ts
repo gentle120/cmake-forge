@@ -245,7 +245,30 @@ test('ignores a missing, malformed, or unrelated saved config', async () => {
 
   const unknownFamily = join(root, 'unknown.json');
   writeFileSync(unknownFamily, JSON.stringify({ toolchain: { family: 'mips' } }));
-  assert.deepEqual(await readLinuxProjectConfig(unknownFamily), { toolchainFamily: undefined, defines: [] });
+  assert.deepEqual(await readLinuxProjectConfig(unknownFamily), {
+    toolchainFamily: undefined,
+    defines: [],
+    targetType: undefined
+  });
+
+  // A previous generation's output kind is reused, an unknown one is ignored.
+  const savedKind = join(root, 'kind.json');
+  writeFileSync(savedKind, JSON.stringify({ structure: { targetType: 'shared' } }));
+  assert.equal((await readLinuxProjectConfig(savedKind))?.targetType, 'shared');
+
+  const badKind = join(root, 'bad-kind.json');
+  writeFileSync(badKind, JSON.stringify({ structure: { targetType: 'module' } }));
+  assert.equal((await readLinuxProjectConfig(badKind))?.targetType, undefined);
+});
+
+test('a saved library target type reaches the generated CMakeLists', () => {
+  const structure = describeLinuxProject(
+    { sources: ['main.c'], includeDirs: [], defines: [] },
+    'demo',
+    [],
+    'static'
+  );
+  assert.match(generateLinuxCMakeLists(structure), /add_library\(demo STATIC\)/);
 });
 
 test('carries saved defines into the generated CMakeLists', () => {
@@ -258,4 +281,25 @@ test('carries saved defines into the generated CMakeLists', () => {
   assert.deepEqual(structure.defines, ['FEATURE_A=1', 'FEATURE_B']);
   const cmake = generateLinuxCMakeLists(structure);
   assert.match(cmake, /target_compile_definitions\(demo PRIVATE\n    FEATURE_A=1\n    FEATURE_B\n\)/);
+});
+
+test('keeps the sysroot in the structure and in the saved project config', () => {
+  const structure = describeLinuxProject(
+    { sources: ['main.c'], includeDirs: [], defines: [] },
+    'demo',
+    [],
+    'executable',
+    '/opt/riscv-sysroot'
+  );
+  assert.equal(structure.sysroot, '/opt/riscv-sysroot');
+
+  const config = JSON.parse(generateLinuxProjectConfig(
+    'demo',
+    createLinuxToolchain('riscv', { sysroot: '/opt/riscv-sysroot' }),
+    structure,
+    [],
+    []
+  )) as { toolchain: { sysroot?: string }; structure: { sysroot?: string } };
+  assert.equal(config.structure.sysroot, '/opt/riscv-sysroot');
+  assert.equal(config.toolchain.sysroot, '/opt/riscv-sysroot');
 });

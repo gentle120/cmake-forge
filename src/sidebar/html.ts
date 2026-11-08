@@ -24,6 +24,9 @@ export function renderSidebarHtml(
   extensionUri: WebviewUri,
   nonce: string
 ): string {
+  // The compiled copy under out/sidebar is authoritative (scripts/copy-sidebar-assets.js
+  // keeps it byte-identical to src). Falling back to src would silently serve
+  // stale assets if the copy step ever fails, so the location is probed once.
   const runtimeRoot = existsSync(join(__dirname, 'webview', 'main.js'))
     ? 'out/sidebar'
     : 'src/sidebar';
@@ -90,14 +93,13 @@ export function renderSidebarHtml(
     <section id="mcu-panel" class="configuration-panel" aria-label="MCU 配置" hidden>
       <section class="control-section target-section" aria-labelledby="target-title">
         <div class="section-header">
-          <span class="ui-icon" data-icon="chip" aria-hidden="true"></span>
+          <span class="section-icon"><span class="ui-icon" data-icon="chip" aria-hidden="true"></span></span>
           <div class="section-heading">
             <h2 id="target-title">目标配置</h2>
-            <p>选择芯片支持包及版本，再确定系列与型号。</p>
+            <p>先选厂商与系列，再确定 Pack 与型号。</p>
           </div>
         </div>
         <div id="target-host" class="target-host"></div>
-        <p id="mcu-blocked-notice" class="operation-notice" data-tone="warning" role="alert" hidden></p>
         <div class="pack-actions">
           <button id="import-pack" class="secondary-action compact" type="button" data-command="importPack">
             <span class="ui-icon" data-icon="folder" aria-hidden="true"></span><span>导入 Pack 包…</span>
@@ -109,15 +111,17 @@ export function renderSidebarHtml(
             <span class="ui-icon" data-icon="chip" aria-hidden="true"></span><span>安装内核包…</span>
           </button>
         </div>
+        <p id="mcu-blocked-notice" class="operation-notice" data-tone="warning" role="alert" hidden></p>
         <p id="pack-catalog-notice" class="field-detail" role="status" aria-live="polite" hidden></p>
         <p id="core-pack-notice" class="field-detail" role="status" aria-live="polite" hidden></p>
+        <div id="core-pack-host" class="core-pack-host"></div>
         <div class="toggle-list">
           <label class="toggle-row">
             <span class="toggle-leading">
               <span class="ui-icon" data-icon="chip" aria-hidden="true"></span>
               <span class="toggle-copy">
                 <span class="toggle-title">生成内核包 include</span>
-                <small class="field-detail">把已安装的 ARM CMSIS 头文件目录写入工程</small>
+                <small class="field-detail">生成时把 CMSIS 内核头文件复制进工程 CMSIS/Include</small>
               </span>
             </span>
             <span class="switch-track">
@@ -129,45 +133,19 @@ export function renderSidebarHtml(
 
       <section class="control-section flash-section" aria-labelledby="flash-title">
         <div class="section-header">
-          <span class="ui-icon" data-icon="zap" aria-hidden="true"></span>
+          <span class="section-icon"><span class="ui-icon" data-icon="zap" aria-hidden="true"></span></span>
           <div class="section-heading">
             <h2 id="flash-title">烧录与调试</h2>
-            <p>选择后端与探针；生成工程不会编译，也不会烧录硬件。</p>
+            <p>选择后端与探针，可单独生成烧录脚本或调试配置。</p>
           </div>
-        </div>
-        <div class="toggle-list">
-          <label class="toggle-row">
-            <span class="toggle-leading">
-              <span class="ui-icon" data-icon="zap" aria-hidden="true"></span>
-              <span class="toggle-copy">
-                <span class="toggle-title">生成 flash.py</span>
-                <small class="field-detail">按所选后端生成烧录脚本</small>
-              </span>
-            </span>
-            <span class="switch-track">
-              <input id="toggle-flash" class="switch-input" type="checkbox"><span></span>
-            </span>
-          </label>
-          <label class="toggle-row">
-            <span class="toggle-leading">
-              <span class="ui-icon" data-icon="debug-alt" aria-hidden="true"></span>
-              <span class="toggle-copy">
-                <span class="toggle-title">Cortex-Debug</span>
-                <small class="field-detail">launch.json 调试配置</small>
-              </span>
-            </span>
-            <span class="switch-track">
-              <input id="toggle-debug" class="switch-input" type="checkbox"><span></span>
-            </span>
-          </label>
         </div>
         <div id="flash-host" class="flash-host"></div>
         <div class="quick-actions">
           <button id="quick-flash" class="quick-action" type="button" data-command="generateFlashScript">
-            <span class="ui-icon" data-icon="zap" aria-hidden="true"></span><span>仅 flash.py</span>
+            <span class="ui-icon" data-icon="zap" aria-hidden="true"></span><span>生成 flash.py</span>
           </button>
           <button id="quick-debug" class="quick-action" type="button" data-command="generateDebugConfiguration">
-            <span class="ui-icon" data-icon="debug-alt" aria-hidden="true"></span><span>仅 Debug</span>
+            <span class="ui-icon" data-icon="debug-alt" aria-hidden="true"></span><span>生成 Debug 配置</span>
           </button>
         </div>
         <details id="backend-details" class="advanced">
@@ -199,7 +177,7 @@ export function renderSidebarHtml(
 
     <section id="result-region" class="result-region" hidden>
       <h2>已生成文件</h2>
-      <ul id="generated-files"></ul>
+      <div id="generated-files" class="file-tree"></div>
     </section>
 
     <p id="operation-notice" class="operation-notice" role="alert" hidden></p>

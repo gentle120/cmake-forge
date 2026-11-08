@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -202,6 +202,31 @@ test('resolves the requested installed core pack version only when it exists', (
     assert.equal((await findInstalledCorePack(root))?.record.version, '6.3.0');
   }));
 
+test('plans only the core headers the selected core needs', () =>
+  withStorage(async (root) => {
+    await installCorePack(corePackBuffer(), 'ARM.CMSIS.6.4.0.pack', root);
+    const pack = await findInstalledCorePack(root);
+    assert.ok(pack);
+
+    const projectRoot = join(root, 'project');
+    const plan = await planCoreHeaderCopy(pack.includeDir, projectRoot, coreProjectIncludeDir, 'cortex-m3');
+    // core_cm4.h belongs to another core and must stay out of an M3 project.
+    assert.deepEqual(plan.map((entry) => entry.relative), [
+      `${coreProjectIncludeDir}/cmsis_version.h`,
+      `${coreProjectIncludeDir}/core_cm3.h`
+    ]);
+
+    const m4 = await planCoreHeaderCopy(pack.includeDir, projectRoot, coreProjectIncludeDir, 'cortex-m4');
+    assert.deepEqual(m4.map((entry) => entry.relative), [
+      `${coreProjectIncludeDir}/cmsis_version.h`,
+      `${coreProjectIncludeDir}/core_cm4.h`
+    ]);
+
+    // An unfamiliar core falls back to copying every header, never to nothing.
+    const unknown = await planCoreHeaderCopy(pack.includeDir, projectRoot, coreProjectIncludeDir, 'cortex-x9');
+    assert.equal(unknown.length, 3);
+  }));
+
 test('plans and copies core headers into the generated project', () =>
   withStorage(async (root) => {
     await installCorePack(corePackBuffer(), 'ARM.CMSIS.6.4.0.pack', root);
@@ -222,3 +247,34 @@ test('plans and copies core headers into the generated project', () =>
     const copied = await readFile(join(projectRoot, 'CMSIS', 'Include', 'core_cm4.h'), 'utf8');
     assert.ok(copied.includes('cm4'));
   }));
+
+test('keeps only the GCC compiler headers and the selected core', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cmsis-core-closure-'));
+  try {
+    const includeDir = join(root, 'include');
+    await mkdir(join(includeDir, 'm-profile'), { recursive: true });
+    await writeFile(join(includeDir, 'core_cm4.h'), '#include "cmsis_compiler.h"\n#include "cmsis_version.h"\n#include "m-profile/armv7m_mpu.h"\n');
+    await writeFile(join(includeDir, 'core_cm3.h'), '');
+    await writeFile(join(includeDir, 'cmsis_compiler.h'), '#include "cmsis_gcc.h"\n#include "cmsis_armclang.h"\n');
+    await writeFile(join(includeDir, 'cmsis_gcc.h'), '#include "m-profile/cmsis_gcc_m.h"\n');
+    await writeFile(join(includeDir, 'cmsis_version.h'), '');
+    await writeFile(join(includeDir, 'cmsis_armclang.h'), '');
+    await writeFile(join(includeDir, 'm-profile', 'armv7m_mpu.h'), '');
+    await writeFile(join(includeDir, 'm-profile', 'cmsis_gcc_m.h'), '');
+
+    const plan = await planCoreHeaderCopy(includeDir, join(root, 'project'), coreProjectIncludeDir, 'cortex-m4');
+    assert.deepEqual(
+      plan.map((entry) => entry.relative.replace(`${coreProjectIncludeDir}/`, '')),
+      [
+        'cmsis_compiler.h',
+        'cmsis_gcc.h',
+        'cmsis_version.h',
+        'core_cm4.h',
+        'm-profile/armv7m_mpu.h',
+        'm-profile/cmsis_gcc_m.h'
+      ]
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

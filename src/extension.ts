@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
+import { join, resolve } from 'node:path';
 import {
+  devicePackSourceForPart,
   getDeviceProfile,
-  isRuntimeDeviceProfile,
   listDeviceProfiles,
+  type DeviceProfile,
   type DeviceSeries,
   type DeviceVendor
 } from './devices/deviceProfiles';
@@ -64,10 +66,9 @@ import {
   listFlashBackendProfiles,
   type FlashBackendId
 } from './flash/backendProfiles';
-import type { FlashDeviceContext, FlashExecutablePaths } from './generator/flashScriptGenerator';
+import type { FlashExecutablePaths } from './generator/flashScriptGenerator';
 import {
   getFlashTargetProfile,
-  getFlashTargetProfileForDevice,
   listFlashTargetProfiles,
   listFlashTargetSeries,
   listFlashTargetVendors,
@@ -89,6 +90,11 @@ import { discoverLinuxToolchains } from './linux/discovery';
 import { selectLinuxToolchain } from './linux/selection';
 import { linuxConfigFileName } from './linux/types';
 import { describeNativeProject } from './native/projectStructure';
+import { readNativeProjectConfig } from './native/projectConfig';
+import { nativeConfigFileName } from './native/types';
+import { ensureCortexDebugInstalled } from './integration/cortexDebug';
+import { loadDeviceSupportFiles, type DeviceSupportFile } from './packs/deviceSupport';
+import { logLine } from './integration/output';
 import { scanProject, ScanCancelledError, type ProjectDescription } from './scanner/projectScanner';
 import { discoverWorkspaceProjects } from './scanner/workspaceProjects';
 import { SidebarProvider } from './sidebar/provider';
@@ -136,8 +142,11 @@ function createWorkflowHost(fixedRoot?: string): ProjectWorkflowHost {
     workspaceRoot: () => fixedRoot ?? activeSidebar?.selection().projectRoot ?? undefined,
     scanWorkspace,
     confirmOverwrite: async (files) => {
+      // Modal: a non-modal notification can be collapsed into the notification
+      // centre, leaving the generation waiting for an answer the user cannot see.
       const action = await vscode.window.showWarningMessage(
         `已有 ${files.length} 个生成文件存在，是否覆盖？`,
+        { modal: true },
         '覆盖',
         '取消'
       );
@@ -162,6 +171,11 @@ function reportWorkflowResult(result: WorkflowResult): void {
     vscode.window.showInformationMessage(result.message);
   } else {
     vscode.window.showErrorMessage(result.message);
+  }
+  // A generation can succeed and still leave F5 broken (a missing OpenOCD, for
+  // example); the warning explains the next step while the result is fresh.
+  for (const warning of result.warnings ?? []) {
+    void vscode.window.showWarningMessage(warning);
   }
 }
 
@@ -297,17 +311,6 @@ async function selectFlashTarget(): Promise<FlashTargetProfile | undefined> {
   return targetSelection ? getFlashTargetProfile(targetSelection.id) : undefined;
 }
 
-async function shouldGenerateFlashScript(): Promise<boolean | undefined> {
-  const selection = await vscode.window.showQuickPick(
-    [
-      { label: '同时生成 flash.py', value: true },
-      { label: '暂不生成 flash.py', value: false }
-    ],
-    { placeHolder: '是否生成 OpenOCD 烧录脚本？' }
-  );
-  return selection?.value;
-}
-
 function getOpenOcdPath(): string {
   return vscode.workspace.getConfiguration('cmakeEmbedded')
     .get<string>('openocdPath', 'openocd')?.trim() || 'openocd';
@@ -334,11 +337,14 @@ function ensureCatalogVendor(id: string, label: string): void {
   if (hasVendor(id)) {
     return;
   }
+  // Derived from the curated position so repeated refreshes do not reshuffle
+  // the vendor list as the profile count grows.
+  const curatedIndex = curatedVendors.findIndex((vendor) => vendor.id === id);
   registerVendor({
     id,
     label: label || id,
     definePrefixes: [id.replace(/[^A-Za-z0-9_]/g, '') || id],
-    order: importedVendorBaseOrder + listDeviceProfiles().length
+    order: importedVendorBaseOrder + (curatedIndex >= 0 ? curatedIndex : 0)
   });
 }
 
@@ -571,23 +577,29 @@ function executablePaths(): FlashExecutablePaths {
   };
 }
 
-function flashDeviceFor(profile: ReturnType<typeof getDeviceProfile>): FlashDeviceContext {
-  return {
-    part: profile.part,
-    core: profile.core,
-    packFile: isRuntimeDeviceProfile(profile.part)
-      ? packFileByPart.get(profile.part)
-      : undefined
-  };
-}
-
 const scanFileSystem = { exists: existsSync, readDir: readdirSync };
 
+/**
+ * Pack roots and Keil roots, memoized briefly.
+ *
+ * Enumerating the drive letters (`existsSync` per letter) and rebuilding the
+ * candidate layout happens on every catalog refresh and every Keil Pack lookup;
+ * the paths cannot change without a window reload or an environment edit, so a
+ * short TTL removes the repeated filesystem probing.
+ */
+const scanRootsTtlMs = 5000;
+let scanRootsCache: { at: number; value: ReturnType<typeof defaultScanRoots> } | undefined;
+
 function scanRoots() {
+  const now = Date.now();
+  if (scanRootsCache && now - scanRootsCache.at < scanRootsTtlMs) {
+    return scanRootsCache.value;
+  }
   const drives = process.platform === 'win32'
     ? Array.from({ length: 24 }, (_, index) => `${String.fromCharCode(67 + index)}:/`).filter(existsSync)
     : [];
   const roots = defaultScanRoots(process.platform, process.env, os.homedir(), drives);
+  scanRootsCache = { at: now, value: roots };
   return roots;
 }
 
@@ -761,6 +773,73 @@ async function mcuCorePackForGeneration(
     '未安装 ARM CMSIS 内核包：生成的工程缺少 core_cm*.h，编译会失败。请点侧栏「安装内核包…」或运行「CMake-Embedded: Install ARM CMSIS Core Pack」。'
   );
   return undefined;
+}
+
+/**
+ * Directory of an installed Pack that matches a stored import record.
+ *
+ * Records created before the device-file snapshot existed carry neither the
+ * snapshot nor the source directory; the installed Pack is still on disk, so the
+ * snapshot can be rebuilt from it.
+ */
+async function installedDirectoryFor(name: string, version: string): Promise<string | undefined> {
+  const entries = listKeilPacks(scanRoots().packRoots, scanFileSystem);
+  for (const entry of entries) {
+    if (entry.source !== 'directory') {
+      continue;
+    }
+    const identity = await resolveInstalledPackIdentity(entry);
+    if (identity && identity.name === name && identity.version === version) {
+      return entry.packFile;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Device header and `system_*.c`/`.h` of the selected Pack, read from the
+ * snapshot taken at import time (rebuilt from the archive or the installed
+ * directory for Packs imported before the snapshot existed).
+ *
+ * A Pack without a declared device header falls back to the single device header
+ * in its snapshot; without any device files the startup's weak `SystemInit`
+ * keeps the project linking.
+ */
+async function deviceSupportFor(profile: DeviceProfile, sourcePack?: string): Promise<DeviceSupportFile[]> {
+  const packSource = sourcePack ?? devicePackSourceForPart(profile.part);
+  if (!packSource) {
+    logLine(`[device] ${profile.part}: 没有关联的 Pack 来源，跳过器件文件复制。`);
+    return [];
+  }
+  try {
+    const record = (await listImportedPacks(packStorageRoot))
+      .find((pack) => pack.packFile === packSource);
+    // Scanning the installed Pack roots is only the fallback when the stored
+    // archive is gone; doing it for every archive-backed Pack would make each
+    // generation walk the whole Keil installation.
+    const archivePresent = existsSync(resolve(packStorageRoot, packSource));
+    const sourceRoot = record?.sourceRoot
+      ?? (record && !archivePresent
+        ? await installedDirectoryFor(record.name, record.version)
+        : undefined);
+    logLine(
+      `[device] ${profile.part}: pack=${packSource} record=${record ? 'yes' : 'no'} `
+      + `header=${profile.deviceHeader ?? '(未记录)'} sourceRoot=${sourceRoot ?? '(无)'}`
+    );
+    const files = await loadDeviceSupportFiles(packStorageRoot, packSource, profile.deviceHeader, {
+      sourceRoot,
+      familyHints: [profile.family, profile.series, profile.part]
+    });
+    logLine(
+      files.length > 0
+        ? `[device] ${profile.part}: 复制 ${files.length} 个文件（${files.map((file) => file.relative).join(', ')}）`
+        : `[device] ${profile.part}: 没有解析到器件头/system 文件（Pack 快照与归档都无法给出 header）。`
+    );
+    return files;
+  } catch (error) {
+    logLine(`[device] ${profile.part}: 解析失败：${error instanceof Error ? error.message : String(error)}`);
+    return [];
+  }
 }
 
 async function importPackOnly(): Promise<CommandResult> {
@@ -1077,24 +1156,6 @@ async function selectFlashBackend(
   return selection?.id as FlashBackendId | undefined;
 }
 
-async function ensureCortexDebugInstalled(): Promise<boolean> {
-  if (vscode.extensions.getExtension('marus25.cortex-debug')) {
-    return true;
-  }
-  const action = await vscode.window.showWarningMessage(
-    '生成调试配置需要 Cortex-Debug。',
-    '安装',
-    '继续'
-  );
-  if (action === '安装') {
-    await vscode.commands.executeCommand(
-      'workbench.extensions.installExtension',
-      'marus25.cortex-debug'
-    );
-    return false;
-  }
-  return action === '继续';
-}
 
 async function generateDebugConfigurationOnly(): Promise<void> {
   const root = await selectWorkspaceProject();
@@ -1164,48 +1225,24 @@ async function generateProject(): Promise<void> {
   if (!profile) {
     return;
   }
-  const generateFlash = await shouldGenerateFlashScript();
-  if (generateFlash === undefined) {
-    return;
-  }
-  let flash: Parameters<typeof generateMcuWorkflow>[2]['flash'];
-  if (generateFlash) {
-    const probe = await selectFlashProbe();
-    if (!probe) {
-      return;
-    }
-    let backend: FlashBackendId = 'openocd';
-    const device = flashDeviceFor(profile);
-    let target: FlashTargetProfile;
-    if (profile.debugTarget) {
-      target = getFlashTargetProfileForDevice(profile);
-    } else {
-      const picked = await selectFlashBackend(probe, profile);
-      if (!picked) {
-        return;
-      }
-      backend = picked;
-      // jlink/pyocd scripts never read the OpenOCD target; any entry satisfies the type.
-      target = getFlashTargetProfile('stm32f1xx');
-    }
-    flash = {
-      target,
-      probe,
-      openocdPath: getOpenOcdPath(),
-      backend,
-      device,
-      executables: executablePaths()
-    };
-  }
+  // flash.py and the Cortex-Debug configuration have their own commands; the
+  // sidebar behaves the same way, so both entry points generate only the
+  // project here.
   const selection = activeSidebar?.selection();
   const corePack = await mcuCorePackForGeneration(
     selection?.corePackInclude !== false,
     selection?.mcu.corePackVersion ?? ''
   );
+  const selectedSource = selection?.mcu.part.toUpperCase() === profile.part.toUpperCase()
+    ? selection.mcu.sourcePack
+    : undefined;
   reportWorkflowResult(await generateMcuWorkflow(
     createWorkflowHost(root),
     profile,
-    { flash, corePack }
+    {
+      corePack,
+      deviceSupport: await deviceSupportFor(profile, selectedSource)
+    }
   ));
 }
 
@@ -1220,7 +1257,18 @@ async function generateLinuxProject(): Promise<void> {
   if (!toolchain) {
     return;
   }
-  reportWorkflowResult(await generateLinuxWorkflow(createWorkflowHost(root), toolchain));
+  const sysroot = await vscode.window.showInputBox({
+    title: '目标 sysroot（可选）',
+    prompt: '填写目标系统的根目录，例如 /opt/loongarch64-sysroot；留空表示使用编译器的默认搜索路径。',
+    value: saved?.sysroot ?? '',
+    ignoreFocusOut: true
+  });
+  if (sysroot === undefined) {
+    return;
+  }
+  reportWorkflowResult(await generateLinuxWorkflow(createWorkflowHost(root), toolchain, {
+    sysroot: sysroot.trim() || undefined
+  }));
 }
 
 async function generateNativeProject(): Promise<void> {
@@ -1237,25 +1285,38 @@ async function generateNativeProject(): Promise<void> {
     vscode.window.showErrorMessage('工作区中没有找到 C/C++ 或汇编源文件。');
     return;
   }
-  const selection = await vscode.window.showQuickPick(
-    [
-      { label: '可执行文件', value: 'executable' as const },
-      { label: '静态库', value: 'static' as const },
-      { label: '动态库', value: 'shared' as const }
-    ],
-    { placeHolder: '选择普通 C/C++ 目标类型' }
-  );
+  const saved = await readNativeProjectConfig(join(root, nativeConfigFileName));
+  const typeItems = [
+    { label: '可执行文件', value: 'executable' as const },
+    { label: '静态库', value: 'static' as const },
+    { label: '动态库', value: 'shared' as const }
+  ];
+  // The previous generation's choice is offered as the default item instead of
+  // forcing the user to re-pick it on every regeneration.
+  const orderedTypes = saved?.targetType
+    ? [...typeItems].sort((left, right) =>
+        left.value === saved.targetType ? -1 : right.value === saved.targetType ? 1 : 0)
+    : typeItems;
+  const selection = await vscode.window.showQuickPick(orderedTypes, {
+    placeHolder: '选择普通 C/C++ 目标类型'
+  });
   if (!selection) {
     return;
   }
-  const standardSelection = await vscode.window.showQuickPick(
-    [
-      { label: 'C11 / C++17（推荐）', cStandard: 11 as const, cxxStandard: 17 as const },
-      { label: 'C17 / C++20', cStandard: 17 as const, cxxStandard: 20 as const },
-      { label: 'C23 / C++23', cStandard: 23 as const, cxxStandard: 23 as const }
-    ],
-    { placeHolder: '选择 C / C++ 语言标准' }
-  );
+  const standards = [
+    { label: 'C11 / C++17（推荐）', cStandard: 11 as const, cxxStandard: 17 as const },
+    { label: 'C17 / C++20', cStandard: 17 as const, cxxStandard: 20 as const },
+    { label: 'C23 / C++23', cStandard: 23 as const, cxxStandard: 23 as const }
+  ];
+  const orderedStandards = saved?.cStandard && saved?.cxxStandard
+    ? [...standards].sort((left, right) =>
+        left.cStandard === saved.cStandard && left.cxxStandard === saved.cxxStandard
+          ? -1
+          : right.cStandard === saved.cStandard && right.cxxStandard === saved.cxxStandard ? 1 : 0)
+    : standards;
+  const standardSelection = await vscode.window.showQuickPick(orderedStandards, {
+    placeHolder: '选择 C / C++ 语言标准'
+  });
   if (!standardSelection) {
     return;
   }
@@ -1277,8 +1338,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const sidebarProvider = new SidebarProvider(context, {
     workflow: host,
     confirmOverwrite: async (files) => {
+      // Modal: a non-modal notification can be collapsed into the notification
+      // centre, leaving the generation waiting for an answer the user cannot see.
       const action = await vscode.window.showWarningMessage(
         `已有 ${files.length} 个生成文件存在，是否覆盖？`,
+        { modal: true },
         '覆盖',
         '取消'
       );
@@ -1292,6 +1356,11 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     discoverPackVendors: () => discoverPackVendorOptions(),
     describeCorePack: () => describeCorePack(packStorageRoot),
+    ensureCortexDebugInstalled: () => ensureCortexDebugInstalled(),
+    deviceSupportFilesForPart: async (part, sourcePack) => {
+      const selected = getDeviceProfile(part);
+      return deviceSupportFor(selected, sourcePack);
+    },
     corePackForGeneration: (includeCorePack, version) =>
       mcuCorePackForGeneration(includeCorePack, version),
     loadPackCatalog: (vendor) => loadDevicePackCatalog(vendor),

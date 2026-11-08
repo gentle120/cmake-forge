@@ -17,9 +17,5 @@ tsconfig.json
 *.doc
 *.vsix
 flash.py
-images/icon-electric.png
 img/demo.png
-package.json.tmp
-package_new.json
-temp_package.json
-images/master-icon.png
+scripts

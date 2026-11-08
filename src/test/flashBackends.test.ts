@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,8 +21,15 @@ import {
 } from '../generator/flashScriptGenerator';
 import { generateCortexDebugLaunchJson } from '../generator/debugConfigGenerator';
 
-function assertPythonSyntax(script: string): Promise<void> {
-  const { promise, resolve, reject } = Promise.withResolvers<void>();
+const hasPython = (() => {
+  try {
+    return spawnSync('python', ['--version'], { stdio: 'ignore' }).status === 0;
+  } catch {
+    return false;
+  }
+})();
+
+function assertPythonSyntax(script: string): Promise<void> {  const { promise, resolve, reject } = Promise.withResolvers<void>();
   const child = spawn('python', ['-c', 'import sys; compile(sys.stdin.read(), "<flash.py>", "exec")'], {
     stdio: ['pipe', 'ignore', 'pipe']
   });
@@ -90,7 +97,7 @@ test('maps part numbers to J-Link device names and pyOCD targets', () => {
   assert.equal(pyocdTargetName(importedDevice.part), 'ms32f031a6a0zw');
 });
 
-test('generates a J-Link flash script for an imported part', async () => {
+test('generates a J-Link flash script for an imported part', { skip: !hasPython }, async () => {
   const script = generateFlashScript(
     'demo',
     getFlashTargetProfile('stm32f1xx'),
@@ -110,7 +117,7 @@ test('generates a J-Link flash script for an imported part', async () => {
   await assertPythonSyntax(script);
 });
 
-test('generates a pyOCD flash script with the imported CMSIS pack', async () => {
+test('generates a pyOCD flash script with the imported CMSIS pack', { skip: !hasPython }, async () => {
   await withPackFile(async (packFile) => {
     const script = generateFlashScript(
       'demo',

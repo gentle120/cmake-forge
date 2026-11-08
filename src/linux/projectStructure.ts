@@ -11,20 +11,24 @@
  */
 
 import type { ProjectDescription } from '../scanner/projectScanner';
-import type { LinuxProjectStructure } from './types';
+import type { LinuxProjectStructure, LinuxTargetType } from './types';
 
 export function describeLinuxProject(
   project: ProjectDescription,
   targetName: string,
-  defines: string[] = []
+  defines: string[] = [],
+  targetType: LinuxTargetType = 'executable',
+  sysroot?: string
 ): LinuxProjectStructure {
+  const normalizedSysroot = sysroot?.trim() ?? '';
   return {
     sources: [...project.sources],
     includeDirs: [...project.includeDirs],
     defines: [...defines],
     targetName,
-    targetType: 'executable',
+    targetType,
     cStandard: 11,
-    cxxStandard: 17
+    cxxStandard: 17,
+    ...(normalizedSysroot ? { sysroot: normalizedSysroot } : {})
   };
 }

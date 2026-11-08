@@ -21,16 +21,17 @@ import { buildLinuxToolchainChoices } from '../linux/toolchainChoices';
 import {
   getLinuxToolchainDefaults,
   isLinuxToolchainFamily,
+  type LinuxTargetType,
   type LinuxToolchainFamily,
   type LinuxToolchainHit
 } from '../linux/types';
 import { getVendorMetadata, hasVendor } from '../devices/vendorRegistry';
+import { curatedVendors } from '../devices/curatedVendors';
 import { backendSupportsProbe, listFlashBackendProfiles, type FlashBackendId } from '../flash/backendProfiles';
 
 export type SidebarMode = 'mcu' | 'linux' | 'native';
 
 export interface SidebarFlashSelection {
-  enabled: boolean;
   targetId: string;
   probeId: FlashProbeId;
   openocdPath: string;
@@ -55,13 +56,16 @@ export interface SidebarSelection {
   };
   linux: {
     toolchainFamily: LinuxToolchainFamily;
+    /** Output kind of the cross-compiled project. */
+    targetType: LinuxTargetType;
+    /** Optional target root passed to CMake as `CMAKE_SYSROOT`. */
+    sysroot: string;
   };
   native: {
     targetType: 'executable' | 'static' | 'shared';
     cStandard: 11 | 17 | 23;
     cxxStandard: 14 | 17 | 20 | 23;
   };
-  debugEnabled: boolean;
   /** Adds the installed CMSIS core pack include directory to generated projects. */
   corePackInclude: boolean;
   flash: SidebarFlashSelection;
@@ -108,14 +112,28 @@ const defaultLinuxToolchain: LinuxToolchainFamily = 'loongson';
 const defaultFlashTarget = 'stm32f1xx';
 const defaultFlashProbe = 'stlink';
 
+/** Persisted Linux output kind, defaulting to an executable. */
+function linuxTargetType(value: unknown): LinuxTargetType {
+  return value === 'static' || value === 'shared' ? value : 'executable';
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
 }
 
+/**
+ * A vendor is valid when it is registered or is one of the curated vendors.
+ *
+ * Curated vendors are always offered in the vendor dropdown, but their pack
+ * registry entry only appears after the asynchronous pack scan. Accepting them
+ * here keeps the persisted vendor/series selection intact during that window
+ * instead of collapsing the whole MCU column on the first sidebar open.
+ */
 function isVendor(value: unknown): value is DeviceVendor {
-  return typeof value === 'string' && hasVendor(value);
+  return typeof value === 'string'
+    && (hasVendor(value) || curatedVendors.some((vendor) => vendor.id === value));
 }
 
 /**
@@ -169,6 +187,15 @@ function validProbe(value: unknown): FlashProbeId {
     ?? defaultFlashProbe;
 }
 
+/** Falls back to the first probe the backend supports, never to nothing. */
+function probeForBackend(backend: FlashBackendId, requested: FlashProbeId): FlashProbeId {
+  if (backendSupportsProbe(backend, requested)) {
+    return requested;
+  }
+  return listFlashProbeProfiles().find((probe) => backendSupportsProbe(backend, probe.id))?.id
+    ?? defaultFlashProbe;
+}
+
 function validBackend(value: unknown): FlashBackendId {
   const selected = typeof value === 'string' ? value.trim().toLowerCase() : '';
   return listFlashBackendProfiles().find((backend) => backend.id === selected)?.id
@@ -188,17 +215,17 @@ export function defaultSidebarSelection(): SidebarSelection {
       corePackVersion: ''
     },
     linux: {
-      toolchainFamily: defaultLinuxToolchain
+      toolchainFamily: defaultLinuxToolchain,
+      targetType: 'executable',
+      sysroot: ''
     },
     native: {
       targetType: 'executable',
       cStandard: 11,
       cxxStandard: 17
     },
-    debugEnabled: false,
     corePackInclude: true,
     flash: {
-      enabled: false,
       targetId: defaultFlashTarget,
       probeId: defaultFlashProbe,
       openocdPath: 'openocd',
@@ -210,7 +237,8 @@ export function defaultSidebarSelection(): SidebarSelection {
 export function sanitizeSidebarSelection(
   value: unknown,
   fallback: SidebarSelection = defaultSidebarSelection(),
-  packOptions: DevicePackOption[] = []
+  packOptions: DevicePackOption[] = [],
+  preservePackSelection = false
 ): SidebarSelection {
   const record = asRecord(value);
   const mcu = asRecord(record?.mcu);
@@ -242,26 +270,35 @@ export function sanitizeSidebarSelection(
   // built-in fallback anymore. A Pack that serves a different series than the
   // one selected is not an owning Pack here: keeping it would show a Pack the
   // part list can never fill.
-  const packId = vendorProfiles.length > 0 ? selectedPackId : '';
-  const version = packId === ''
-    ? ''
-    : typeof mcu?.version === 'string' && mcu.version.trim()
-      ? mcu.version
-      : packOptions.find((option) => option.packId === packId)?.version ?? '';
+  // Before the Pack catalog has loaded there is nothing to validate against;
+  // keeping the persisted Pack/version/part prevents the panel from resetting on
+  // every window (and Extension Development Host) start, which otherwise leaves
+  // "版本 — 选择版本 —" and a generation that can never find a device.
+  const keepPersisted = preservePackSelection && packOptions.length === 0;
+  const packId = keepPersisted
+    ? selectedPackId
+    : vendorProfiles.length > 0 ? selectedPackId : '';
+  const version = keepPersisted
+    ? (typeof mcu?.version === 'string' ? mcu.version.trim() : '')
+    : packId === ''
+      ? ''
+      : typeof mcu?.version === 'string' && mcu.version.trim()
+        ? mcu.version
+        : packOptions.find((option) => option.packId === packId)?.version ?? '';
   // Persist the owner that actually supplied the profiles: the catalog entry
   // wins once loaded, so a stale key from another Pack cannot survive.
-  const sourcePack = packId === ''
-    ? undefined
-    : profileOwner(packId, version, packOptions, selectedSourcePack);
+  const sourcePack = keepPersisted
+    ? selectedSourcePack
+    : packId === ''
+      ? undefined
+      : profileOwner(packId, version, packOptions, selectedSourcePack);
   const family = typeof linux?.toolchainFamily === 'string'
     && isLinuxToolchainFamily(linux.toolchainFamily)
     ? linux.toolchainFamily
     : fallback.linux.toolchainFamily;
   const backend = validBackend(flash?.backend);
   const requestedProbe = validProbe(flash?.probeId);
-  const probeId = backendSupportsProbe(backend, requestedProbe)
-    ? requestedProbe
-    : listFlashProbeProfiles().find(probe => backendSupportsProbe(backend, probe.id))!.id;
+  const probeId = probeForBackend(backend, requestedProbe);
 
   return {
     mode: record?.mode === 'mcu' || record?.mode === 'linux' || record?.mode === 'native'
@@ -276,13 +313,23 @@ export function sanitizeSidebarSelection(
       version,
       ...(sourcePack === undefined ? {} : { sourcePack }),
       series,
-      part: packId === '' ? '' : partFor(vendorProfiles, vendor, series, mcu?.part),
+      part: keepPersisted
+        ? (typeof mcu?.part === 'string' ? mcu.part.trim() : '')
+        : packId === ''
+          ? ''
+          // Between catalog load and profile restore the pool is empty; keep the
+          // persisted part instead of replacing it with the first profile later.
+          : vendorProfiles.length === 0 && typeof mcu?.part === 'string' && mcu.part.trim()
+            ? mcu.part.trim()
+            : partFor(vendorProfiles, vendor, series, mcu?.part),
       corePackVersion: typeof mcu?.corePackVersion === 'string'
         ? mcu.corePackVersion.trim()
         : fallback.mcu.corePackVersion
     },
     linux: {
-      toolchainFamily: family
+      toolchainFamily: family,
+      targetType: linuxTargetType(linux?.targetType),
+      sysroot: typeof linux?.sysroot === 'string' ? linux.sysroot.trim() : fallback.linux.sysroot
     },
     native: {
       targetType: native?.targetType === 'static' || native?.targetType === 'shared'
@@ -295,18 +342,11 @@ export function sanitizeSidebarSelection(
         ? native.cxxStandard
         : 17
     },
-    debugEnabled: typeof record?.debugEnabled === 'boolean'
-      ? record.debugEnabled
-      : false,
     // Defaults to on: without the core headers a generated project cannot build.
     corePackInclude: typeof record?.corePackInclude === 'boolean'
       ? record.corePackInclude
       : true,
     flash: {
-      // Flash details are meaningful only while the option is enabled.
-      enabled: typeof flash?.enabled === 'boolean' && validTarget(flash.targetId) === flash.targetId
-        ? flash.enabled
-        : false,
       targetId: validTarget(flash?.targetId),
       probeId,
       backend,

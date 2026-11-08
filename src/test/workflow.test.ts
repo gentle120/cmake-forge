@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +8,7 @@ import { fixtureDeviceProfile, registerFixtureVendors } from './support/fixtureD
 
 registerFixtureVendors();
 import {
+  generateDebugWorkflow,
   generateLinuxWorkflow,
   generateMcuWorkflow,
   generateNativeWorkflow,
@@ -15,6 +17,8 @@ import {
 import { createLinuxToolchain } from '../linux/toolchainGenerator';
 import type { NativeProjectStructure } from '../native/types';
 import { scanProject } from '../scanner/projectScanner';
+import { getFlashProbeProfile } from '../flash/probeProfiles';
+import { getFlashTargetProfile } from '../flash/targets/targetProfiles';
 
 async function withWorkspace(run: (root: string) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'cmake-embedded-workflow-'));
@@ -92,6 +96,10 @@ test('declining overwrite leaves generated files untouched', async () => {
     assert.equal(first.ok, true);
     const cmakePath = join(root, 'CMakeLists.txt');
     const before = await readFile(cmakePath, 'utf8');
+    // An unchanged regeneration is silent now; make the file differ so the
+    // overwrite question is actually raised.
+    const edited = `${before}\n# local edit\n`;
+    await writeFile(cmakePath, edited);
 
     const result = await generateMcuWorkflow(
       createHost(root, async () => false),
@@ -101,7 +109,7 @@ test('declining overwrite leaves generated files untouched', async () => {
 
     assert.equal(result.ok, false);
     assert.equal(result.cancelled, true);
-    assert.equal(await readFile(cmakePath, 'utf8'), before);
+    assert.equal(await readFile(cmakePath, 'utf8'), edited);
   });
 });
 
@@ -141,6 +149,42 @@ test('native workflow writes a CMake project for the host C/C++ toolchain', asyn
   });
 });
 
+test('linux and native regeneration stay silent when nothing changed', async () => {  // One workspace per direction: switching direction legitimately rewrites the
+  // shared CMakeLists.txt, so only a same-direction rerun must be silent.
+  await withWorkspace(async (root) => {
+    const prompts: number[] = [];
+    const host = createHost(root, async (files) => {
+      prompts.push(files.length);
+      return true;
+    });
+    const toolchain = createLinuxToolchain('arm');
+
+    await generateLinuxWorkflow(host, toolchain);
+    await generateLinuxWorkflow(host, toolchain);
+    assert.deepEqual(prompts, []);
+  });
+
+  await withWorkspace(async (root) => {
+    const prompts: number[] = [];
+    const host = createHost(root, async (files) => {
+      prompts.push(files.length);
+      return true;
+    });
+    const structure: NativeProjectStructure = {
+      sources: ['main.c'],
+      includeDirs: [],
+      defines: [],
+      targetName: 'daily_tool',
+      targetType: 'static',
+      cStandard: 11,
+      cxxStandard: 17
+    };
+    await generateNativeWorkflow(host, structure);
+    await generateNativeWorkflow(host, structure);
+    assert.deepEqual(prompts, []);
+  });
+});
+
 test('MCU workflow copies the installed core headers into the project', async () => {
   await withWorkspace(async (root) => {
     const includeDir = join(root, 'core-storage', 'CMSIS', 'Core', 'Include');
@@ -165,6 +209,7 @@ test('MCU workflow copies the installed core headers into the project', async ()
     assert.match(first.message, /6\.4\.0/);
 
     // The copies take part in the overwrite check, not just the generated files.
+    await writeFile(join(root, 'CMSIS', 'Include', 'core_cm3.h'), '/* stale */');
     const second = await generateMcuWorkflow(host, fixtureDeviceProfile(), {
       corePack: { includeDir, version: '6.4.0' }
     });
@@ -173,5 +218,184 @@ test('MCU workflow copies the installed core headers into the project', async ()
       confirmed.some((file) => file.replace(/\\/g, '/').endsWith('CMSIS/Include/core_cm3.h')),
       true
     );
+    assert.equal(confirmed.length, 1);
+  });
+});
+
+test('unchanged MCU regeneration does not ask for overwrite and lists core headers', async () => {
+  await withWorkspace(async (root) => {
+    const includeDir = join(root, 'core-storage', 'CMSIS', 'Core', 'Include');
+    await mkdir(includeDir, { recursive: true });
+    await writeFile(join(includeDir, 'core_cm3.h'), '/* core */');
+    await writeFile(join(includeDir, 'cmsis_version.h'), '#define __CM3 1');
+    const prompts: number[] = [];
+    const host = createHost(root, async (files) => {
+      prompts.push(files.length);
+      return true;
+    });
+
+    const first = await generateMcuWorkflow(host, fixtureDeviceProfile(), {
+      corePack: { includeDir, version: '6.4.0' }
+    });
+    assert.equal(first.ok, true);
+    assert.ok(first.files.includes('CMSIS/Include/core_cm3.h'));
+    assert.equal(first.files.some((file) => file.endsWith('.mcu-cmake.json')), true);
+    const config = JSON.parse(await readFile(join(root, '.mcu-cmake.json'), 'utf8')) as {
+      generatedFiles: string[];
+    };
+    assert.ok(config.generatedFiles.includes('CMSIS/Include/core_cm3.h'));
+
+    const second = await generateMcuWorkflow(host, fixtureDeviceProfile(), {
+      corePack: { includeDir, version: '6.4.0' }
+    });
+    assert.equal(second.ok, true);
+    assert.deepEqual(prompts, []);
+  });
+});
+
+test('copies the device header and system files and cleans them up on a pack switch', async () => {
+  await withWorkspace(async (root) => {
+    const prompts: number[] = [];
+    const host = createHost(root, async (files) => {
+      prompts.push(files.length);
+      return true;
+    });
+    const deviceSupport = [
+      { relative: 'CMSIS/Device/Include/Example.h', content: Buffer.from('#define DEVICE 1\n') },
+      { relative: 'CMSIS/Device/Include/system_example.h', content: Buffer.from('void SystemInit(void);\n') },
+      { relative: 'CMSIS/Device/Source/system_example.c', content: Buffer.from('#include "Example.h"\nvoid SystemInit(void) { }\n') }
+    ];
+
+    const first = await generateMcuWorkflow(host, fixtureDeviceProfile(), { deviceSupport });
+    assert.equal(first.ok, true);
+    for (const file of deviceSupport) {
+      assert.ok(first.files.includes(file.relative));
+    }
+    const cmake = await readFile(join(root, 'CMakeLists.txt'), 'utf8');
+    assert.match(cmake, /CMSIS\/Device\/Include/);
+    assert.match(cmake, /CMSIS\/Device\/Source\/system_example\.c/);
+    const config = JSON.parse(await readFile(join(root, '.mcu-cmake.json'), 'utf8')) as {
+      generatedFiles: string[];
+    };
+    assert.ok(config.generatedFiles.includes('CMSIS/Device/Include/Example.h'));
+
+    // Unchanged input stays silent, including the copied files themselves.
+    const second = await generateMcuWorkflow(host, fixtureDeviceProfile(), { deviceSupport });
+    assert.equal(second.ok, true);
+    assert.deepEqual(prompts, []);
+
+    // A different Pack snapshot replaces the previous device files.
+    const replaced = [
+      { relative: 'CMSIS/Device/Include/Other.h', content: Buffer.from('#define DEVICE 2\n') },
+      { relative: 'CMSIS/Device/Source/system_other.c', content: Buffer.from('void SystemInit(void) { }\n') }
+    ];
+    const third = await generateMcuWorkflow(host, fixtureDeviceProfile(), { deviceSupport: replaced });
+    assert.equal(third.ok, true);
+    assert.equal(prompts.length, 1);
+    assert.equal(existsSync(join(root, 'CMSIS', 'Device', 'Include', 'Example.h')), false);
+    assert.equal(existsSync(join(root, 'CMSIS', 'Device', 'Include', 'Other.h')), true);
+  });
+});
+
+test('reuses a device system source the project already builds instead of copying a second one', async () => {
+  await withWorkspace(async (root) => {
+    // A project migrated from a vendor firmware repository ships its own
+    // system_*.c; copying the Pack copy would define SystemInit twice.
+    await mkdir(join(root, 'gd32_driver', 'src'), { recursive: true });
+    await writeFile(join(root, 'gd32_driver', 'src', 'system_example.c'), 'void SystemInit(void) { }\n');
+
+    const deviceSupport = [
+      { relative: 'CMSIS/Device/Include/Example.h', content: Buffer.from('#define DEVICE 1\n') },
+      { relative: 'CMSIS/Device/Include/system_example.h', content: Buffer.from('void SystemInit(void);\n') },
+      { relative: 'CMSIS/Device/Source/system_example.c', content: Buffer.from('void SystemInit(void) { }\n') }
+    ];
+    const result = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), { deviceSupport });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.files.some((file) => file.startsWith('CMSIS/Device')), false);
+    assert.equal(existsSync(join(root, 'CMSIS', 'Device')), false);
+    assert.ok(result.warnings?.some((warning) => /SystemInit/.test(warning)));
+    const cmake = await readFile(join(root, 'CMakeLists.txt'), 'utf8');
+    assert.doesNotMatch(cmake, /CMSIS\/Device\/Source/);
+  });
+});
+
+test('debug generation warns about the two reasons F5 exits immediately', async () => {
+  await withWorkspace(async (root) => {
+    const target = getFlashTargetProfile('stm32f1xx');
+    const probe = getFlashProbeProfile('stlink');
+
+    const missing = await generateDebugWorkflow(
+      createHost(root),
+      target,
+      probe,
+      'openocd-does-not-exist-anywhere'
+    );
+    assert.equal(missing.ok, true);
+    assert.ok(missing.warnings?.some((warning) => /OpenOCD/.test(warning)));
+    assert.ok(missing.warnings?.some((warning) => /构建/.test(warning)));
+
+    // A resolvable OpenOCD plus a built preset is the healthy state: no warning.
+    const openocd = join(root, 'tools', 'openocd');
+    await mkdir(join(root, 'build', 'debug'), { recursive: true });
+    await mkdir(join(root, 'tools'), { recursive: true });
+    await writeFile(openocd, '');
+    await writeFile(join(root, 'build', 'debug', 'firmware.elf'), '');
+
+    const healthy = await generateDebugWorkflow(createHost(root), target, probe, openocd);
+    assert.equal(healthy.ok, true);
+    assert.equal(healthy.warnings, undefined);
+    const launch = JSON.parse(await readFile(join(root, '.vscode', 'launch.json'), 'utf8')) as {
+      configurations: Array<{ executable: string }>;
+    };
+    // The generated preset layout decides the executable, not CMake Tools state.
+    assert.match(launch.configurations[0].executable, /^\$\{workspaceFolder\}\/build\/debug\/.+\.elf$/);
+  });
+});
+
+test('still copies the device header when the project only ships driver headers', async () => {
+  await withWorkspace(async (root) => {
+    // A driver library usually carries RTE_Components.h and the RCU register
+    // header; that must not be mistaken for the project owning the device
+    // support files.
+    await mkdir(join(root, 'gd32_driver', 'include'), { recursive: true });
+    await writeFile(join(root, 'gd32_driver', 'include', 'RTE_Components.h'), '#define RTE 1\n');
+    await writeFile(join(root, 'gd32_driver', 'include', 'gd32f10x_rcu.h'), '#define RCU_CTL 1\n');
+
+    const deviceSupport = [
+      { relative: 'CMSIS/Device/Include/gd32f10x.h', content: Buffer.from('#define DEVICE 1\n') },
+      { relative: 'CMSIS/Device/Include/gd32f10x_libopt.h', content: Buffer.from('#include "RTE_Components.h"\n') },
+      { relative: 'CMSIS/Device/Include/gd32f10x_rcu.h', content: Buffer.from('#define RCU_CTL 2\n') },
+      { relative: 'CMSIS/Device/Include/RTE_Components.h', content: Buffer.from('#define RTE_DEVICE_STDPERIPHERALS_RCU 1\n') },
+      { relative: 'CMSIS/Device/Include/system_gd32f10x.h', content: Buffer.from('void SystemInit(void);\n') },
+      { relative: 'CMSIS/Device/Source/system_gd32f10x.c', content: Buffer.from('void SystemInit(void) { }\n') }
+    ];
+    const result = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), { deviceSupport });
+
+    assert.equal(result.ok, true);
+    assert.ok(result.files.includes('CMSIS/Device/Include/gd32f10x.h'));
+    assert.ok(result.files.includes('CMSIS/Device/Source/system_gd32f10x.c'));
+    assert.equal(result.warnings?.some((warning) => /器件头/.test(warning)) ?? false, false);
+  });
+});
+
+test('Linux workflow writes the configured sysroot and remembers it', async () => {
+  await withWorkspace(async (root) => {
+    const first = await generateLinuxWorkflow(createHost(root), createLinuxToolchain('arm'), {
+      sysroot: '/opt/arm-sysroot'
+    });
+    assert.equal(first.ok, true);
+    const toolchainPath = join(root, 'cmake', 'linux-toolchain.cmake');
+    assert.match(await readFile(toolchainPath, 'utf8'), /set\(CMAKE_SYSROOT "\/opt\/arm-sysroot"\)/);
+
+    const config = JSON.parse(await readFile(join(root, '.linux-cmake.json'), 'utf8')) as {
+      structure: { sysroot?: string };
+    };
+    assert.equal(config.structure.sysroot, '/opt/arm-sysroot');
+
+    // A regeneration without the option keeps the remembered sysroot.
+    const second = await generateLinuxWorkflow(createHost(root), createLinuxToolchain('arm'));
+    assert.equal(second.ok, true);
+    assert.match(await readFile(toolchainPath, 'utf8'), /CMAKE_SYSROOT/);
   });
 });

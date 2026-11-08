@@ -89,6 +89,12 @@ export interface LinuxToolchain {
   cFlags?: string[];
   cxxFlags?: string[];
   linkerFlags?: string[];
+  /**
+   * Target root used for `CMAKE_SYSROOT`. Optional: distributions install the
+   * cross toolchain's headers in different places, and an unset sysroot means
+   * "use the compiler's default" like before.
+   */
+  sysroot?: string;
 }
 
 export interface LinuxToolchainHit extends LinuxToolchain {
@@ -123,4 +129,6 @@ export interface LinuxProjectStructure {
   targetType: LinuxTargetType;
   cStandard: number;
   cxxStandard: number;
+  /** Target root for cross compilation, when the project asks for one. */
+  sysroot?: string;
 }

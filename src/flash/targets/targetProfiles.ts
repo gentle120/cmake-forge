@@ -56,8 +56,23 @@ export function getFlashTargetProfileForDevice(profile: Pick<DeviceProfile, 'ven
 
   const targetConfig = `target/${profile.debugTarget}.cfg`;
   const matches = allFlashTargets.filter((candidate) => candidate.targetConfig === targetConfig);
-  const vendorLabel = getVendorMetadata(profile.vendor).label;
-  const target = matches.find((candidate) => candidate.vendor === vendorLabel) ?? matches[0];
+  // The target table names vendors by product family (`STM32`, `GD32`), while a
+  // registered vendor carries a PDSC display name, a registry id, and define
+  // prefixes. Compare all of them: an imported Pack registers `GigaDevice`,
+  // whose define prefix is `GD32`, so comparing only the display name would
+  // silently fall back to the first match (an STM32 entry sharing the cfg).
+  const metadata = getVendorMetadata(profile.vendor);
+  const vendorKeys = [metadata.label, metadata.id, ...metadata.definePrefixes]
+    .map((value) => value.toUpperCase())
+    .filter((value) => value.length > 0);
+  const target = matches.find((candidate) =>
+    vendorKeys.some((key) => key === candidate.vendor.toUpperCase())
+  ) ?? matches.find((candidate) =>
+    vendorKeys.some((key) =>
+      key.startsWith(candidate.vendor.toUpperCase())
+      || candidate.vendor.toUpperCase().startsWith(key)
+    )
+  ) ?? matches[0];
   if (!target) {
     throw new Error(`Unsupported OpenOCD target mapping: ${profile.vendor}/${profile.debugTarget}`);
   }

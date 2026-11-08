@@ -83,14 +83,12 @@ test('listPackIndexPacks flattens pindex pdsc entries into downloadable packs', 
     {
       name: 'ARM_Compiler',
       version: '1.7.2',
-      description: '',
       packUrl: 'https://www.keil.com/pack/Keil.ARM_Compiler.1.7.2.pack',
       vendorName: 'Keil'
     },
     {
       name: 'TM4C_DFP',
       version: '1.1.0',
-      description: '',
       packUrl: 'http://www.keil.com/pack/Keil.TM4C_DFP.1.1.0.pack',
       vendorName: 'Keil'
     }

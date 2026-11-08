@@ -211,6 +211,68 @@ test('sidebar shows the install hint when the selected vendor has no packs', asy
   }
 });
 
+test('adopts the first offered vendor on first open so the series list is usable', async () => {
+  const provider = startProvider(undefined, {
+    discoverPackVendors: async () => ({
+      vendors: [
+        { value: 'STMicroelectronics', label: 'STM32' },
+        { value: 'WCH', label: 'CH32' }
+      ]
+    }),
+    loadPackCatalog: async () => ({ options: [] })
+  });
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const state = latestState(provider.messages);
+    assert.equal(state?.selection.mcu.vendor, 'STMicroelectronics');
+    assert.equal(state?.selection.mcu.series, 'F0x');
+    const seriesOptions = (state as unknown as { series: unknown[] }).series;
+    assert.equal(seriesOptions.length, 20);
+  } finally {
+    provider.dispose();
+  }
+});
+
+test('selecting a Pack activates its best version so devices appear immediately', async () => {
+  const sourcePack = 'packs/STM/Fixture_DFP.pack';
+  registerDeviceProfiles([fixtureDeviceProfile()], sourcePack);
+  const provider = startProvider(undefined, {
+    loadPackCatalog: async () => ({
+      options: [{
+        packId: 'STM:Fixture_DFP',
+        vendorId: 'STM',
+        name: 'Fixture_DFP',
+        version: '1.0.0',
+        origin: 'imported',
+        packFile: sourcePack
+      }]
+    }),
+    activatePack: async (_vendor: string, packId: string, version: string) => ({
+      vendorId: 'STM',
+      packId,
+      version,
+      sourcePack,
+      message: '已载入 Fixture_DFP。'
+    })
+  });
+  try {
+    provider.receive({ type: 'ready' });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    provider.receive({ type: 'selectPack', packId: 'STM:Fixture_DFP' });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const state = latestState(provider.messages);
+    assert.equal(state?.selection.mcu.packId, 'STM:Fixture_DFP');
+    assert.equal(state?.selection.mcu.version, '1.0.0');
+    assert.equal(state?.selection.mcu.part, 'STM32F103C8T6');
+    const devices = (state as unknown as { devices: unknown[] }).devices;
+    assert.equal(devices.length, 1);
+  } finally {
+    provider.dispose();
+    unregisterDeviceProfilesByPack(sourcePack);
+  }
+});
+
 test('clicks during a busy operation tell the user to wait instead of vanishing', async () => {
   const provider = startProvider({
     mode: 'mcu',

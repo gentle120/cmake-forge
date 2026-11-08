@@ -4,11 +4,17 @@
     {
       "type": "npm",
       "script": "compile",
-      "problemMatcher": [
-        "$tsc"
-      ],
+      "problemMatcher": ["$tsc"],
       "group": "build",
-      "label": "npm: compile"
+      "label": "npm: compile",
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "silent",
+        "clear": true
+      },
+      "runOptions": {
+        "instanceLimit": 1
+      }
     }
   ]
 }

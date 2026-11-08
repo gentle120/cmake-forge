@@ -1,8 +1,9 @@
 /**
  * Generates CMakePresets.json for a desktop C/C++ project.
  *
- * The desktop CMakeLists.txt does not enable the compile database, so the preset
- * is the only place that turns it on for IntelliSense.
+ * The shared presets own the Debug/Release Ninja configuration and the compile
+ * database; the desktop CMakeLists.txt also enables it so a plain
+ * `cmake --preset debug` produces it either way.
  */
 
 import { generateCMakePresets as generateSharedPresets } from '../shared/cmakePresets';

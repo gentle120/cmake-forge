@@ -23,8 +23,6 @@
   const operationNotice = document.getElementById('operation-notice');
   const resultRegion = document.getElementById('result-region');
   const generatedFiles = document.getElementById('generated-files');
-  const toggleFlash = document.getElementById('toggle-flash');
-  const toggleDebug = document.getElementById('toggle-debug');
   const toggleCorePack = document.getElementById('toggle-core-pack');
   const backendHint = document.getElementById('backend-hint');
 
@@ -57,7 +55,10 @@
     const header = document.createElement('div');
     header.className = 'section-header';
     if (iconName) {
-      header.append(icon(iconName));
+      const badge = document.createElement('span');
+      badge.className = 'section-icon';
+      badge.append(icon(iconName));
+      header.append(badge);
     }
     const copy = document.createElement('div');
     copy.className = 'section-heading';
@@ -78,6 +79,17 @@
       return;
     }
     select.replaceChildren();
+    if (list.length === 0) {
+      // An empty dropdown otherwise looks operable but silently does nothing.
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = '— 无可用项 —';
+      select.append(placeholder);
+      select.dataset.empty = '1';
+      select.dataset.signature = signature;
+      return;
+    }
+    delete select.dataset.empty;
     list.forEach((item) => {
       const element = document.createElement('option');
       element.value = String(item.value);
@@ -180,7 +192,7 @@
     if (!state) return;
     saveSelection({ ...state.selection, mcu: { ...state.selection.mcu, series: value } });
   });
-  const packField = createSelectField('芯片支持包 / Pack', (value) => {
+  const packField = createSelectField('芯片支持包', (value) => {
     if (!state) return;
     post({ type: 'selectPack', packId: value });
   });
@@ -213,10 +225,12 @@
     saveSelection({ ...state.selection, mcu: { ...state.selection.mcu, part: value } });
   });
   const deviceSummary = document.createElement('div');
-  deviceSummary.className = 'device-summary';
-  const deviceName = document.createElement('strong');
+  deviceSummary.className = 'device-summary field-wide';
   const deviceMeta = document.createElement('span');
-  deviceSummary.append(deviceName, deviceMeta);
+  deviceSummary.append(deviceMeta);
+  // The device row and its detail line span the whole two-column field grid.
+  deviceField.wrapper.classList.add('field-wide');
+  packCatalogBusy.classList.add('field-wide');
   targetHost.append(
     vendorField.wrapper,
     seriesField.wrapper,
@@ -224,9 +238,16 @@
     versionField.wrapper,
     deviceField.wrapper,
     deviceSummary,
-    corePackField.wrapper,
     packCatalogBusy
   );
+  // The installed core-pack version sits with its include switch, after the
+  // Pack actions and the notices that explain a missing device pack.
+  const corePackHost = document.getElementById('core-pack-host');
+  if (corePackHost) {
+    corePackHost.append(corePackField.wrapper);
+  } else {
+    targetHost.append(corePackField.wrapper);
+  }
 
   const backendField = createSelectField('烧录后端', (value) => {
     if (!state) return;
@@ -236,7 +257,14 @@
     if (!state) return;
     saveSelection({ ...state.selection, flash: { ...state.selection.flash, probeId: value } });
   });
-  flashHost.append(backendField.wrapper, probeField.wrapper);
+  flashHost.append(
+    backendField.wrapper,
+    probeField.wrapper,
+    paragraph(
+      'field-detail',
+      '探针要与实际调试器一致；选错时 F5 立即退出，原因见「终端 → gdb-server」。'
+    )
+  );
 
   const openocdGroup = document.createElement('div');
   openocdGroup.className = 'details-group';
@@ -280,7 +308,20 @@
     const selection = state.selection.mcu;
     applyOptions(vendorField.select, state.vendors, selection.vendor);
     applyOptions(packField.select, state.packs, state.pendingPackId || selection.packId);
-    applyOptions(versionField.select, state.versions, selection.version);
+    // Never let the version select display a version the selection does not
+    // own: clicking that same row would not fire a change and the Pack would
+    // never be activated. The placeholder forces an explicit pick.
+    const versions = Array.isArray(state.versions) ? state.versions : [];
+    const versionValues = versions.map((option) => String(option.value));
+    if (versions.length > 0 && !versionValues.includes(String(selection.version))) {
+      applyOptions(
+        versionField.select,
+        [{ value: '', label: '— 选择版本 —' }, ...versions],
+        ''
+      );
+    } else {
+      applyOptions(versionField.select, versions, selection.version);
+    }
     applyOptions(seriesField.select, state.series, selection.series);
     applyOptions(deviceField.select, state.devices, selection.part);
     // The core pack row only means something while the headers are being
@@ -288,20 +329,27 @@
     const corePackVersions = Array.isArray(state.corePackVersions)
       ? state.corePackVersions
       : [];
-    corePackField.wrapper.hidden = corePackVersions.length === 0
-      || state.selection.corePackInclude === false;
+    const showCorePack = corePackVersions.length > 0
+      && state.selection.corePackInclude !== false;
+    corePackField.wrapper.hidden = !showCorePack;
+    // The divider above the group must disappear with the group itself,
+    // otherwise a bare separator floats above the include switch.
+    if (corePackHost) {
+      corePackHost.hidden = !showCorePack;
+    }
     applyOptions(
       corePackField.select,
       corePackVersions,
       state.selection.mcu.corePackVersion
     );
     const device = selectedOption(state.devices, selection.part);
+    // The part itself is already visible in the select; the summary adds only
+    // the details that do not fit in an option row.
     const meta = device
       ? [device.description, device.detail].filter(Boolean).join(' · ')
       : '';
-    deviceName.textContent = selection.part || '';
     deviceMeta.textContent = meta;
-    deviceSummary.hidden = !device;
+    deviceSummary.hidden = !meta;
     packCatalogNotice.textContent = state.packCatalogNotice || '';
     packCatalogNotice.hidden = !packCatalogNotice.textContent;
     corePackNotice.textContent = state.corePackNotice || '';
@@ -312,8 +360,6 @@
 
   function syncFlashSection() {
     const flash = state.selection.flash;
-    toggleFlash.checked = Boolean(flash.enabled);
-    toggleDebug.checked = Boolean(state.selection.debugEnabled);
     applyOptions(backendField.select, state.flashBackends, flash.backend);
     applyOptions(probeField.select, state.flashProbes, flash.probeId);
     applyOptions(targetField.select, state.flashTargets, flash.targetId);
@@ -343,12 +389,23 @@
     panel.className = 'configuration-panel';
     const section = document.createElement('section');
     section.className = 'control-section';
-    section.append(sectionHeader('交叉工具链', '选择目标架构与编译器。', 'device-desktop'));
+    section.append(sectionHeader('交叉工具链', '选择目标架构、输出类型与编译器。', 'device-desktop'));
     const field = createSelectField('交叉工具链', (value) => {
       if (!state) return;
       saveSelection({ ...state.selection, linux: { ...state.selection.linux, toolchainFamily: value } });
     });
-    section.append(field.wrapper);
+    const targetTypeField = createSelectField('目标类型', (value) => {
+      if (!state) return;
+      saveSelection({ ...state.selection, linux: { ...state.selection.linux, targetType: value } });
+    });
+    const sysrootField = createPathField('目标 sysroot（可选）', '/opt/sysroot', (value) => {
+      if (!state) return;
+      saveSelection({ ...state.selection, linux: { ...state.selection.linux, sysroot: value } });
+    });
+    const fields = document.createElement('div');
+    fields.className = 'target-grid';
+    fields.append(targetTypeField.wrapper);
+    section.append(field.wrapper, fields, sysrootField.wrapper);
     const status = document.createElement('div');
     status.className = 'toolchain-status';
     const statusIcon = icon('pass');
@@ -362,13 +419,30 @@
     status.append(statusIcon, copy);
     panel.append(section, status);
     panel.append(paragraph('empty-note', '生成器会扫描工作区源文件、头文件目录和已保存的宏定义。'));
-    linuxPanel = { panel, select: field.select, statusIcon, name, note };
+    linuxPanel = {
+      panel,
+      select: field.select,
+      targetType: targetTypeField.select,
+      sysroot: sysrootField.input,
+      statusIcon,
+      name,
+      note
+    };
     return linuxPanel;
   }
 
   function syncLinuxPanel() {
     const panel = ensureLinuxPanel();
     applyOptions(panel.select, state.linuxToolchains, state.selection.linux.toolchainFamily);
+    applyOptions(panel.targetType, [
+      { value: 'executable', label: '可执行文件' },
+      { value: 'static', label: '静态库' },
+      { value: 'shared', label: '动态库' }
+    ], state.selection.linux.targetType || 'executable');
+    const sysroot = state.selection.linux.sysroot || '';
+    if (panel.sysroot.value !== sysroot && document.activeElement !== panel.sysroot) {
+      panel.sysroot.value = sysroot;
+    }
     const selected = selectedOption(state.linuxToolchains, state.selection.linux.toolchainFamily);
     setIcon(panel.statusIcon, selected && /Not found/i.test(selected.detail || '') ? 'warning' : 'pass');
     panel.name.textContent = selected ? (selected.description || selected.label) : '';
@@ -451,10 +525,13 @@
     applyOptions(projectRootSelect, state.projects, state.projectRoot);
     projectRootSelect.disabled = busy || state.discoveringProjects;
     const selectedProject = selectedOption(state.projects, state.projectRoot);
-    workspaceName.textContent = state.discoveringProjects
-      ? '正在发现工程…'
-      : (selectedProject?.label || state.workspaceName || '当前工作区');
+    const projectLabel = selectedProject?.label || state.workspaceName || '当前工作区';
+    workspaceName.textContent = state.discoveringProjects ? '正在发现工程…' : projectLabel;
     workspaceName.title = selectedProject?.label || state.workspaceName || '';
+    // The select already shows the project label; the extra line only adds
+    // information while the project list is still being discovered.
+    workspaceName.hidden = !state.discoveringProjects
+      && projectLabel === (selectedProject?.label || '');
     const mode = state.selection.mode;
     const isMcu = mode === 'mcu';
     syncCancelWorkspaceScan();
@@ -485,12 +562,14 @@
   function applyDisabled() {
     // An MCU generation command cannot succeed without a Pack serving the
     // selected series; disabling it with the reason on screen beats a click that
-    // only produces an error.
+    // only produces an error. Listing the commands keeps a future non-MCU
+    // generation command from being disabled by accident.
     const blocked = Boolean(state?.mcuBlockedReason);
+    const mcuCommands = new Set(['generateProject', 'generateFlashScript', 'generateDebugConfiguration']);
     controls().forEach((control) => {
       if (control.dataset.alwaysEnabled === 'true') return;
       const mcuCommand = typeof control.dataset.command === 'string'
-        && control.dataset.command.startsWith('generate');
+        && mcuCommands.has(control.dataset.command);
       control.disabled = busy
         || (control === projectRootSelect && Boolean(state?.discoveringProjects))
         || (blocked && mcuCommand);
@@ -546,17 +625,84 @@
     element.setAttribute('role', tone === 'error' ? 'alert' : 'status');
   }
 
+  // Group generated paths by directory so a full MCU/Linux generation (dozens
+  // of files under CMSIS/Device and .vscode) reads as a tree instead of a flat
+  // wall of full paths.
+  function fileTree(files) {
+    const root = { files: [], dirs: new Map() };
+    files.forEach((file) => {
+      const parts = String(file).replace(/\\/g, '/').split('/').filter((part) => part.length > 0);
+      if (parts.length === 0) return;
+      const name = parts.pop();
+      let node = root;
+      parts.forEach((part) => {
+        let child = node.dirs.get(part);
+        if (!child) {
+          child = { files: [], dirs: new Map() };
+          node.dirs.set(part, child);
+        }
+        node = child;
+      });
+      node.files.push({ name, path: String(file) });
+    });
+    return root;
+  }
+
+  function countTreeFiles(node) {
+    let total = node.files.length;
+    node.dirs.forEach((child) => {
+      total += countTreeFiles(child);
+    });
+    return total;
+  }
+
+  function renderFileTree(node, list) {
+    Array.from(node.dirs.entries())
+      .sort((left, right) => left[0].localeCompare(right[0], 'en'))
+      .forEach(([name, child]) => {
+        const item = document.createElement('li');
+        item.className = 'file-tree-group';
+        const details = document.createElement('details');
+        details.open = true;
+        const summary = document.createElement('summary');
+        summary.append(icon('folder'));
+        const label = document.createElement('span');
+        label.className = 'file-tree-name';
+        label.textContent = `${name}/`;
+        const count = document.createElement('span');
+        count.className = 'file-tree-count';
+        count.textContent = String(countTreeFiles(child));
+        summary.append(label, count);
+        const nested = document.createElement('ul');
+        renderFileTree(child, nested);
+        details.append(summary, nested);
+        item.append(details);
+        list.append(item);
+      });
+    node.files
+      .slice()
+      .sort((left, right) => left.name.localeCompare(right.name, 'en'))
+      .forEach((file) => {
+        const item = document.createElement('li');
+        item.className = 'file-tree-file';
+        item.append(icon('check'));
+        const label = document.createElement('span');
+        label.textContent = file.name;
+        label.setAttribute('title', file.path);
+        item.append(label);
+        list.append(item);
+      });
+  }
+
   function showFiles(files) {
     generatedFiles.replaceChildren();
-    const list = Array.isArray(files) ? files : [];
-    list.forEach((file) => {
-      const item = document.createElement('li');
-      item.append(icon('check'));
-      const label = document.createElement('span');
-      label.textContent = file;
-      item.append(label);
-      generatedFiles.append(item);
-    });
+    const list = Array.isArray(files) ? files.filter((file) => typeof file === 'string' && file.length > 0) : [];
+    if (list.length > 0) {
+      const tree = document.createElement('ul');
+      tree.className = 'file-tree-list';
+      renderFileTree(fileTree(list), tree);
+      generatedFiles.append(tree);
+    }
     resultRegion.hidden = list.length === 0;
   }
 
@@ -629,14 +775,6 @@
     post({ type: command });
   });
 
-  toggleFlash.addEventListener('change', () => {
-    if (!state || busy) return;
-    saveSelection({
-      ...state.selection,
-      flash: { ...state.selection.flash, enabled: toggleFlash.checked }
-    });
-  });
-
   projectRootSelect.addEventListener('change', () => {
     if (!state || busy || !projectRootSelect.value) return;
     post({ type: 'setProjectRoot', root: projectRootSelect.value });
@@ -645,11 +783,6 @@
   toggleCorePack.addEventListener('change', () => {
     if (!state || busy) return;
     saveSelection({ ...state.selection, corePackInclude: toggleCorePack.checked });
-  });
-
-  toggleDebug.addEventListener('change', () => {
-    if (!state || busy) return;
-    saveSelection({ ...state.selection, debugEnabled: toggleDebug.checked });
   });
 
   modeMcu.addEventListener('click', () => {
@@ -714,7 +847,11 @@
     }
     if (message.type === 'notification') {
       const tone = message.level === 'error' ? 'error' : message.level === 'warning' ? 'warning' : '';
-      setStatusBadge(tone, message.message);
+      // A notification arriving mid-operation must not replace the live
+      // "in progress" badge; the notice line carries the message instead.
+      if (!busy) {
+        setStatusBadge(tone, message.message);
+      }
       showNotice(operationNotice, message.message, tone === 'error' ? 'error' : tone === 'warning' ? 'warning' : 'info');
     }
   });

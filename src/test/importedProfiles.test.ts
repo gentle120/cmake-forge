@@ -13,6 +13,9 @@ import {
   removePack
 } from '../devices/importedProfiles';
 import { getVendorMetadata } from '../devices/vendorRegistry';
+import { crc32 } from '../packs/crc32';
+import { deviceSnapshotDir, loadDeviceSupportFiles } from '../packs/deviceSupport';
+import { fixturePackBuffer } from './support/fixtureDevice';
 
 interface PackIdentityView {
   packId: string;
@@ -36,12 +39,14 @@ function buildZip(entries: Array<{ name: string; data: string }>): Buffer {
   let offset = 0;
   for (const entry of entries) {
     const data = Buffer.from(entry.data, 'utf8');
+    const crc = crc32(data);
     const nameBuffer = Buffer.from(entry.name, 'utf8');
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(0, 6);
     local.writeUInt16LE(0, 8);
+    local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(data.length, 18);
     local.writeUInt32LE(data.length, 22);
     local.writeUInt16LE(nameBuffer.length, 26);
@@ -52,6 +57,7 @@ function buildZip(entries: Array<{ name: string; data: string }>): Buffer {
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(0, 8);
     central.writeUInt16LE(0, 10);
+    central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(data.length, 20);
     central.writeUInt32LE(data.length, 24);
     central.writeUInt16LE(nameBuffer.length, 28);
@@ -265,6 +271,8 @@ test('a directory pack without a nearby archive has no pyOCD archive path', asyn
 
     const packs = await listImportedPacks(root);
     assert.equal(packs[0].source, 'directory');
+    // Kept so the device-file snapshot can be rebuilt if the import predates it.
+    assert.equal(packs[0].sourceRoot, packRoot);
     assert.equal(packs[0].archiveFile, undefined);
   } finally {
     for (const pack of await listImportedPacks(root)) {
@@ -395,7 +403,7 @@ test('imports an extracted pack directory in place with the vendor display name'
     <family Dvendor="Sinomcu:985" Dfamily="MS32FXXX Series">
       <processor Dcore="Cortex-M0" Dfpu="0"/>
       <subFamily DsubFamily="MS32F031">
-        <compile header="Code/include/ms32f0xx.h" define="MS32F031"/>
+        <compile header="Code/include/ms32f0xx.h" define="USE_STDPERIPH_DRIVER MS32F031"/>
         <device Dname="MS32F031A6A0ZW">
           <memory id="IROM1" start="0x08000000" size="0x8000"/>
           <memory id="IRAM1" start="0x20000000" size="0x1000"/>
@@ -423,8 +431,10 @@ test('imports an extracted pack directory in place with the vendor display name'
   const packRoot = await mkdtemp(join(tmpdir(), 'cmake-embedded-keilpack-'));
   try {
     await mkdir(join(packRoot, 'CMSIS', 'SVD'), { recursive: true });
+    await mkdir(join(packRoot, 'Code', 'include'), { recursive: true });
     await writeFile(join(packRoot, 'Sinomcu.MS32F0xx_DFP.pdsc'), pdsc, 'utf8');
     await writeFile(join(packRoot, 'CMSIS', 'SVD', 'MS32F031.svd'), svd, 'utf8');
+    await writeFile(join(packRoot, 'Code', 'include', 'ms32f0xx.h'), '#define MS32F0XX 1\n', 'utf8');
     await writeFile(join(packRoot, 'Sinomcu.MS32F0xx_DFP.1.1.1.pack'), 'archive', 'utf8');
 
     const result = await importPackDirectory(
@@ -433,12 +443,20 @@ test('imports an extracted pack directory in place with the vendor display name'
       root
     );
     assert.deepEqual(result, { imported: ['MS32F031A6A0ZW'], skipped: [] });
+    // The generator does not ship the vendor StdPeriph library, so the switch
+    // that would include its `*_conf.h` is dropped from the project defines.
+    assert.deepEqual(getDeviceProfile('MS32F031A6A0ZW').defines, ['MS32F031']);
+    // The generator does not ship the vendor StdPeriph library, so the switch
+    // that would include its `*_conf.h` is dropped from the project defines.
+    assert.deepEqual(getDeviceProfile('MS32F031A6A0ZW').defines, ['MS32F031']);
 
     const packs = await listImportedPacks(root);
     assert.equal(packs.length, 1);
     assert.equal(packs[0].vendorName, 'Sinomcu');
     assert.equal(packs[0].packFile, 'packs/Sinomcu/Sinomcu.MS32F0xx_DFP.pack');
     assert.equal(packs[0].source, 'directory');
+    // Kept so the device-file snapshot can be rebuilt if the import predates it.
+    assert.equal(packs[0].sourceRoot, packRoot);
     assert.equal(
       packs[0].archiveFile,
       join(packRoot, 'Sinomcu.MS32F0xx_DFP.1.1.1.pack')
@@ -643,4 +661,27 @@ test('does not silently discard a corrupt pack store', async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('importing a Pack snapshots the device header and system files', async () => {
+  await withStorageRoot(async (root) => {
+    const result = await importPack(fixturePackBuffer(), 'Example.F1_DFP.1.0.0.pack', root);
+    assert.ok(result.imported.length > 0);
+    const record = (await listImportedPacks(root))[0];
+    const part = result.imported[0];
+
+    // The header comes from the PDSC `<compile header>`, so a generation can
+    // copy exactly the files this device family needs.
+    assert.equal(getDeviceProfile(part).deviceHeader, 'Example.h');
+    const files = await loadDeviceSupportFiles(root, record.packFile, 'Example.h');
+    assert.deepEqual(files.map((file) => file.relative), [
+      'CMSIS/Device/Include/Example.h',
+      'CMSIS/Device/Include/system_example.h',
+      'CMSIS/Device/Source/system_example.c'
+    ]);
+    assert.match(files[2].content.toString('utf8'), /void SystemInit/);
+
+    await removePack(root, record.packFile);
+    assert.equal(existsSync(deviceSnapshotDir(root, record.packFile)), false);
+  });
 });

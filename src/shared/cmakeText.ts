@@ -24,7 +24,11 @@ export function hexadecimal(value: number): string {
   return `0x${value.toString(16).toUpperCase().padStart(8, '0')}`;
 }
 
-/** A linker-script size in KiB. */
+/**
+ * A linker-script size: integer KiB when it divides evenly, exact bytes
+ * otherwise. GNU ld rejects fractional sizes (`0.25K`) that some PDSC memory
+ * regions (SAMD21's USER_ROW is 256 bytes) would otherwise produce.
+ */
 export function kilobytes(bytes: number): string {
-  return `${bytes / 1024}K`;
+  return bytes % 1024 === 0 ? `${bytes / 1024}K` : `${bytes}`;
 }

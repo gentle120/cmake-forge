@@ -5,12 +5,21 @@ import { buildPackVendorOptions } from '../packs/vendorOptions';
 
 const NO_LOCAL_PACK_HINT = '本地暂无此厂商的 Pack';
 
-test('the curated list starts with the three trial chip vendors', () => {
-  assert.deepEqual(curatedVendors, [
-    { id: 'STMicroelectronics', label: 'STM32' },
-    { id: 'WCH', label: 'CH32' },
-    { id: 'GigaDevice', label: 'GD32' }
+test('the curated list starts with the mainstream MCU families', () => {
+  assert.deepEqual(curatedVendors.slice(0, 5).map((vendor) => vendor.label), [
+    'STM32',
+    'GD32',
+    'NXP',
+    'nRF',
+    'Microchip'
   ]);
+  const ids = new Set(curatedVendors.map((vendor) => vendor.id));
+  for (const id of [
+    'STMicroelectronics', 'GigaDevice', 'NXP', 'NordicSemiconductor', 'Microchip'
+  ]) {
+    assert.ok(ids.has(id), `missing curated vendor ${id}`);
+  }
+  assert.equal(curatedVendors.length, 5);
 });
 
 test('curated vendors fill the list behind local sources and reuse curated labels', () => {

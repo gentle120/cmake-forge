@@ -28,5 +28,7 @@ test('hexadecimal prints a fixed-width upper-case address', () => {
 
 test('kilobytes renders linker-script sizes', () => {
   assert.equal(kilobytes(64 * 1024), '64K');
-  assert.equal(kilobytes(1536), '1.5K');
+  // Fractional KiB is invalid in a linker script; use exact bytes instead.
+  assert.equal(kilobytes(1536), '1536');
+  assert.equal(kilobytes(256), '256');
 });

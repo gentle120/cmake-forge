@@ -70,7 +70,8 @@ function coreVectorsFor(core: string): string[] {
     || core === 'cortex-m23') {
     return armv6mCoreVectors;
   }
-  if (core === 'cortex-m33' || core === 'cortex-m35p' || core === 'cortex-m55') {
+  if (core === 'cortex-m33' || core === 'cortex-m35p' || core === 'cortex-m52'
+    || core === 'cortex-m55' || core === 'cortex-m85') {
     return armv8mCoreVectors;
   }
   return armv7mCoreVectors;
@@ -159,6 +160,20 @@ Reset_Handler:
 Default_Handler:
   b .
 .size Default_Handler, . - Default_Handler
+
+/* SystemInit lives in the vendor system file (for example system_stm32f10x.c).
+   A project that has not added that file must still link, and binutils 2.44+
+   rejects a call to an untyped symbol with "Unknown destination type
+   (ARM/Thumb)", so the startup carries this weak default. A strong definition
+   in the project overrides it; only the default HSI clock is in effect until
+   then. */
+.section .text.SystemInit,"ax",%progbits
+.weak SystemInit
+.thumb_func
+.type SystemInit, %function
+SystemInit:
+  bx lr
+.size SystemInit, . - SystemInit
 
 ${aliases}
 
