@@ -24,6 +24,8 @@ export interface CortexDebugConfigurationOptions {
    * nothing and the session closes immediately).
    */
   executable?: string;
+  /** Compiler prefix used by the generated project (`arm-none-eabi-`). */
+  toolchainPrefix?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -134,7 +136,7 @@ function createConfiguration(options: CortexDebugConfigurationOptions): Record<s
     executable: options.executable ?? '${command:cmake.launchTargetPath}',
     runToEntryPoint: 'main',
     showDevDebugOutput: 'none',
-    toolchainPrefix: 'arm-none-eabi'
+    toolchainPrefix: options.toolchainPrefix ?? 'arm-none-eabi'
   };
   if (backend === 'jlink') {
     configuration.servertype = 'jlink';

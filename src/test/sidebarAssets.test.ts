@@ -25,9 +25,16 @@ const extensionUri = {
 
 interface SidebarSelection {
   mode: 'mcu' | 'linux' | 'native';
-  mcu: { vendor: string; packId: string; version: string; series: string; part: string };
+  mcu: {
+    vendor: string;
+    packId: string;
+    version: string;
+    series: string;
+    part: string;
+    buildToolchain?: string;
+  };
   linux: { toolchainFamily: string };
-  native: { targetType: string; cStandard: number; cxxStandard: number };
+  native: { targetType: string; cStandard: number; cxxStandard: number; buildToolchain?: string };
   flash: { targetId: string; probeId: string; openocdPath: string; backend: string };
 }
 
@@ -46,6 +53,8 @@ interface SidebarState {
   flashProbes: Array<{ value: string; label: string }>;
   flashBackends: Array<{ value: string; label: string }>;
   linuxToolchains: Array<{ value: string; label: string }>;
+  mcuToolchains: Array<{ value: string; label: string; description?: string }>;
+  nativeToolchains: Array<{ value: string; label: string; description?: string }>;
   packCatalogNotice: string;
   corePackNotice: string;
   mcuBlockedReason: string;
@@ -74,6 +83,14 @@ function baseState(overrides: Partial<SidebarState> = {}): SidebarState {
     flashProbes: [{ value: 'stlink', label: 'ST-Link' }],
     flashBackends: [{ value: 'openocd', label: 'OpenOCD' }, { value: 'jlink', label: 'J-Link' }],
     linuxToolchains: [{ value: 'loongson', label: 'Loongson' }],
+    mcuToolchains: [
+      { value: '', label: '自动（按器件默认）' },
+      { value: 'mcu:arm-none-eabi', label: 'Arm GNU Toolchain', description: 'C:/tools/bin' }
+    ],
+    nativeToolchains: [
+      { value: '', label: '自动（CMake 检测）' },
+      { value: 'native:gcc', label: '本机 GCC', description: 'C:/mingw/bin' }
+    ],
     selection: {
       mode: 'mcu',
       mcu: {
@@ -81,10 +98,11 @@ function baseState(overrides: Partial<SidebarState> = {}): SidebarState {
         packId: 'builtin:STM',
         version: 'builtin',
         series: 'F1x',
-        part: 'STM32F103C8T6'
+        part: 'STM32F103C8T6',
+        buildToolchain: ''
       },
       linux: { toolchainFamily: 'loongson' },
-      native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
+      native: { targetType: 'executable', cStandard: 11, cxxStandard: 17, buildToolchain: '' },
       corePackInclude: true,
       flash: { targetId: 'stm32f1xx', probeId: 'stlink', openocdPath: 'openocd', backend: 'openocd' }
     },
@@ -209,13 +227,21 @@ test('MCU selection follows vendor, series, Pack, version, and device order', ()
     series: [{ value: 'F1x', label: 'F1x' }]
   }));
   const selects = harness.element('target-host').querySelectorAll('select');
-  assert.equal(selects.length, 5);
-  const [vendor, series, pack, version, device] = selects;
+  assert.equal(selects.length, 6);
+  const [vendor, series, pack, version, device, toolchain] = selects;
   assert.equal(vendor.value, 'STM');
   assert.equal(series.value, 'F1x');
   assert.equal(pack.value, 'builtin:STM');
   assert.equal(version.value, 'builtin');
   assert.equal(device.value, 'STM32F103C8T6');
+  assert.equal(toolchain.value, '');
+
+  toolchain.value = 'mcu:arm-none-eabi';
+  toolchain.dispatch('change');
+  const toolchainSave = harness.posted
+    .filter((message) => message.type === 'saveSelection')
+    .at(-1) as { selection?: { mcu?: { buildToolchain?: string } } } | undefined;
+  assert.equal(toolchainSave?.selection?.mcu?.buildToolchain, 'mcu:arm-none-eabi');
 
   series.value = 'F4x';
   series.dispatch('change');

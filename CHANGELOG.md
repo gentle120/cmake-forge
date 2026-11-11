@@ -12,5 +12,8 @@
 - Linux：loongarch64 / aarch64 / armv7hf / riscv64 交叉工具链，可选 `CMAKE_SYSROOT`。
 - 桌面：本机工具链，可执行文件 / 静态库 / 动态库。
 - 侧栏按厂商→系列→Pack→版本→型号向导式生成，生成文件以树形展示。
+- MCU 与桌面方向新增「编译链」选择：扫描 `PATH` 中的 ARM GCC 与本机
+  GCC/Clang，选择写入工具链文件、CMakeLists、IntelliSense 与调试配置；
+  默认「自动」保持原行为。
 - Pack 解析支持 Zip64、`<variant>` 型号、`name=` 内存区、启动向量注释、
   器件头选择宏推导、非整 KiB 链接区大小等厂商差异。

@@ -87,6 +87,11 @@ export interface McuWorkflowOptions {
    * register definitions only come from these files.
    */
   deviceSupport?: DeviceSupportFile[];
+  /**
+   * Compiler prefix selected in the sidebar (`arm-none-eabi`). Empty keeps the
+   * device profile's default prefix.
+   */
+  toolchainPrefix?: string;
   flash?: {
     target: FlashTargetProfile;
     probe: FlashProbeProfile;
@@ -446,6 +451,12 @@ export async function generateMcuWorkflow(
   }
 
   const projectName = projectNameFromRoot(root);
+  // The toolchain selection overrides the device profile's default prefix; the
+  // rest of the profile (memory map, startup, linker) is untouched.
+  const requestedPrefix = options.toolchainPrefix?.trim().replace(/-+$/, '');
+  const effectiveProfile = requestedPrefix
+    ? { ...profile, toolchainPrefix: requestedPrefix }
+    : profile;
   const cmakePath = join(root, 'CMakeLists.txt');
   const existingCMakeContent = await exists(cmakePath)
     ? await readFile(cmakePath, 'utf8')
@@ -453,7 +464,7 @@ export async function generateMcuWorkflow(
   // The headers are copied into the project like any other generated file, so
   // they take part in the overwrite check and the reported file list.
   const corePlan = options.corePack
-    ? await planCoreHeaderCopy(options.corePack.includeDir, root, coreProjectIncludeDir, profile.core)
+    ? await planCoreHeaderCopy(options.corePack.includeDir, root, coreProjectIncludeDir, effectiveProfile.core)
     : [];
   // The guard must look at the project *without* the generator-owned CMSIS
   // directories: otherwise a previous generation's own copies look like
@@ -468,7 +479,7 @@ export async function generateMcuWorkflow(
   const generatedFiles = createMcuFiles(
     root,
     projectName,
-    profile,
+    effectiveProfile,
     project,
     existingCMakeContent,
     options,
@@ -483,7 +494,10 @@ export async function generateMcuWorkflow(
     : undefined;
   const cppPropertiesFile: GeneratedFile = {
     path: cppPropertiesPath,
-    content: configureCppProperties(cppPropertiesContent)
+    content: configureCppProperties(
+      cppPropertiesContent,
+      `${effectiveProfile.toolchainPrefix}-gcc`
+    )
   };
 
   // Regenerating an unchanged project must not ask for confirmation, so only
@@ -560,7 +574,7 @@ export async function generateMcuWorkflow(
     path: configPath,
     content: generateProjectConfig(
       projectName,
-      profile,
+      effectiveProfile,
       [
         ...generatedFiles.map((file) => toWorkspacePath(root, file.path)),
         ...corePlan.map((entry) => toWorkspacePath(root, entry.target)),
@@ -611,8 +625,8 @@ export async function generateMcuWorkflow(
       return warnings.length > 0 ? warnings : undefined;
     })(),
     message: [
-      `已为 ${profile.part} 生成 CMake 工程，共扫描到 ${project.sources.length} 个源文件`,
-      options.corePack ? `，写入 ${profile.core} 内核头文件（${options.corePack.version}）` : '',
+      `已为 ${effectiveProfile.part} 生成 CMake 工程，共扫描到 ${project.sources.length} 个源文件`,
+      options.corePack ? `，写入 ${effectiveProfile.core} 内核头文件（${options.corePack.version}）` : '',
       deviceSupport.length > 0 ? `，并复制该系列的器件头文件与 system 启动文件` : '',
       '。'
     ].join('')
@@ -802,7 +816,8 @@ export async function generateNativeWorkflow(
         includeDirs: structure.includeDirs,
         defines: structure.defines,
         cStandard: structure.cStandard,
-        cxxStandard: structure.cxxStandard
+        cxxStandard: structure.cxxStandard,
+        toolchain: structure.toolchain ?? null
       },
       defines: structure.defines,
       generatedFiles: [
@@ -936,7 +951,8 @@ export async function generateDebugWorkflow(
   probe: FlashProbeProfile,
   openocdPath: string,
   backend: FlashBackendId = 'openocd',
-  device?: FlashDeviceContext
+  device?: FlashDeviceContext,
+  options: { toolchainPrefix?: string } = {}
 ): Promise<WorkflowResult> {
   const root = host.workspaceRoot();
   if (!root) {
@@ -960,7 +976,8 @@ export async function generateDebugWorkflow(
     // The presets always build into build/<preset>/, so the executable does not
     // depend on CMake Tools having a selected launch target.
     executable: `\${workspaceFolder}/build/debug/${projectNameFromRoot(root)}.elf`,
-    searchDirs: backend === 'openocd' ? await findOpenOcdSearchDirs(openocdPath) : []
+    searchDirs: backend === 'openocd' ? await findOpenOcdSearchDirs(openocdPath) : [],
+    ...(options.toolchainPrefix ? { toolchainPrefix: options.toolchainPrefix } : {})
   });
   await mkdir(join(root, '.vscode'), { recursive: true });
   // launch.json is merged rather than replaced, so an identical merge result

@@ -30,6 +30,7 @@ import {
   type ImportPackResult
 } from './devices/importedProfiles';
 import { defaultScanRoots, listKeilPacks } from './env/toolchainScanner';
+import { discoverBuildToolchains, findBuildToolchain } from './env/buildToolchains';
 import {
   findInstalledPackEntry,
   findPackPdsc,
@@ -1163,6 +1164,13 @@ async function selectFlashBackend(
 }
 
 
+/** Compiler prefix of the sidebar's MCU toolchain pick (empty → profile default). */
+function selectedMcuToolchainPrefix(): string | undefined {
+  const id = activeSidebar?.selection().mcu.buildToolchain ?? '';
+  return findBuildToolchain(discoverBuildToolchains(), 'mcu', id)?.prefix;
+}
+
+
 async function generateDebugConfigurationOnly(): Promise<void> {
   const root = await selectWorkspaceProject();
   if (!root) {
@@ -1189,7 +1197,9 @@ async function generateDebugConfigurationOnly(): Promise<void> {
     target,
     probe,
     getOpenOcdPath(),
-    backend
+    backend,
+    undefined,
+    { toolchainPrefix: selectedMcuToolchainPrefix() }
   ));
 }
 
@@ -1246,6 +1256,7 @@ async function generateProject(): Promise<void> {
     createWorkflowHost(root),
     profile,
     {
+      toolchainPrefix: selectedMcuToolchainPrefix(),
       corePack,
       deviceSupport: await deviceSupportFor(profile, selectedSource)
     }
@@ -1326,13 +1337,47 @@ async function generateNativeProject(): Promise<void> {
   if (!standardSelection) {
     return;
   }
+  const discoveredNative = discoverBuildToolchains().native;
+  const savedCompiler = saved?.toolchain?.cCompiler;
+  const nativeToolchainItems = [
+    { label: '自动（CMake 检测）', description: '让 CMake 在当前环境中挑选编译器', id: '' },
+    ...discoveredNative.map((toolchain) => ({
+      label: toolchain.label,
+      description: toolchain.detail,
+      id: toolchain.id
+    }))
+  ];
+  const savedId = savedCompiler
+    ? `native:${savedCompiler.replace(/-gcc$/, '')}`
+    : '';
+  const orderedToolchains = savedId
+    ? [...nativeToolchainItems].sort((left, right) =>
+        left.id === savedId ? -1 : right.id === savedId ? 1 : 0)
+    : nativeToolchainItems;
+  const toolchainSelection = await vscode.window.showQuickPick(orderedToolchains, {
+    placeHolder: '选择本机编译链（可直接选「自动」交给 CMake）'
+  });
+  if (!toolchainSelection) {
+    return;
+  }
+  const nativeToolchain = findBuildToolchain(
+    { mcu: [], native: discoveredNative },
+    'native',
+    toolchainSelection.id
+  );
   const structure = describeNativeProject(
     project,
     projectNameFromRoot(root),
     {
       targetType: selection.value,
       cStandard: standardSelection.cStandard,
-      cxxStandard: standardSelection.cxxStandard
+      cxxStandard: standardSelection.cxxStandard,
+      ...(nativeToolchain === undefined ? {} : {
+        toolchain: {
+          cCompiler: nativeToolchain.cCompiler,
+          ...(nativeToolchain.cxxCompiler ? { cxxCompiler: nativeToolchain.cxxCompiler } : {})
+        }
+      })
     }
   );
   reportWorkflowResult(await generateNativeWorkflow(createWorkflowHost(root), structure));

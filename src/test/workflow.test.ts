@@ -42,6 +42,24 @@ function createHost(
   };
 }
 
+test('MCU workflow honours the selected compiler toolchain prefix', async () => {
+  await withWorkspace(async (root) => {
+    const result = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), {
+      toolchainPrefix: 'arm-zephyr-eabi-'
+    });
+    assert.equal(result.ok, true);
+    const toolchainFile = result.files.find((file) => /-toolchain\.cmake$/.test(file));
+    assert.ok(toolchainFile);
+    const toolchain = await readFile(join(root, toolchainFile), 'utf8');
+    assert.match(toolchain, /CMAKE_C_COMPILER arm-zephyr-eabi-gcc/);
+    assert.match(toolchain, /CMAKE_ASM_COMPILER arm-zephyr-eabi-gcc/);
+    // IntelliSense must point at the same compiler, not the device default.
+    const cpp = await readFile(join(root, '.vscode', 'c_cpp_properties.json'), 'utf8');
+    assert.match(cpp, /arm-zephyr-eabi-gcc/);
+    assert.doesNotMatch(cpp, /arm-none-eabi-gcc/);
+  });
+});
+
 test('MCU workflow writes one startup, one linker, and a relative result list', async () => {
   await withWorkspace(async (root) => {
     const result = await generateMcuWorkflow(
@@ -346,10 +364,25 @@ test('debug generation warns about the two reasons F5 exits immediately', async 
     assert.equal(healthy.ok, true);
     assert.equal(healthy.warnings, undefined);
     const launch = JSON.parse(await readFile(join(root, '.vscode', 'launch.json'), 'utf8')) as {
-      configurations: Array<{ executable: string }>;
+      configurations: Array<{ executable: string; toolchainPrefix?: string }>;
     };
     // The generated preset layout decides the executable, not CMake Tools state.
     assert.match(launch.configurations[0].executable, /^\$\{workspaceFolder\}\/build\/debug\/.+\.elf$/);
+
+    const selected = await generateDebugWorkflow(
+      createHost(root),
+      target,
+      probe,
+      openocd,
+      'openocd',
+      undefined,
+      { toolchainPrefix: 'arm-zephyr-eabi-' }
+    );
+    assert.equal(selected.ok, true);
+    const selectedLaunch = JSON.parse(
+      await readFile(join(root, '.vscode', 'launch.json'), 'utf8')
+    ) as { configurations: Array<{ toolchainPrefix?: string }> };
+    assert.equal(selectedLaunch.configurations[0].toolchainPrefix, 'arm-zephyr-eabi-');
   });
 });
 

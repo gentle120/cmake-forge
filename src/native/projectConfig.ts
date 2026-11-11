@@ -8,12 +8,26 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import type { NativeTargetType } from './types';
+import type { NativeTargetType, NativeToolchain } from './types';
 
 export interface SavedNativeProject {
   targetType?: NativeTargetType;
   cStandard?: number;
   cxxStandard?: number;
+  toolchain?: NativeToolchain;
+}
+
+function savedToolchain(value: unknown): NativeToolchain | undefined {
+  const record = asRecord(value);
+  if (!record || typeof record.cCompiler !== 'string' || record.cCompiler.trim() === '') {
+    return undefined;
+  }
+  return {
+    cCompiler: record.cCompiler.trim(),
+    ...(typeof record.cxxCompiler === 'string' && record.cxxCompiler.trim() !== ''
+      ? { cxxCompiler: record.cxxCompiler.trim() }
+      : {})
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -53,6 +67,7 @@ export async function readNativeProjectConfig(filePath: string): Promise<SavedNa
   return {
     targetType: isTargetType(record.targetType) ? record.targetType : undefined,
     cStandard: standardOf(structure?.cStandard),
-    cxxStandard: standardOf(structure?.cxxStandard)
+    cxxStandard: standardOf(structure?.cxxStandard),
+    toolchain: savedToolchain(structure?.toolchain)
   };
 }

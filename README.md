@@ -13,6 +13,17 @@ cmake --preset debug            # 或 release
 cmake --build --preset debug
 ```
 
+## 编译链选择
+
+MCU 与桌面方向在侧栏都有「编译链」下拉，选项来自 `PATH` 扫描（不执行编译器进程）：
+
+- MCU：识别 `arm-none-eabi-gcc`、`arm-zephyr-eabi-gcc` 等裸机 ARM GCC；选中后
+  编译器前缀写入工具链文件、C/C++ IntelliSense 与调试配置。
+- 桌面：识别 `gcc`、`clang` 与 Windows MinGW 前缀；选中后写入 CMakeLists 的
+  `CMAKE_C_COMPILER` / `CMAKE_CXX_COMPILER`。
+- 默认「自动」保持原行为：MCU 用器件档案的默认前缀，桌面交给 CMake 检测。
+  选择按工作区保存，生成工程时复用。
+
 ## MCU 固件
 
 - 芯片数据**全部来自 CMSIS Pack**，插件不内置芯片档案：

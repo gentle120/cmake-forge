@@ -555,3 +555,82 @@ test('trims the persisted Linux sysroot', () => {
   const cleared = sanitizeSidebarSelection({ mode: 'linux', linux: { sysroot: '' } });
   assert.equal(cleared.linux.sysroot, '');
 });
+
+const discoveredToolchains = {
+  mcu: [{
+    id: 'mcu:arm-none-eabi',
+    direction: 'mcu' as const,
+    prefix: 'arm-none-eabi',
+    cCompiler: 'arm-none-eabi-gcc',
+    cxxCompiler: 'arm-none-eabi-g++',
+    binDir: 'C:/arm/bin',
+    label: 'Arm GNU Toolchain (arm-none-eabi)',
+    detail: 'C:/arm/bin'
+  }],
+  native: [{
+    id: 'native:gcc',
+    direction: 'native' as const,
+    prefix: '',
+    cCompiler: 'gcc',
+    cxxCompiler: 'g++',
+    binDir: 'C:/mingw/bin',
+    label: '本机 GCC',
+    detail: 'gcc — C:/mingw/bin'
+  }]
+};
+
+test('offers discovered compiler toolchains for MCU and desktop', () => {
+  const selection = sanitizeSidebarSelection(
+    {
+      mode: 'native',
+      mcu: { buildToolchain: 'mcu:arm-none-eabi' },
+      native: { buildToolchain: 'native:gcc' }
+    },
+    undefined,
+    [],
+    false,
+    discoveredToolchains
+  );
+  assert.equal(selection.mcu.buildToolchain, 'mcu:arm-none-eabi');
+  assert.equal(selection.native.buildToolchain, 'native:gcc');
+
+  const state = buildSidebarState(
+    'demo', selection, [], [], '', false, [], '', undefined, '', '', [], discoveredToolchains
+  );
+  assert.deepEqual(
+    state.mcuToolchains.map((option) => option.value),
+    ['', 'mcu:arm-none-eabi']
+  );
+  assert.deepEqual(
+    state.nativeToolchains.map((option) => option.value),
+    ['', 'native:gcc']
+  );
+  assert.equal(state.selection.mcu.buildToolchain, 'mcu:arm-none-eabi');
+  assert.equal(state.selection.native.buildToolchain, 'native:gcc');
+});
+
+test('drops a toolchain selection that is no longer installed', () => {
+  const selection = sanitizeSidebarSelection(
+    {
+      mode: 'mcu',
+      mcu: { buildToolchain: 'mcu:arm-eabi' },
+      native: { buildToolchain: 'native:clang' }
+    },
+    undefined,
+    [],
+    false,
+    discoveredToolchains
+  );
+  assert.equal(selection.mcu.buildToolchain, '');
+  assert.equal(selection.native.buildToolchain, '');
+});
+
+test('keeps a persisted toolchain id before discovery has run', () => {
+  // The first render may happen before PATH scanning; wiping the id there would
+  // reset the dropdown to "自动" on every window start.
+  const selection = sanitizeSidebarSelection({
+    mode: 'mcu',
+    mcu: { buildToolchain: 'mcu:arm-none-eabi' }
+  });
+  assert.equal(selection.mcu.buildToolchain, 'mcu:arm-none-eabi');
+});

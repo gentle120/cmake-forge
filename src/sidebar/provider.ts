@@ -46,6 +46,12 @@ import {
   type WorkspaceProject,
   type WorkspaceProjectScanOptions
 } from '../scanner/workspaceProjects';
+import {
+  discoverBuildToolchains,
+  findBuildToolchain,
+  type BuildToolchain,
+  type DiscoveredBuildToolchains
+} from '../env/buildToolchains';
 import { renderSidebarHtml } from './html';
 import { parseIncomingMessage, type SidebarIncomingMessage } from './messages';
 import {
@@ -71,6 +77,8 @@ export interface SidebarProviderDependencies {
   workflow: ProjectWorkflowHost;
   confirmOverwrite(files: string[]): Promise<boolean>;
   discoverToolchains(): ReturnType<typeof discoverLinuxToolchains>;
+  /** Compiler toolchains found on PATH; absent means "scan the real PATH". */
+  discoverBuildToolchains?(): DiscoveredBuildToolchains;
   discoverProjects(roots: string[], options?: WorkspaceProjectScanOptions): Promise<WorkspaceProject[]>;
   scanProject?(root: string, options?: { signal?: AbortSignal }): ReturnType<typeof scanProject>;
   /** Resolves the stored CMSIS pack path for an imported part, when available. */
@@ -145,6 +153,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private packCatalogRequest = 0;
   private lastBusyHintAt = 0;
   private pendingPosts: unknown[] = [];
+  private buildToolchainCache?: { at: number; value: DiscoveredBuildToolchains };
   private readonly viewDisposables: vscode.Disposable[] = [];
 
   constructor(
@@ -155,7 +164,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       context.workspaceState.get(selectionKey),
       undefined,
       [],
-      true
+      true,
+      this.buildToolchains()
     );
     // The sidebar default is the bare command `openocd`; when the user configured
     // an absolute OpenOCD path in the settings, that path is what the generated
@@ -211,7 +221,40 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.selectionValue,
       this.selectionValue,
       this.packOptions,
-      this.packOptions.length === 0
+      this.packOptions.length === 0,
+      this.buildToolchains()
+    );
+  }
+
+  /**
+   * Compiler toolchains on `PATH`, cached briefly: the sidebar re-renders after
+   * every selection change and each render would otherwise re-read the PATH
+   * directories.
+   */
+  private buildToolchains(): DiscoveredBuildToolchains {
+    const now = Date.now();
+    if (this.buildToolchainCache && now - this.buildToolchainCache.at < 10_000) {
+      return this.buildToolchainCache.value;
+    }
+    const value = this.dependencies.discoverBuildToolchains?.()
+      ?? discoverBuildToolchains();
+    this.buildToolchainCache = { at: now, value };
+    return value;
+  }
+
+  private selectedMcuToolchain(): BuildToolchain | undefined {
+    return findBuildToolchain(
+      this.buildToolchains(),
+      'mcu',
+      this.selectionValue.mcu.buildToolchain
+    );
+  }
+
+  private selectedNativeToolchain(): BuildToolchain | undefined {
+    return findBuildToolchain(
+      this.buildToolchains(),
+      'native',
+      this.selectionValue.native.buildToolchain
     );
   }
 
@@ -319,7 +362,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.vendorOptions,
       this.packCatalogNotice,
       this.corePackNotice,
-      this.corePackVersions
+      this.corePackVersions,
+      this.buildToolchains()
     );
   }
 
@@ -329,7 +373,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
 
   private async saveSelection(value: unknown): Promise<void> {
     const previous = this.selectionValue;
-    const requested = sanitizeSidebarSelection(value, previous, this.packOptions);
+    const requested = sanitizeSidebarSelection(
+      value,
+      previous,
+      this.packOptions,
+      false,
+      this.buildToolchains()
+    );
     const mcu = requested.mcu;
     const mcuChanged =
       mcu.vendor !== previous.mcu.vendor
@@ -351,7 +401,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
             part: mcu.part
           }, this.packOptions),
           previous,
-          this.packOptions
+          this.packOptions,
+          false,
+          this.buildToolchains()
         )
       : requested;
     const vendorChanged = this.selectionValue.mcu.vendor !== previous.mcu.vendor;
@@ -1019,7 +1071,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     if (message.type === 'openSettings') {
       await vscode.commands.executeCommand(
         'workbench.action.openSettings',
-        '@ext:gentle120.cmake-embedded'
+        '@ext:gentle120.cmake-forge'
       );
       return;
     }
@@ -1053,13 +1105,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
               message: '工作区中没有找到 C/C++ 或汇编源文件。'
             };
           }
+          const nativeToolchain = this.selectedNativeToolchain();
           const structure = describeNativeProject(
             project,
             projectNameFromRoot(root),
             {
               targetType: this.selectionValue.native.targetType,
               cStandard: this.selectionValue.native.cStandard,
-              cxxStandard: this.selectionValue.native.cxxStandard
+              cxxStandard: this.selectionValue.native.cxxStandard,
+              ...(nativeToolchain === undefined ? {} : {
+                toolchain: {
+                  cCompiler: nativeToolchain.cCompiler,
+                  ...(nativeToolchain.cxxCompiler
+                    ? { cxxCompiler: nativeToolchain.cxxCompiler }
+                    : {})
+                }
+              })
             }
           );
           return generateNativeWorkflow(this.workflowHost(), structure);
@@ -1075,6 +1136,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         // generating the project no longer writes them implicitly.
         const deviceSupport = await this.deviceSupportFiles();
         const result = await generateMcuWorkflow(this.workflowHost(), profile, {
+          toolchainPrefix: this.selectedMcuToolchain()?.prefix,
           corePack: this.dependencies.corePackForGeneration
             ? await this.dependencies.corePackForGeneration(
                 this.selectionValue.corePackInclude !== false,
@@ -1140,7 +1202,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           flash.probe,
           flash.openocdPath,
           flash.backend,
-          flash.device
+          flash.device,
+          { toolchainPrefix: this.selectedMcuToolchain()?.prefix }
         );
         const warning = flash.backend === 'openocd'
           ? this.flashTargetVendorWarning(flash.target)

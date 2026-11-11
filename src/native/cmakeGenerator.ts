@@ -6,6 +6,17 @@ function quotedPath(value: string): string {
   return projectPath('NATIVE_PROJECT_ROOT', value);
 }
 
+function compilerSelection(structure: NativeProjectStructure): string {
+  if (!structure.toolchain) {
+    return '';
+  }
+  const lines = [`set(CMAKE_C_COMPILER ${structure.toolchain.cCompiler})`];
+  if (structure.toolchain.cxxCompiler) {
+    lines.push(`set(CMAKE_CXX_COMPILER ${structure.toolchain.cxxCompiler})`);
+  }
+  return `${lines.join('\n')}\n\n`;
+}
+
 function targetDeclaration(structure: NativeProjectStructure): string {
   if (structure.targetType === 'static') {
     return `add_library(${structure.targetName} STATIC)`;
@@ -33,6 +44,7 @@ export function generateNativeCMakeLists(
 
   const generated = `cmake_minimum_required(VERSION 3.22)
 
+${compilerSelection(structure)}
 set(CMAKE_C_STANDARD ${structure.cStandard})
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD ${structure.cxxStandard})

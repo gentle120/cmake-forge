@@ -51,6 +51,33 @@ target_link_libraries(\${CMAKE_PROJECT_NAME} PRIVATE fmt::fmt)
   assert.doesNotMatch(generated, /arm-none-eabi|startup_|\.ld/);
 });
 
+test('pins the selected host compiler before project()', () => {
+  const structure = describeNativeProject({
+    sources: ['src/main.c'],
+    includeDirs: [],
+    defines: []
+  }, 'clang_tool', {
+    toolchain: { cCompiler: 'clang', cxxCompiler: 'clang++' }
+  });
+
+  const generated = generateNativeCMakeLists(structure);
+  assert.match(generated, /set\(CMAKE_C_COMPILER clang\)/);
+  assert.match(generated, /set\(CMAKE_CXX_COMPILER clang\+\+\)/);
+  // Compilers must be chosen before the project() call enables languages.
+  assert.ok(generated.indexOf('set(CMAKE_C_COMPILER') < generated.indexOf('project('));
+});
+
+test('leaves compiler detection to CMake without a selection', () => {
+  const structure = describeNativeProject({
+    sources: ['src/main.c'],
+    includeDirs: [],
+    defines: []
+  }, 'auto_tool');
+
+  const generated = generateNativeCMakeLists(structure);
+  assert.doesNotMatch(generated, /set\(CMAKE_C_COMPILER/);
+});
+
 test('generates native debug and release presets', () => {
   const presets = JSON.parse(generateNativeCMakePresets());
 

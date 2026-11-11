@@ -26,6 +26,11 @@ import {
   type LinuxToolchainHit
 } from '../linux/types';
 import { getVendorMetadata, hasVendor } from '../devices/vendorRegistry';
+import {
+  findBuildToolchain,
+  type BuildToolchain,
+  type DiscoveredBuildToolchains
+} from '../env/buildToolchains';
 import { curatedVendors } from '../devices/curatedVendors';
 import { backendSupportsProbe, listFlashBackendProfiles, type FlashBackendId } from '../flash/backendProfiles';
 
@@ -53,6 +58,8 @@ export interface SidebarSelection {
      * empty means the newest installed one.
      */
     corePackVersion: string;
+    /** Selected MCU compiler toolchain id; empty means the device default. */
+    buildToolchain: string;
   };
   linux: {
     toolchainFamily: LinuxToolchainFamily;
@@ -65,6 +72,8 @@ export interface SidebarSelection {
     targetType: 'executable' | 'static' | 'shared';
     cStandard: 11 | 17 | 23;
     cxxStandard: 14 | 17 | 20 | 23;
+    /** Selected host compiler toolchain id; empty lets CMake detect one. */
+    buildToolchain: string;
   };
   /** Adds the installed CMSIS core pack include directory to generated projects. */
   corePackInclude: boolean;
@@ -104,6 +113,8 @@ export interface SidebarBootstrapState {
   flashProbes: SidebarOption[];
   flashBackends: SidebarOption[];
   linuxToolchains: SidebarOption[];
+  mcuToolchains: SidebarOption[];
+  nativeToolchains: SidebarOption[];
   selection: SidebarSelection;
 }
 
@@ -212,7 +223,8 @@ export function defaultSidebarSelection(): SidebarSelection {
       version: '',
       series: '',
       part: '',
-      corePackVersion: ''
+      corePackVersion: '',
+      buildToolchain: ''
     },
     linux: {
       toolchainFamily: defaultLinuxToolchain,
@@ -222,7 +234,8 @@ export function defaultSidebarSelection(): SidebarSelection {
     native: {
       targetType: 'executable',
       cStandard: 11,
-      cxxStandard: 17
+      cxxStandard: 17,
+      buildToolchain: ''
     },
     corePackInclude: true,
     flash: {
@@ -238,7 +251,8 @@ export function sanitizeSidebarSelection(
   value: unknown,
   fallback: SidebarSelection = defaultSidebarSelection(),
   packOptions: DevicePackOption[] = [],
-  preservePackSelection = false
+  preservePackSelection = false,
+  buildToolchains?: DiscoveredBuildToolchains
 ): SidebarSelection {
   const record = asRecord(value);
   const mcu = asRecord(record?.mcu);
@@ -297,6 +311,22 @@ export function sanitizeSidebarSelection(
     ? linux.toolchainFamily
     : fallback.linux.toolchainFamily;
   const backend = validBackend(flash?.backend);
+  const requestedMcuToolchain = typeof mcu?.buildToolchain === 'string'
+    ? mcu.buildToolchain.trim()
+    : '';
+  const mcuBuildToolchain = buildToolchains === undefined
+    ? requestedMcuToolchain
+    : findBuildToolchain(buildToolchains, 'mcu', requestedMcuToolchain) === undefined
+      ? ''
+      : requestedMcuToolchain;
+  const requestedNativeToolchain = typeof native?.buildToolchain === 'string'
+    ? native.buildToolchain.trim()
+    : '';
+  const nativeBuildToolchain = buildToolchains === undefined
+    ? requestedNativeToolchain
+    : findBuildToolchain(buildToolchains, 'native', requestedNativeToolchain) === undefined
+      ? ''
+      : requestedNativeToolchain;
   const requestedProbe = validProbe(flash?.probeId);
   const probeId = probeForBackend(backend, requestedProbe);
 
@@ -324,7 +354,8 @@ export function sanitizeSidebarSelection(
             : partFor(vendorProfiles, vendor, series, mcu?.part),
       corePackVersion: typeof mcu?.corePackVersion === 'string'
         ? mcu.corePackVersion.trim()
-        : fallback.mcu.corePackVersion
+        : fallback.mcu.corePackVersion,
+      buildToolchain: mcuBuildToolchain
     },
     linux: {
       toolchainFamily: family,
@@ -340,7 +371,8 @@ export function sanitizeSidebarSelection(
         : 11,
       cxxStandard: native?.cxxStandard === 14 || native?.cxxStandard === 20 || native?.cxxStandard === 23
         ? native.cxxStandard
-        : 17
+        : 17,
+      buildToolchain: nativeBuildToolchain
     },
     // Defaults to on: without the core headers a generated project cannot build.
     corePackInclude: typeof record?.corePackInclude === 'boolean'
@@ -571,8 +603,10 @@ export function nextMcuSelection(
       ...(packId === '' || owner === undefined ? {} : { sourcePack: owner }),
       series,
       part,
-      // The core pack is independent of the device Pack, so it survives here.
-      corePackVersion: selection.mcu.corePackVersion
+      // The core pack and compiler toolchain are independent of the device
+      // Pack, so they survive Pack/series switches.
+      corePackVersion: selection.mcu.corePackVersion,
+      buildToolchain: selection.mcu.buildToolchain
     }
   };
 }
@@ -627,6 +661,23 @@ function optionsForPackSelection(
   };
 }
 
+/** Dropdown entries for one direction: an automatic choice plus the found toolchains. */
+function toolchainOptions(
+  toolchains: BuildToolchain[],
+  autoLabel: string,
+  autoDescription: string
+): SidebarOption[] {
+  return [
+    { value: '', label: autoLabel, description: autoDescription },
+    ...toolchains.map((toolchain) => ({
+      value: toolchain.id,
+      label: toolchain.label,
+      description: toolchain.binDir,
+      detail: toolchain.cCompiler
+    }))
+  ];
+}
+
 export function buildSidebarState(
   workspaceName: string,
   selection: SidebarSelection,
@@ -644,7 +695,8 @@ export function buildSidebarState(
   vendorOptions?: SidebarOption[],
   packCatalogNotice = '',
   corePackNotice = '',
-  corePackVersions: SidebarOption[] = []
+  corePackVersions: SidebarOption[] = [],
+  buildToolchains?: DiscoveredBuildToolchains
 ): SidebarBootstrapState {
   const profiles = listDeviceProfiles();
   const hits: LinuxToolchainHit[] = discoveredToolchains.map((hit) => ({
@@ -655,7 +707,13 @@ export function buildSidebarState(
     binDir: hit.binDir
   }));
   const choices = buildLinuxToolchainChoices(hits, selection.linux.toolchainFamily);
-  const safeSelection = sanitizeSidebarSelection(selection, selection, packOptions);
+  const safeSelection = sanitizeSidebarSelection(
+    selection,
+    selection,
+    packOptions,
+    false,
+    buildToolchains
+  );
   const mcuOptions = optionsForPackSelection(safeSelection, packOptions);
   const resolvedPendingPackId = mcuOptions.packs.some((option) => option.value === pendingPackId)
     ? pendingPackId
@@ -720,6 +778,16 @@ export function buildSidebarState(
       description: choice.description,
       detail: choice.detail
     })),
+    mcuToolchains: toolchainOptions(
+      buildToolchains?.mcu ?? [],
+      '自动（按器件默认）',
+      '使用器件档案的编译器前缀，通常是 arm-none-eabi'
+    ),
+    nativeToolchains: toolchainOptions(
+      buildToolchains?.native ?? [],
+      '自动（CMake 检测）',
+      '让 CMake 在当前环境中挑选本机编译器'
+    ),
     selection: {
       ...selection,
       // The dropdown renders these values; a series or core pack version the
@@ -731,7 +799,12 @@ export function buildSidebarState(
           option.value === selection.mcu.corePackVersion
         )
           ? selection.mcu.corePackVersion
-          : corePackVersions[0]?.value ?? ''
+          : corePackVersions[0]?.value ?? '',
+        buildToolchain: safeSelection.mcu.buildToolchain
+      },
+      native: {
+        ...selection.native,
+        buildToolchain: safeSelection.native.buildToolchain
       }
     }
   };

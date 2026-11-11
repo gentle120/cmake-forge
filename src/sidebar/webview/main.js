@@ -224,6 +224,15 @@
     if (!state) return;
     saveSelection({ ...state.selection, mcu: { ...state.selection.mcu, part: value } });
   });
+  const toolchainField = createSelectField('编译链', (value) => {
+    if (!state) return;
+    saveSelection({
+      ...state.selection,
+      mcu: { ...state.selection.mcu, buildToolchain: value }
+    });
+  });
+  toolchainField.wrapper.classList.add('field-wide');
+  const toolchainNote = paragraph('field-detail', '');
   const deviceSummary = document.createElement('div');
   deviceSummary.className = 'device-summary field-wide';
   const deviceMeta = document.createElement('span');
@@ -238,6 +247,8 @@
     versionField.wrapper,
     deviceField.wrapper,
     deviceSummary,
+    toolchainField.wrapper,
+    toolchainNote,
     packCatalogBusy
   );
   // The installed core-pack version sits with its include switch, after the
@@ -324,6 +335,10 @@
     }
     applyOptions(seriesField.select, state.series, selection.series);
     applyOptions(deviceField.select, state.devices, selection.part);
+    applyOptions(toolchainField.select, state.mcuToolchains, selection.buildToolchain);
+    const toolchain = selectedOption(state.mcuToolchains, selection.buildToolchain);
+    toolchainNote.textContent = toolchain?.description || '';
+    toolchainNote.hidden = !toolchainNote.textContent;
     // The core pack row only means something while the headers are being
     // copied into the project and a core pack is actually installed.
     const corePackVersions = Array.isArray(state.corePackVersions)
@@ -488,13 +503,28 @@
     const standards = document.createElement('div');
     standards.className = 'target-grid';
     standards.append(cStandard.wrapper, cxxStandard.wrapper);
-    section.append(targetType.wrapper, standards);
+    const toolchain = createSelectField('编译链', (value) => {
+      if (!state) return;
+      saveSelection({
+        ...state.selection,
+        native: { ...state.selection.native, buildToolchain: value }
+      });
+    });
+    const toolchainNote = paragraph('field-detail', '');
+    section.append(targetType.wrapper, standards, toolchain.wrapper, toolchainNote);
     panel.append(section);
     panel.append(paragraph(
       'empty-note',
       '将扫描当前工作区并生成 CMakeLists.txt、Debug/Release 预设和 C/C++ IntelliSense 配置。'
     ));
-    nativePanel = { panel, targetType: targetType.select, cStandard: cStandard.select, cxxStandard: cxxStandard.select };
+    nativePanel = {
+      panel,
+      targetType: targetType.select,
+      cStandard: cStandard.select,
+      cxxStandard: cxxStandard.select,
+      toolchain: toolchain.select,
+      toolchainNote
+    };
     return nativePanel;
   }
 
@@ -517,6 +547,10 @@
       { value: '20', label: 'C++20' },
       { value: '23', label: 'C++23' }
     ], String(selection.cxxStandard));
+    applyOptions(panel.toolchain, state.nativeToolchains, selection.buildToolchain);
+    const toolchain = selectedOption(state.nativeToolchains, selection.buildToolchain);
+    panel.toolchainNote.textContent = toolchain?.description || '';
+    panel.toolchainNote.hidden = !panel.toolchainNote.textContent;
     return panel.panel;
   }
 
