@@ -29,16 +29,28 @@ export function generateCMakeLists(
   const generatedStartup = (profile.gnuStartupFileName.split('/').pop() ?? '').toLowerCase();
   // A legacy startup source is replaced by the generated GNU startup, but other
   // hand-written assembly must stay in the build instead of being dropped.
+  const runtimeBasenames = new Set(
+    runtimeSourceNames.map((name) => (name.split('/').pop() ?? '').toLowerCase())
+  );
+  const armclangFamily = profile.toolchainFamily === 'armclang';
   const sources = project.sources.filter((source) => {
     const name = (source.split('/').pop() ?? '').toLowerCase();
     if (name === generatedStartup) return false;
+    // A regenerated armclang project may still contain the newlib stubs from an
+    // earlier GCC generation; they must not be compiled into an Arm C library
+    // image.
+    if (armclangFamily && runtimeBasenames.has(name)) return false;
     return !(name.startsWith('startup') && /\.s$/.test(name));
   });
   sources.push(profile.gnuStartupFileName);
-  for (const runtimeSourceName of runtimeSourceNames) {
-    const runtimeBasename = runtimeSourceName.split('/').pop()?.toLowerCase();
-    if (!sources.some((source) => source.split('/').pop()?.toLowerCase() === runtimeBasename)) {
-      sources.push(runtimeSourceName);
+  // Arm Compiler 6 uses its own C library retargeting and does not need the
+  // newlib syscall stubs; adding them would fail on <sys/stat.h>.
+  if (!armclangFamily) {
+    for (const runtimeSourceName of runtimeSourceNames) {
+      const runtimeBasename = runtimeSourceName.split('/').pop()?.toLowerCase();
+      if (!sources.some((source) => source.split('/').pop()?.toLowerCase() === runtimeBasename)) {
+        sources.push(runtimeSourceName);
+      }
     }
   }
   // The copied device system source is generated, so it is not in the scan.
@@ -80,7 +92,32 @@ export function generateCMakeLists(
     ...externalIncludes
   ].join('\n');
 
-  const generated = `cmake_minimum_required(VERSION 3.22)
+  // Artifact generation differs per compiler family: armclang ships `fromelf`
+  // while GCC uses objcopy/size. Emitting only the selected family's block keeps
+  // the generated CMakeLists free of dead toolchain names.
+  const artifactCommands = profile.toolchainFamily === 'armclang'
+    ? `set_target_properties(${projectName} PROPERTIES
+    ADDITIONAL_CLEAN_FILES "\${CMAKE_BINARY_DIR}/${projectName}.hex;\${CMAKE_BINARY_DIR}/${projectName}.bin"
+)
+if(CMAKE_FROMELF)
+    add_custom_command(TARGET ${projectName} POST_BUILD
+        COMMAND \${CMAKE_FROMELF} --i32 --output=\${CMAKE_BINARY_DIR}/${projectName}.hex \$<TARGET_FILE:${projectName}>
+        COMMAND \${CMAKE_FROMELF} --bin --output=\${CMAKE_BINARY_DIR}/${projectName}.bin \$<TARGET_FILE:${projectName}>
+        COMMAND \${CMAKE_FROMELF} --text -c -z \$<TARGET_FILE:${projectName}>
+    )
+endif()`
+    : `set_target_properties(${projectName} PROPERTIES
+    ADDITIONAL_CLEAN_FILES "\${CMAKE_BINARY_DIR}/${projectName}.map"
+)
+if(CMAKE_OBJCOPY AND CMAKE_SIZE)
+    add_custom_command(TARGET ${projectName} POST_BUILD
+        COMMAND \${CMAKE_OBJCOPY} -O ihex \$<TARGET_FILE:${projectName}> \${CMAKE_BINARY_DIR}/${projectName}.hex
+        COMMAND \${CMAKE_OBJCOPY} -O binary \$<TARGET_FILE:${projectName}> \${CMAKE_BINARY_DIR}/${projectName}.bin
+        COMMAND \${CMAKE_SIZE} \$<TARGET_FILE:${projectName}>
+    )
+endif()`;
+
+const generated = `cmake_minimum_required(VERSION 3.22)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -118,17 +155,7 @@ ${defineBlock}
 
 ${userCodeSection()}
 
-set_target_properties(${projectName} PROPERTIES
-    ADDITIONAL_CLEAN_FILES "\${CMAKE_BINARY_DIR}/${projectName}.map"
-)
-
-if(CMAKE_OBJCOPY AND CMAKE_SIZE)
-    add_custom_command(TARGET ${projectName} POST_BUILD
-        COMMAND \${CMAKE_OBJCOPY} -O ihex \$<TARGET_FILE:${projectName}> \${CMAKE_BINARY_DIR}/${projectName}.hex
-        COMMAND \${CMAKE_OBJCOPY} -O binary \$<TARGET_FILE:${projectName}> \${CMAKE_BINARY_DIR}/${projectName}.bin
-        COMMAND \${CMAKE_SIZE} \$<TARGET_FILE:${projectName}>
-    )
-endif()
+${artifactCommands}
 `;
 
   return preserveUserCodeSection(existingContent, generated);

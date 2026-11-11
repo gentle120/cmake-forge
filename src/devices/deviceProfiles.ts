@@ -21,6 +21,21 @@ export interface DeviceProfile {
   core: string;
   architecture: 'arm';
   toolchainPrefix: string;
+  /**
+   * Compiler family used for generation. Packs never decide this; the generator
+   * sets it from the sidebar selection. Absent means GCC.
+   */
+  toolchainFamily?: 'gcc' | 'armclang';
+  /** Compiler command (PATH name or absolute path) for armclang / off-PATH GCC. */
+  mcuCompiler?: string;
+  mcuCxxCompiler?: string;
+  /** Absolute compiler path for C/C++ IntelliSense. */
+  mcuCompilerPath?: string;
+  /** Absolute fromelf path for armclang hex/bin conversion. */
+  mcuFromelf?: string;
+  /** Absolute objcopy/size paths when the GCC toolchain is not on PATH. */
+  mcuObjcopy?: string;
+  mcuSize?: string;
   defines: string[];
   compilerFlags: string[];
   flash: MemoryRegion;

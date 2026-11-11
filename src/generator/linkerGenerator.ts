@@ -150,3 +150,38 @@ SECTIONS
 }
 `;
 }
+
+/**
+ * armclang scatter file.
+ *
+ * `armlink` places the vector table first (`.isr_vector`), then read-only data,
+ * and puts the read-write/zero-init sections (including the startup's `.stack`)
+ * in RAM. GNU-only symbols such as `_estack` do not exist here: the Arm C
+ * library's `__main` runs the scatter-load and the hardware loads MSP from the
+ * `__initial_sp` vector.
+ */
+export function generateScatterFile(profile: DeviceProfile): string {
+  const flashOrigin = hexadecimal(profile.flash.origin);
+  const flashLength = hexadecimal(profile.flash.length);
+  const ramOrigin = hexadecimal(profile.ram.origin);
+  const ramLength = hexadecimal(profile.ram.length);
+  return `; Scatter file generated for ${profile.part}.
+LR_IROM1 ${flashOrigin} ${flashLength} {
+  ER_IROM1 ${flashOrigin} ${flashLength} {
+    *(.isr_vector, +First)
+    *(InRoot$$Sections)
+    .ANY (+RO)
+  }
+  RW_IRAM1 ${ramOrigin} ${ramLength} {
+    .ANY (+RW +ZI)
+  }
+}
+`;
+}
+
+/** Linker input for the profile's compiler family. */
+export function generateLinkerFile(profile: DeviceProfile): string {
+  return profile.toolchainFamily === 'armclang'
+    ? generateScatterFile(profile)
+    : generateLinkerScript(profile);
+}

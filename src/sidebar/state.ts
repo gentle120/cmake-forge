@@ -314,11 +314,12 @@ export function sanitizeSidebarSelection(
   const requestedMcuToolchain = typeof mcu?.buildToolchain === 'string'
     ? mcu.buildToolchain.trim()
     : '';
+  const mcuToolchainList = buildToolchains?.mcu ?? [];
   const mcuBuildToolchain = buildToolchains === undefined
     ? requestedMcuToolchain
-    : findBuildToolchain(buildToolchains, 'mcu', requestedMcuToolchain) === undefined
-      ? ''
-      : requestedMcuToolchain;
+    : findBuildToolchain(buildToolchains, 'mcu', requestedMcuToolchain) !== undefined
+      ? requestedMcuToolchain
+      : mcuToolchainList[0]?.id ?? '';
   const requestedNativeToolchain = typeof native?.buildToolchain === 'string'
     ? native.buildToolchain.trim()
     : '';
@@ -778,11 +779,14 @@ export function buildSidebarState(
       description: choice.description,
       detail: choice.detail
     })),
-    mcuToolchains: toolchainOptions(
-      buildToolchains?.mcu ?? [],
-      '自动（按器件默认）',
-      '使用器件档案的编译器前缀，通常是 arm-none-eabi'
-    ),
+    // MCU offers only the compiler families that are actually installed; an
+    // empty list hides the row instead of showing an unusable dropdown.
+    mcuToolchains: (buildToolchains?.mcu ?? []).map((toolchain) => ({
+      value: toolchain.id,
+      label: toolchain.label,
+      description: toolchain.binDir,
+      detail: toolchain.cCompiler
+    })),
     nativeToolchains: toolchainOptions(
       buildToolchains?.native ?? [],
       '自动（CMake 检测）',

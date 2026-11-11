@@ -45,7 +45,7 @@ function createHost(
 test('MCU workflow honours the selected compiler toolchain prefix', async () => {
   await withWorkspace(async (root) => {
     const result = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), {
-      toolchainPrefix: 'arm-zephyr-eabi-'
+      toolchain: { family: 'gcc', prefix: 'arm-zephyr-eabi' }
     });
     assert.equal(result.ok, true);
     const toolchainFile = result.files.find((file) => /-toolchain\.cmake$/.test(file));
@@ -57,6 +57,46 @@ test('MCU workflow honours the selected compiler toolchain prefix', async () => 
     const cpp = await readFile(join(root, '.vscode', 'c_cpp_properties.json'), 'utf8');
     assert.match(cpp, /arm-zephyr-eabi-gcc/);
     assert.doesNotMatch(cpp, /arm-none-eabi-gcc/);
+  });
+});
+
+test('MCU workflow switches between armgcc and armclang layouts', async () => {
+  await withWorkspace(async (root) => {
+    const profile = fixtureDeviceProfile();
+    const gcc = await generateMcuWorkflow(createHost(root), profile, {});
+    assert.equal(gcc.ok, true);
+    assert.ok(existsSync(join(root, 'STM32F103C8T6.ld')));
+    assert.ok(existsSync(join(root, 'system', 'syscalls.c')));
+
+    const armclang = await generateMcuWorkflow(createHost(root), profile, {
+      toolchain: {
+        family: 'armclang',
+        cCompiler: 'D:/Keil_v5/ARM/ARMCLANG/bin/armclang.exe',
+        cxxCompiler: 'D:/Keil_v5/ARM/ARMCLANG/bin/armclang.exe',
+        cCompilerPath: 'D:/Keil_v5/ARM/ARMCLANG/bin/armclang.exe',
+        fromelf: 'D:/Keil_v5/ARM/ARMCLANG/bin/fromelf.exe'
+      }
+    });
+    assert.equal(armclang.ok, true);
+    assert.ok(existsSync(join(root, 'STM32F103C8T6.sct')));
+    // The other family's linker input is stale and removed.
+    assert.equal(existsSync(join(root, 'STM32F103C8T6.ld')), false);
+    const armCmake = await readFile(join(root, 'CMakeLists.txt'), 'utf8');
+    assert.match(armCmake, /CMAKE_FROMELF/);
+    assert.doesNotMatch(armCmake, /system\/syscalls\.c/);
+    const config = JSON.parse(await readFile(join(root, '.mcu-cmake.json'), 'utf8')) as {
+      toolchain: { family: string; linker: string };
+    };
+    assert.equal(config.toolchain.family, 'armclang');
+    assert.equal(config.toolchain.linker, 'STM32F103C8T6.sct');
+    const cpp = await readFile(join(root, '.vscode', 'c_cpp_properties.json'), 'utf8');
+    assert.match(cpp, /clang-arm|armclang/);
+
+    const back = await generateMcuWorkflow(createHost(root), profile, {});
+    assert.equal(back.ok, true);
+    assert.ok(existsSync(join(root, 'STM32F103C8T6.ld')));
+    assert.equal(existsSync(join(root, 'STM32F103C8T6.sct')), false);
+    assert.match(await readFile(join(root, 'CMakeLists.txt'), 'utf8'), /CMAKE_OBJCOPY/);
   });
 });
 

@@ -29,6 +29,12 @@ export function generateProjectConfig(
   const config = {
     projectName,
     device: profile.part,
+    toolchain: {
+      family: profile.toolchainFamily ?? 'gcc',
+      compiler: profile.mcuCompiler
+        ?? (profile.toolchainFamily === 'armclang' ? 'armclang' : `${profile.toolchainPrefix}-gcc`),
+      linker: profile.linkerFileName
+    },
     memory: {
       flash: memorySummary(profile.flash),
       ram: memorySummary(profile.ram),

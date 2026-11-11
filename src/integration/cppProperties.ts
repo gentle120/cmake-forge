@@ -12,19 +12,29 @@ import {
   type CppConfiguration
 } from '../shared/cppPropertiesFile';
 
-function configureEntry(entry: CppConfiguration, compilerPath: string): CppConfiguration {
+export interface McuCppPropertiesOptions {
+  family?: 'gcc' | 'armclang';
+  compilerPath?: string;
+}
+
+function configureEntry(
+  entry: CppConfiguration,
+  options: McuCppPropertiesOptions
+): CppConfiguration {
   const configured = normalizeCompilerArgs({ ...entry });
-  configured.name = 'ARM GCC (arm-none-eabi)';
-  configured.compilerPath = compilerPath;
+  const armclang = options.family === 'armclang';
+  configured.name = armclang ? 'ARM Compiler 6 (armclang)' : 'ARM GCC (arm-none-eabi)';
+  configured.compilerPath = options.compilerPath ?? (armclang ? 'armclang' : 'arm-none-eabi-gcc');
   configured.compileCommands = '${workspaceFolder}/build/debug/compile_commands.json';
-  configured.intelliSenseMode = 'gcc-arm';
+  configured.intelliSenseMode = armclang ? 'clang-arm' : 'gcc-arm';
   delete configured.configurationProvider;
   return configured;
 }
 
 export function configureCppProperties(
   content: string | undefined,
-  compilerPath = 'arm-none-eabi-gcc'
+  options: McuCppPropertiesOptions | string = {}
 ): string {
-  return rewriteCppProperties(content, (entry) => configureEntry(entry, compilerPath), 'MCU');
+  const resolved = typeof options === 'string' ? { compilerPath: options } : options;
+  return rewriteCppProperties(content, (entry) => configureEntry(entry, resolved), 'MCU');
 }

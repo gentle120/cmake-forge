@@ -278,3 +278,50 @@ test('keeps only the GCC compiler headers and the selected core', async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('core header closure keeps the selected compiler family', async () => {
+  const includeDir = await mkdtemp(join(tmpdir(), 'core-include-'));
+  const projectRoot = await mkdtemp(join(tmpdir(), 'core-project-'));
+  try {
+    await mkdir(join(includeDir, 'm-profile'), { recursive: true });
+    const headers: Record<string, string> = {
+      'core_cm3.h': '#include "cmsis_compiler.h"\n#include "cmsis_version.h"\n',
+      'cmsis_compiler.h': '#if defined(__ARMCC_VERSION)\n#include "cmsis_armclang.h"\n#elif defined(__GNUC__)\n#include "cmsis_gcc.h"\n#endif\n',
+      'cmsis_gcc.h': '#define CMSIS_GCC 1\n',
+      'cmsis_armclang.h': '#include "cmsis_armclang_ltm.h"\n',
+      'cmsis_armclang_ltm.h': '#define CMSIS_ARMCLANG 1\n',
+      'cmsis_version.h': '#define CMSIS_VERSION 1\n'
+    };
+    for (const [name, content] of Object.entries(headers)) {
+      await writeFile(join(includeDir, name), content, 'utf8');
+    }
+
+    const gccPlan = await planCoreHeaderCopy(includeDir, projectRoot, coreProjectIncludeDir, 'cortex-m3');
+    const gccNames = gccPlan.map((entry) => entry.relative.split('/').pop()).sort();
+    assert.deepEqual(gccNames, [
+      'cmsis_compiler.h',
+      'cmsis_gcc.h',
+      'cmsis_version.h',
+      'core_cm3.h'
+    ]);
+
+    const armclangPlan = await planCoreHeaderCopy(
+      includeDir,
+      projectRoot,
+      coreProjectIncludeDir,
+      'cortex-m3',
+      'armclang'
+    );
+    const armclangNames = armclangPlan.map((entry) => entry.relative.split('/').pop()).sort();
+    assert.deepEqual(armclangNames, [
+      'cmsis_armclang.h',
+      'cmsis_armclang_ltm.h',
+      'cmsis_compiler.h',
+      'cmsis_version.h',
+      'core_cm3.h'
+    ]);
+  } finally {
+    await rm(includeDir, { recursive: true, force: true });
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+});

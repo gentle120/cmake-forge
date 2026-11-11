@@ -228,7 +228,11 @@ const coreHeaderByCore: Record<string, string> = {
  * never be compiled against the selected device. The closure keeps the project
  * limited to the headers the device header really pulls in.
  */
-async function neededCoreHeaders(includeDir: string, core: string): Promise<Set<string> | undefined> {
+async function neededCoreHeaders(
+  includeDir: string,
+  core: string,
+  compilerFamily: 'gcc' | 'armclang'
+): Promise<Set<string> | undefined> {
   const base = coreHeaderByCore[core.trim().toLowerCase()];
   if (!base) {
     return undefined;
@@ -297,10 +301,13 @@ async function neededCoreHeaders(includeDir: string, core: string): Promise<Set<
     const directory = resolved.includes('/') ? resolved.slice(0, resolved.lastIndexOf('/')) : '';
     for (const match of content.matchAll(/#\s*include\s+"([^"]+)"/g)) {
       const included = match[1].replace(/\\/g, '/');
-      // The project builds with arm-none-eabi-gcc only, so the armclang, clang
-      // and IAR variants `cmsis_compiler.h` selects between (and the A/R profile
-      // trees) are dead weight.
-      if (/(^|\/)(cmsis_(armclang|clang|iccarm)[^/]*\.h|a-profile\/|r-profile\/)/i.test(included)) {
+      // `cmsis_compiler.h` includes every compiler variant behind #if guards;
+      // only the selected family's header is part of the build. The A/R profile
+      // trees and the other compiler headers are dead weight.
+      const excluded = compilerFamily === 'armclang'
+        ? /(^|\/)(cmsis_(gcc|clang|iccarm)[^/]*\.h|a-profile\/|r-profile\/)/i
+        : /(^|\/)(cmsis_(armclang|clang|iccarm)[^/]*\.h|a-profile\/|r-profile\/)/i;
+      if (excluded.test(included)) {
         continue;
       }
       queue.push({ from: directory, name: included });
@@ -326,9 +333,12 @@ export async function planCoreHeaderCopy(
   includeDir: string,
   projectRoot: string,
   targetDir = coreProjectIncludeDir,
-  core?: string
+  core?: string,
+  compilerFamily: 'gcc' | 'armclang' = 'gcc'
 ): Promise<CoreHeaderCopy[]> {
-  const needed = core ? await neededCoreHeaders(includeDir, core) : undefined;
+  const needed = core
+    ? await neededCoreHeaders(includeDir, core, compilerFamily)
+    : undefined;
   const plan: CoreHeaderCopy[] = [];
   const walk = async (directory: string, prefix: string): Promise<void> => {
     let dirents;

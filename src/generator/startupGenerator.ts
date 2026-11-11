@@ -180,3 +180,86 @@ ${aliases}
 .end
 `;
 }
+
+/**
+ * Arm Compiler 6 startup.
+ *
+ * The vector table starts with `__initial_sp` (the hardware loads MSP from it),
+ * and Reset_Handler hands control to the Arm C library's `__main`, which
+ * scatter-loads the image and calls `main`. The stack lives in its own section
+ * so the scatter file's `.ANY (+RW +ZI)` places it in RAM.
+ */
+export function generateArmclangStartup(profile: DeviceProfile): string {
+  const coreVectors = coreVectorsFor(profile.core);
+  const vectors = [
+    '__initial_sp',
+    'Reset_Handler',
+    ...coreVectors,
+    ...profile.interruptHandlers
+  ];
+  const vectorLines = vectors.map((handler) => `  .word ${handler}`).join('\n');
+  const aliases = [...coreVectors, ...profile.interruptHandlers]
+    .filter((handler) => handler !== '0')
+    .map((handler) => `.weak ${handler}\n.thumb_set ${handler}, Default_Handler`)
+    .join('\n');
+
+  return `/* Arm Compiler 6 startup generated for ${profile.part}. */
+.syntax unified
+.cpu ${profile.core}
+.thumb
+
+.section .isr_vector,"a",%progbits
+.align 2
+.global __Vectors
+__Vectors:
+${vectorLines}
+.size __Vectors, . - __Vectors
+
+.section .text.Reset_Handler,"ax",%progbits
+.thumb_func
+.global Reset_Handler
+.type Reset_Handler, %function
+Reset_Handler:
+  ldr r0, =SystemInit
+  blx r0
+  /* The Arm C library initializes .data/.bss and calls main. */
+  ldr r0, =__main
+  bx r0
+.size Reset_Handler, . - Reset_Handler
+
+.section .text.Default_Handler,"ax",%progbits
+.thumb_func
+.global Default_Handler
+.type Default_Handler, %function
+Default_Handler:
+  b .
+.size Default_Handler, . - Default_Handler
+
+/* Weak default for a project that has not added the vendor system_*.c yet; a
+   strong definition in the project overrides it. */
+.section .text.SystemInit,"ax",%progbits
+.weak SystemInit
+.thumb_func
+.type SystemInit, %function
+SystemInit:
+  bx lr
+.size SystemInit, . - SystemInit
+
+${aliases}
+
+.section .stack,"aw",%nobits
+.align 3
+.global __initial_sp
+.space 0x400
+__initial_sp:
+
+.end
+`;
+}
+
+/** Startup file for the profile's compiler family. */
+export function generateStartupFile(profile: DeviceProfile): string {
+  return profile.toolchainFamily === 'armclang'
+    ? generateArmclangStartup(profile)
+    : generateGnuStartup(profile);
+}

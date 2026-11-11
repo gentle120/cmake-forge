@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { generateLinkerScript } from '../generator/linkerGenerator';
+import { generateLinkerScript, generateScatterFile } from '../generator/linkerGenerator';
 import {
   fixtureDeviceProfile,
   gd32F103Profile,
@@ -127,4 +127,16 @@ test('generates additional RAM banks from the profile', () => {
   assert.match(linker, /FLASH \(rx\).*LENGTH = 1024K/s);
   assert.match(linker, /RAM \(rw\).*LENGTH = 96K/s);
   assert.match(linker, /RAM2 \(rw\).*LENGTH = 32K/s);
+});
+
+test('generates an armclang scatter file with vector-first flash and RW/ZI RAM', () => {
+  const profile = { ...fixtureDeviceProfile(), toolchainFamily: 'armclang' as const };
+  const scatter = generateScatterFile(profile);
+
+  assert.match(scatter, /LR_IROM1 0x08000000 0x00010000 \{/);
+  assert.match(scatter, /ER_IROM1 0x08000000 0x00010000 \{/);
+  assert.match(scatter, /\*\(\.isr_vector, \+First\)/);
+  assert.match(scatter, /RW_IRAM1 0x20000000 0x00005000 \{/);
+  assert.match(scatter, /\.ANY \(\+RW \+ZI\)/);
+  assert.doesNotMatch(scatter, /_estack|ENTRY\(/);
 });

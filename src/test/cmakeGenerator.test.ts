@@ -241,3 +241,38 @@ test('keeps hand-written assembly and drops only legacy startup sources', () => 
   // The generated startup is listed exactly once even though the project had it.
   assert.equal((cmake.match(/startup_gd32f10x_md\.S/g) ?? []).length, 1);
 });
+
+test('emits armclang artifact commands and no objcopy for an armclang profile', () => {
+  const profile = {
+    ...fixtureDeviceProfile(),
+    toolchainFamily: 'armclang' as const,
+    linkerFileName: 'STM32F103C8T6.sct',
+    mcuCompiler: 'D:/Keil_v5/ARM/ARMCLANG/bin/armclang.exe',
+    mcuCompilerPath: 'D:/Keil_v5/ARM/ARMCLANG/bin/armclang.exe',
+    mcuFromelf: 'D:/Keil_v5/ARM/ARMCLANG/bin/fromelf.exe'
+  };
+  const cmake = generateCMakeLists('ac6_tool', {
+    sources: ['main.c'],
+    includeDirs: [],
+    defines: []
+  }, profile);
+
+  assert.match(cmake, /CMAKE_FROMELF/);
+  assert.match(cmake, /--i32/);
+  assert.doesNotMatch(cmake, /CMAKE_OBJCOPY/);
+  // Arm Compiler 6 has its own C library retargeting; no newlib syscalls.
+  assert.doesNotMatch(cmake, /system\/syscalls\.c/);
+  assert.match(cmake, /startup_stm32f103xb\.S/i);
+});
+
+test('gcc profiles keep the newlib runtime sources and objcopy commands', () => {
+  const cmake = generateCMakeLists('gcc_tool', {
+    sources: ['main.c'],
+    includeDirs: [],
+    defines: []
+  }, fixtureDeviceProfile());
+
+  assert.match(cmake, /CMAKE_OBJCOPY/);
+  assert.doesNotMatch(cmake, /CMAKE_FROMELF/);
+  assert.match(cmake, /system\/syscalls\.c/);
+});

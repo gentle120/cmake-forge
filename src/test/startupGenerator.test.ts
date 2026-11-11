@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { generateGnuStartup } from '../generator/startupGenerator';
+import { generateArmclangStartup, generateGnuStartup } from '../generator/startupGenerator';
 import {
   fixtureDeviceProfile,
   gd32F103Profile,
@@ -110,3 +110,16 @@ function vectorEntries(startup: string): string[] {
     .map((line) => line.trim().replace(/^\.word\s+/, ''))
     .filter((entry) => entry.length > 0);
 }
+
+test('armclang startup starts with __initial_sp and hands control to __main', () => {
+  const profile = { ...fixtureDeviceProfile(), toolchainFamily: 'armclang' as const };
+  const startup = generateArmclangStartup(profile);
+
+  assert.match(startup, /\.word __initial_sp/);
+  assert.match(startup, /ldr r0, =__main/);
+  assert.doesNotMatch(startup, /_estack|_sidata|__libc_init_array/);
+  assert.match(startup, /\.weak SystemInit/);
+  assert.match(startup, /__initial_sp:/);
+  // GNU startup keeps the manual data copy; the Arm C library does that instead.
+  assert.doesNotMatch(startup, /_sdata|_sbss/);
+});

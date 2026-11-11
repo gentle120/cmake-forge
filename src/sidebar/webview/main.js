@@ -335,10 +335,12 @@
     }
     applyOptions(seriesField.select, state.series, selection.series);
     applyOptions(deviceField.select, state.devices, selection.part);
-    applyOptions(toolchainField.select, state.mcuToolchains, selection.buildToolchain);
-    const toolchain = selectedOption(state.mcuToolchains, selection.buildToolchain);
+    const mcuToolchainOptions = Array.isArray(state.mcuToolchains) ? state.mcuToolchains : [];
+    applyOptions(toolchainField.select, mcuToolchainOptions, selection.buildToolchain);
+    toolchainField.wrapper.hidden = mcuToolchainOptions.length === 0;
+    const toolchain = selectedOption(mcuToolchainOptions, selection.buildToolchain);
     toolchainNote.textContent = toolchain?.description || '';
-    toolchainNote.hidden = !toolchainNote.textContent;
+    toolchainNote.hidden = !toolchainNote.textContent || mcuToolchainOptions.length === 0;
     // The core pack row only means something while the headers are being
     // copied into the project and a core pack is actually installed.
     const corePackVersions = Array.isArray(state.corePackVersions)

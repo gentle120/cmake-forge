@@ -48,6 +48,7 @@ import {
 } from '../scanner/workspaceProjects';
 import {
   discoverBuildToolchains,
+  discoverMcuBuildToolchains,
   findBuildToolchain,
   type BuildToolchain,
   type DiscoveredBuildToolchains
@@ -236,18 +237,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     if (this.buildToolchainCache && now - this.buildToolchainCache.at < 10_000) {
       return this.buildToolchainCache.value;
     }
-    const value = this.dependencies.discoverBuildToolchains?.()
-      ?? discoverBuildToolchains();
+    const value = this.dependencies.discoverBuildToolchains?.() ?? {
+      mcu: discoverMcuBuildToolchains(),
+      native: discoverBuildToolchains().native
+    };
     this.buildToolchainCache = { at: now, value };
     return value;
   }
 
   private selectedMcuToolchain(): BuildToolchain | undefined {
+    const toolchains = this.buildToolchains().mcu;
     return findBuildToolchain(
-      this.buildToolchains(),
+      { mcu: toolchains, native: [] },
       'mcu',
       this.selectionValue.mcu.buildToolchain
-    );
+    ) ?? toolchains[0];
   }
 
   private selectedNativeToolchain(): BuildToolchain | undefined {
@@ -1135,8 +1139,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         // flash.py and the Cortex-Debug configuration have their own buttons;
         // generating the project no longer writes them implicitly.
         const deviceSupport = await this.deviceSupportFiles();
+        const mcuToolchain = this.selectedMcuToolchain();
         const result = await generateMcuWorkflow(this.workflowHost(), profile, {
-          toolchainPrefix: this.selectedMcuToolchain()?.prefix,
+          toolchain: mcuToolchain === undefined ? undefined : {
+            family: mcuToolchain.family ?? 'gcc',
+            ...(mcuToolchain.prefix ? { prefix: mcuToolchain.prefix } : {}),
+            ...(mcuToolchain.cCompiler ? { cCompiler: mcuToolchain.cCompiler } : {}),
+            ...(mcuToolchain.cxxCompiler ? { cxxCompiler: mcuToolchain.cxxCompiler } : {}),
+            ...(mcuToolchain.cCompilerPath ? { cCompilerPath: mcuToolchain.cCompilerPath } : {}),
+            ...(mcuToolchain.fromelf ? { fromelf: mcuToolchain.fromelf } : {}),
+            ...(mcuToolchain.objcopy ? { objcopy: mcuToolchain.objcopy } : {}),
+            ...(mcuToolchain.size ? { size: mcuToolchain.size } : {})
+          },
           corePack: this.dependencies.corePackForGeneration
             ? await this.dependencies.corePackForGeneration(
                 this.selectionValue.corePackInclude !== false,
@@ -1203,7 +1217,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           flash.openocdPath,
           flash.backend,
           flash.device,
-          { toolchainPrefix: this.selectedMcuToolchain()?.prefix }
+          {
+            toolchainPrefix: this.selectedMcuToolchain()?.prefix,
+            toolchainFamily: this.selectedMcuToolchain()?.family
+          }
         );
         const warning = flash.backend === 'openocd'
           ? this.flashTargetVendorWarning(flash.target)

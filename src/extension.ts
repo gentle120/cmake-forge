@@ -30,7 +30,13 @@ import {
   type ImportPackResult
 } from './devices/importedProfiles';
 import { defaultScanRoots, listKeilPacks } from './env/toolchainScanner';
-import { discoverBuildToolchains, findBuildToolchain } from './env/buildToolchains';
+import {
+  discoverBuildToolchains,
+  discoverMcuBuildToolchains,
+  findBuildToolchain,
+  type BuildToolchain
+} from './env/buildToolchains';
+import type { McuToolchainSelection } from './generation/workflow';
 import {
   findInstalledPackEntry,
   findPackPdsc,
@@ -1164,10 +1170,30 @@ async function selectFlashBackend(
 }
 
 
-/** Compiler prefix of the sidebar's MCU toolchain pick (empty → profile default). */
-function selectedMcuToolchainPrefix(): string | undefined {
+/** Compiler family picked in the sidebar (absent → device profile default). */
+function selectedMcuBuildToolchain(): BuildToolchain | undefined {
   const id = activeSidebar?.selection().mcu.buildToolchain ?? '';
-  return findBuildToolchain(discoverBuildToolchains(), 'mcu', id)?.prefix;
+  const mcu = discoverMcuBuildToolchains();
+  const selected = findBuildToolchain({ mcu, native: [] }, 'mcu', id) ?? mcu[0];
+  return selected;
+}
+
+function mcuToolchainSelection(
+  toolchain: BuildToolchain | undefined
+): McuToolchainSelection | undefined {
+  if (!toolchain) {
+    return undefined;
+  }
+  return {
+    family: toolchain.family ?? 'gcc',
+    ...(toolchain.prefix ? { prefix: toolchain.prefix } : {}),
+    ...(toolchain.cCompiler ? { cCompiler: toolchain.cCompiler } : {}),
+    ...(toolchain.cxxCompiler ? { cxxCompiler: toolchain.cxxCompiler } : {}),
+    ...(toolchain.cCompilerPath ? { cCompilerPath: toolchain.cCompilerPath } : {}),
+    ...(toolchain.fromelf ? { fromelf: toolchain.fromelf } : {}),
+    ...(toolchain.objcopy ? { objcopy: toolchain.objcopy } : {}),
+    ...(toolchain.size ? { size: toolchain.size } : {})
+  };
 }
 
 
@@ -1199,7 +1225,10 @@ async function generateDebugConfigurationOnly(): Promise<void> {
     getOpenOcdPath(),
     backend,
     undefined,
-    { toolchainPrefix: selectedMcuToolchainPrefix() }
+    {
+      toolchainPrefix: selectedMcuBuildToolchain()?.prefix,
+      toolchainFamily: selectedMcuBuildToolchain()?.family
+    }
   ));
 }
 
@@ -1256,7 +1285,7 @@ async function generateProject(): Promise<void> {
     createWorkflowHost(root),
     profile,
     {
-      toolchainPrefix: selectedMcuToolchainPrefix(),
+      toolchain: mcuToolchainSelection(selectedMcuBuildToolchain()),
       corePack,
       deviceSupport: await deviceSupportFor(profile, selectedSource)
     }

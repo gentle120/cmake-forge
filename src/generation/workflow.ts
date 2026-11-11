@@ -7,9 +7,9 @@ import { generateCMakeLists } from '../generator/cmakeGenerator';
 import { generateProjectConfig } from '../generator/configGenerator';
 import { generateCortexDebugLaunchJson } from '../generator/debugConfigGenerator';
 import { generateFlashScript } from '../generator/flashScriptGenerator';
-import { generateLinkerScript } from '../generator/linkerGenerator';
+import { generateLinkerFile } from '../generator/linkerGenerator';
 import { generateCMakePresets } from '../generator/presetsGenerator';
-import { generateGnuStartup } from '../generator/startupGenerator';
+import { generateStartupFile } from '../generator/startupGenerator';
 import { generateSyscalls, generateSysmem, runtimeSourceNames } from '../generator/runtimeGenerator';
 import { generateToolchainFile } from '../generator/toolchainGenerator';
 import {
@@ -73,6 +73,22 @@ export interface WorkflowResult {
   warnings?: string[];
 }
 
+export interface McuToolchainSelection {
+  family: 'gcc' | 'armclang';
+  /** GCC prefix without the trailing dash (`arm-none-eabi`). */
+  prefix?: string;
+  /** Compiler command or absolute path. */
+  cCompiler?: string;
+  cxxCompiler?: string;
+  /** Absolute compiler path for IntelliSense. */
+  cCompilerPath?: string;
+  /** Absolute fromelf path (armclang only). */
+  fromelf?: string;
+  /** Absolute objcopy/size paths (GCC off PATH). */
+  objcopy?: string;
+  size?: string;
+}
+
 export interface McuWorkflowOptions {
   /**
    * Installed ARM CMSIS core pack to copy into the project. Its headers land in
@@ -87,11 +103,8 @@ export interface McuWorkflowOptions {
    * register definitions only come from these files.
    */
   deviceSupport?: DeviceSupportFile[];
-  /**
-   * Compiler prefix selected in the sidebar (`arm-none-eabi`). Empty keeps the
-   * device profile's default prefix.
-   */
-  toolchainPrefix?: string;
+  /** Compiler family/paths selected in the sidebar; absent keeps the profile default. */
+  toolchain?: McuToolchainSelection;
   flash?: {
     target: FlashTargetProfile;
     probe: FlashProbeProfile;
@@ -262,22 +275,24 @@ function createMcuFiles(
     })
   }];
 
-  if (!hasSource(runtimeSourceNames[0])) {
-    files.push({
-      path: join(root, runtimeSourceNames[0]),
-      content: generateSyscalls()
-    });
-  }
-  if (!hasSource(runtimeSourceNames[1])) {
-    files.push({
-      path: join(root, runtimeSourceNames[1]),
-      content: generateSysmem()
-    });
+  if (profile.toolchainFamily !== 'armclang') {
+    if (!hasSource(runtimeSourceNames[0])) {
+      files.push({
+        path: join(root, runtimeSourceNames[0]),
+        content: generateSyscalls()
+      });
+    }
+    if (!hasSource(runtimeSourceNames[1])) {
+      files.push({
+        path: join(root, runtimeSourceNames[1]),
+        content: generateSysmem()
+      });
+    }
   }
   files.push(
     {
       path: join(root, profile.gnuStartupFileName),
-      content: generateGnuStartup(profile)
+      content: generateStartupFile(profile)
     },
     {
       path: join(cmakeDir, profile.toolchainFileName),
@@ -285,7 +300,7 @@ function createMcuFiles(
     },
     {
       path: join(root, profile.linkerFileName),
-      content: generateLinkerScript(profile)
+      content: generateLinkerFile(profile)
     },
     {
       path: join(root, 'CMakePresets.json'),
@@ -451,12 +466,24 @@ export async function generateMcuWorkflow(
   }
 
   const projectName = projectNameFromRoot(root);
-  // The toolchain selection overrides the device profile's default prefix; the
-  // rest of the profile (memory map, startup, linker) is untouched.
-  const requestedPrefix = options.toolchainPrefix?.trim().replace(/-+$/, '');
-  const effectiveProfile = requestedPrefix
-    ? { ...profile, toolchainPrefix: requestedPrefix }
-    : profile;
+  // The toolchain selection overrides the profile's compiler family/prefix; the
+  // memory map and interrupt table still come from the device profile.
+  const selected = options.toolchain;
+  const family = selected?.family ?? profile.toolchainFamily ?? 'gcc';
+  const prefix = (selected?.prefix ?? profile.toolchainPrefix).trim().replace(/-+$/, '');
+  const effectiveProfile = {
+    ...profile,
+    toolchainFamily: family,
+    toolchainPrefix: prefix || profile.toolchainPrefix,
+    ...(selected?.cCompiler ? { mcuCompiler: selected.cCompiler } : {}),
+    ...(selected?.cxxCompiler ? { mcuCxxCompiler: selected.cxxCompiler } : {}),
+    ...(selected?.cCompilerPath ? { mcuCompilerPath: selected.cCompilerPath } : {}),
+    ...(selected?.fromelf ? { mcuFromelf: selected.fromelf } : {}),
+    ...(selected?.objcopy ? { mcuObjcopy: selected.objcopy } : {}),
+    ...(selected?.size ? { mcuSize: selected.size } : {}),
+    // armclang links with a scatter file, not a GNU ld script.
+    ...(family === 'armclang' ? { linkerFileName: `${profile.part}.sct` } : {})
+  };
   const cmakePath = join(root, 'CMakeLists.txt');
   const existingCMakeContent = await exists(cmakePath)
     ? await readFile(cmakePath, 'utf8')
@@ -464,7 +491,13 @@ export async function generateMcuWorkflow(
   // The headers are copied into the project like any other generated file, so
   // they take part in the overwrite check and the reported file list.
   const corePlan = options.corePack
-    ? await planCoreHeaderCopy(options.corePack.includeDir, root, coreProjectIncludeDir, effectiveProfile.core)
+    ? await planCoreHeaderCopy(
+        options.corePack.includeDir,
+        root,
+        coreProjectIncludeDir,
+        effectiveProfile.core,
+        effectiveProfile.toolchainFamily ?? 'gcc'
+      )
     : [];
   // The guard must look at the project *without* the generator-owned CMSIS
   // directories: otherwise a previous generation's own copies look like
@@ -494,10 +527,11 @@ export async function generateMcuWorkflow(
     : undefined;
   const cppPropertiesFile: GeneratedFile = {
     path: cppPropertiesPath,
-    content: configureCppProperties(
-      cppPropertiesContent,
-      `${effectiveProfile.toolchainPrefix}-gcc`
-    )
+    content: configureCppProperties(cppPropertiesContent, {
+      family: effectiveProfile.toolchainFamily,
+      compilerPath: effectiveProfile.mcuCompilerPath
+        ?? `${effectiveProfile.toolchainPrefix}-gcc`
+    })
   };
 
   // Regenerating an unchanged project must not ask for confirmation, so only
@@ -567,6 +601,15 @@ export async function generateMcuWorkflow(
     await rm(obsolete, { force: true });
   }
 
+  // The two compiler families use different linker inputs (`part.ld` for GCC,
+  // `part.sct` for armclang); a stale one from the other family is removed so
+  // the project has one authoritative memory layout.
+  const otherLinker = effectiveProfile.toolchainFamily === 'armclang'
+    ? `${profile.part}.ld`
+    : `${profile.part}.sct`;
+  if (otherLinker !== effectiveProfile.linkerFileName) {
+    await rm(join(root, otherLinker), { force: true });
+  }
   await mkdir(join(root, 'cmake'), { recursive: true });
   await mkdir(join(root, 'system'), { recursive: true });
   await mkdir(join(root, '.vscode'), { recursive: true });
@@ -952,7 +995,7 @@ export async function generateDebugWorkflow(
   openocdPath: string,
   backend: FlashBackendId = 'openocd',
   device?: FlashDeviceContext,
-  options: { toolchainPrefix?: string } = {}
+  options: { toolchainPrefix?: string; toolchainFamily?: 'gcc' | 'armclang' } = {}
 ): Promise<WorkflowResult> {
   const root = host.workspaceRoot();
   if (!root) {
@@ -977,7 +1020,9 @@ export async function generateDebugWorkflow(
     // depend on CMake Tools having a selected launch target.
     executable: `\${workspaceFolder}/build/debug/${projectNameFromRoot(root)}.elf`,
     searchDirs: backend === 'openocd' ? await findOpenOcdSearchDirs(openocdPath) : [],
-    ...(options.toolchainPrefix ? { toolchainPrefix: options.toolchainPrefix } : {})
+    ...(options.toolchainFamily !== 'armclang' && options.toolchainPrefix
+      ? { toolchainPrefix: options.toolchainPrefix }
+      : {})
   });
   await mkdir(join(root, '.vscode'), { recursive: true });
   // launch.json is merged rather than replaced, so an identical merge result

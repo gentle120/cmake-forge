@@ -15,14 +15,33 @@ cmake --build --preset debug
 
 ## 编译链选择
 
-MCU 与桌面方向在侧栏都有「编译链」下拉，选项来自 `PATH` 扫描（不执行编译器进程）：
+侧栏的「编译链」下拉不写死编译器；只列出本机实际安装的选项（不执行编译器进程）：
 
-- MCU：识别 `arm-none-eabi-gcc`、`arm-zephyr-eabi-gcc` 等裸机 ARM GCC；选中后
-  编译器前缀写入工具链文件、C/C++ IntelliSense 与调试配置。
-- 桌面：识别 `gcc`、`clang` 与 Windows MinGW 前缀；选中后写入 CMakeLists 的
-  `CMAKE_C_COMPILER` / `CMAKE_CXX_COMPILER`。
-- 默认「自动」保持原行为：MCU 用器件档案的默认前缀，桌面交给 CMake 检测。
-  选择按工作区保存，生成工程时复用。
+- MCU：只提供 **Arm GNU Toolchain (armgcc)** 和 **Arm Compiler 6 (armclang)**。
+  扫描 `PATH`、Keil `ARM/ARMCLANG/bin`、STM32CubeCLT 与 Program Files 下的
+  Arm GNU Toolchain；某个编译器没装就不显示。选 armclang 时生成 armclang
+  工具链、`.sct` 分散加载文件、armclang 启动文件与 `fromelf` 产物转换；
+  选 armgcc 时生成 GNU 工具链、`.ld` 链接脚本和 GNU 启动文件。
+- 桌面：列出 `PATH` 中的 `gcc`、`clang` 与 MinGW 前缀，写入 CMakeLists 的
+  `CMAKE_C_COMPILER` / `CMAKE_CXX_COMPILER`；「自动」交给 CMake 检测。
+- 选择按工作区保存，生成工程时复用。armclang 工程的调试仍由 Cortex-Debug
+  调用 `arm-none-eabi-gdb`，需要本机同时有 Arm GNU Toolchain 的 gdb。
+
+**兼容性说明**
+
+- 检测位置：`PATH`；Keil MDK 的 `ARM/ARMCLANG/bin`（含 `Keil_v5`、`Keil` 及
+  自定义目录）；独立安装的 Arm Compiler；`Program Files` 下的 Arm GNU
+  Toolchain；STM32CubeCLT；PlatformIO/xPack 解压目录；以及**所有环境变量**
+  中出现的绝对路径（不限变量名，`PATH` 也在内）。
+- 编译器版本：armgcc 使用标准 GNU 工具链；armclang 需要 Arm Compiler 6
+  （本仓库用 AC6.24 + CMake 4.2 验证，GCC 用 arm-none-eabi 15.3 验证）。
+  CMake 需 ≥ 3.22；更老的 armclang 或 CMake 可能缺少对应的 ARMClang 集成。
+- armclang 使用 Arm C 库而不是 newlib：不生成 `syscalls.c`/`sysmem.c`；
+  使用 `printf`/文件 IO 时需要自行添加 retarget（semihosting 或串口）。
+- 分散加载文件只描述主 Flash/主 RAM；`additionalMemory`（CCM、备份 RAM 等）
+  不会单独放置，需要时自行补充 `.sct` 区域。
+- Windows 下会扫描 C:–Z: 的 Keil/Program Files 常见目录；macOS/Linux 以
+  `PATH`、`/opt`、`/usr/local` 为主。
 
 ## MCU 固件
 
@@ -33,8 +52,9 @@ MCU 与桌面方向在侧栏都有「编译链」下拉，选项来自 `PATH` �
   缺 `core_cm*.h` 时用「安装内核包…」装 `ARM.CMSIS`。
 - 按所选内核裁剪 CMSIS 头，只复制器件头、`system_<stem>.h/.c` 与必需寄存器头，
   不整包复制外设驱动库（驱动由工程自己加）。
-- 附带链接脚本、GNU 启动文件、工具链文件、可选 `flash.py`（J-Link / ST-Link /
-  DapLink）与可直接 F5 的 Cortex-Debug 配置。
+- 按所选编译链生成对应代码：armgcc 用 `.ld` 链接脚本 + GNU 启动文件；
+  armclang 用 `.sct` 分散加载文件 + armclang 启动文件与 `fromelf` 产物转换。
+  另附可选 `flash.py`（J-Link / ST-Link / DapLink）与可 F5 的 Cortex-Debug 配置。
 
 **F5 立刻退出** 通常是调试器进程没启动：确认已装 Cortex-Debug、`cmakeForge.openocdPath`
 可执行、先构建过 `debug` 预设、`arm-none-eabi-gdb` 在 `PATH` 中，并在调试下拉里
@@ -63,8 +83,8 @@ MCU 与桌面方向在侧栏都有「编译链」下拉，选项来自 `PATH` �
 ## 环境要求
 
 VS Code 1.85+、CMake Tools、C/C++、CMake ≥ 3.22、Ninja。
-MCU 另需 Cortex-Debug、OpenOCD 与 Arm GNU Toolchain（`arm-none-eabi-gcc` 等）；
-Linux 另需对应前缀的 `gcc`/`g++`。
+MCU 另需 Cortex-Debug、OpenOCD，以及 Arm GNU Toolchain（`arm-none-eabi-gcc`）或
+Keil MDK 的 Arm Compiler 6（`armclang`）之一；Linux 另需对应前缀的 `gcc`/`g++`。
 
 ## 开发
 

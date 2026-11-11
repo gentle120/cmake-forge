@@ -18,7 +18,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - 厂商必须先在 `vendorRegistry` 注册（id 唯一，`getVendorMetadata` 未知 id 抛错）。
 - 命令 ID：`cmakeForge.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/importPack/installPackOnline/removePack/installCorePack`；`package.json` 贡献的命令必须与 `extension.ts` 注册的命令一一对应。
 - 工作区可包含多个工程；扫描、生成、烧录与调试都以当前选中的工程根目录为边界，不跨工程合并源文件。目标工程按工作区持久化；发现结果只有一个时自动选择，多个时保留有效选择或等待用户选择。空工作区根目录仍作为可扫描目标保留；扫描返回零个源文件、头文件目录和宏，并明确提示没有 C/C++ 或汇编源文件。
-- 插件不提供构建命令、构建执行器或 ARM GNU 路径设置；配置、编译与调试分别由 CMake Tools 与 Cortex-Debug 拥有。生成产物只写可移植命令名 `arm-none-eabi-gcc/g++/objcopy/size`，不含机器绝对路径。
+- 插件不提供构建命令、构建执行器或 ARM GNU 路径设置；配置、编译与调试分别由 CMake Tools 与 Cortex-Debug 拥有。armgcc 生成产物只写可移植命令名 `arm-none-eabi-gcc/g++/objcopy/size`，不含机器绝对路径；armclang 因 Keil 通常不在 `PATH` 而写绝对 `armclang`/`fromelf` 路径，并生成 `.sct` 而不是 `.ld`。
 - 生成文件落盘前必须经过覆盖确认（`shared/generatedFiles.ts`）：只有磁盘内容与新输出不同、或会被生成过程删除的文件才进入确认；内容完全一致的重新生成不提示、不重写。MCU/Linux/桌面三个方向与仅 flash.py 的生成共用这一判据。
 - 内核向量表 16 槽 + `interruptHandlers` 按序拼接，槽位 `'0'` 表示保留（`startupGenerator`）；异常槽按内核架构族选择：ARMv6-M（M0/M0+/M1/SC000 与 ARMv8-M baseline 的 M23）保留 M0 布局，ARMv7-M（M3/M4/M7）保留 UsageFault 后四个保留字，ARMv8-M mainline（M33/M35P/M55）首保留字为 `SecureFault_Handler`。
 
@@ -30,13 +30,13 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - Keil 安装目录中的已解压 Pack 以目录引用方式导入（`packs.json` 记录元数据但不复制目录）；目录旁存在 `.pack` 时记录其绝对路径，删除导入记录不触碰原目录。
 - `CMAKE_EMBEDDED_SKIP_FIRMWARE_BUILDS=1` 跳过真实固件编译用例；CI（release.yml）默认置位。
 - `.mcu-cmake.json`、`.vscode/launch.json`、`c_cpp_properties.json` 的写入保留用户已有内容（JSONC 解析合并）；三个方向的 `c_cpp_properties.json` 与 settings 编辑共用 `shared/cppPropertiesFile.ts`，CMakePresets 共用 `shared/cmakePresets.ts`。
-- `.linux-cmake.json` 记录所选工具链、输出类型、宏定义与可选 `sysroot`，重新生成时以扫描结果重建工程结构并回读这四项；`sysroot` 非空时工具链文件写 `CMAKE_SYSROOT` 与 `CMAKE_FIND_ROOT_PATH*`（PROGRAM NEVER，其余 ONLY），空值不写任何 sysroot 设置；`.native-cmake.json` 记录目标类型与语言标准，命令面板以保存值为默认选项。MCU 与桌面方向的编译链选择按工作区保存：MCU 只改工具链前缀（`arm-none-eabi` 等），桌面把所选编译器命令名写进 `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER`；两者都只写命令名不写绝对路径，空选择表示自动（MCU 用器件默认前缀，桌面交给 CMake 检测）。
+- `.linux-cmake.json` 记录所选工具链、输出类型、宏定义与可选 `sysroot`，重新生成时以扫描结果重建工程结构并回读这四项；`sysroot` 非空时工具链文件写 `CMAKE_SYSROOT` 与 `CMAKE_FIND_ROOT_PATH*`（PROGRAM NEVER，其余 ONLY），空值不写任何 sysroot 设置；`.native-cmake.json` 记录目标类型与语言标准，命令面板以保存值为默认选项。MCU 与桌面方向的编译链选择按工作区保存：MCU 只提供 armgcc / armclang 两个家族，未安装的家族不出现在列表里；armgcc 写工具链前缀与命令名，armclang 写绝对 `armclang` 路径、`.sct` 分散加载文件并跳过 newlib 的 `syscalls.c`/`sysmem.c`；桌面把所选编译器命令名写进 `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER`，空选择表示交给 CMake 检测。
 
 ## Compatibility
 
 - `architecture` 字段仅 `'arm'`；非 ARM Dcore 的 Pack 设备跳过并报告，不生成半成品档案。
 - PDSC `<processor Dcore>` 在 family/subFamily/device 任一层均有效，device 层缺失时继承上层；`CM0` 缩写与 `Cortex-M0`、`Cortex-M0+` 等全名拼写等价（`+` 归一为 `plus`）。
-- ARM CMSIS 内核包与器件 Pack 分开管理：内核包只取 `CMSIS/Core/Include/**/*.h` 与 PDSC，安装到扩展存储，其身份由 PDSC 的 vendor/name 决定；器件 Pack 的 `<devices>` 解析不得因内核包缺失或存在而改变。厂商器件头文件 `#include core_cm*.h`，而器件 DFP 不含这些文件，因此生成 MCU 工程时把**所选内核实际用到的**头文件按字节复制到工程内 `CMSIS/Include`：以内核映射的 `core_cm*.h` 为起点沿 `#include "..."` 求闭包，只保留 arm-none-eabi-gcc 需要的编译器头（`cmsis_compiler.h`/`cmsis_gcc.h`/`cmsis_version.h` 与 `m-profile/*`），其它内核以及 armclang/clang/IAR 变体不得复制；未知内核名时回退为复制全部头文件。`target_include_directories` 只用工程内相对路径，不得写扩展存储或任何机器绝对路径；复制出的头文件计入覆盖确认，换内核或版本后不再需要的旧头文件随覆盖确认一起删除。内核包未安装（或所选版本的头文件已缺失）时仍生成工程但提示缺失，不得静默产出一个必然编译失败的工程。
+- ARM CMSIS 内核包与器件 Pack 分开管理：内核包只取 `CMSIS/Core/Include/**/*.h` 与 PDSC，安装到扩展存储，其身份由 PDSC 的 vendor/name 决定；器件 Pack 的 `<devices>` 解析不得因内核包缺失或存在而改变。厂商器件头文件 `#include core_cm*.h`，而器件 DFP 不含这些文件，因此生成 MCU 工程时把**所选内核实际用到的**头文件按字节复制到工程内 `CMSIS/Include`：以内核映射的 `core_cm*.h` 为起点沿 `#include "..."` 求闭包，只保留所选编译家族需要的编译器头：armgcc 保留 `cmsis_compiler.h`/`cmsis_gcc.h`/`cmsis_version.h` 与 `m-profile/*`，armclang 保留 `cmsis_armclang*.h` 同组文件；其它内核以及 clang/IAR 变体不得复制；未知内核名时回退为复制全部头文件。`target_include_directories` 只用工程内相对路径，不得写扩展存储或任何机器绝对路径；复制出的头文件计入覆盖确认，换内核或版本后不再需要的旧头文件随覆盖确认一起删除。内核包未安装（或所选版本的头文件已缺失）时仍生成工程但提示缺失，不得静默产出一个必然编译失败的工程。
 - `Dvendor` 的数字注册号后缀（如 `Sinomcu:985`、`ARM:82`）既不进入厂商显示名也不进入厂商 id；同一厂商的后缀变体解析为同一身份。
 - 精选厂商/系列目录（`curatedVendors` + `seriesCatalog`）是导航数据，不是芯片数据：每个精选厂商至少有一个精选系列，系列用真实器件型号前缀过滤 Pack 解析出的型号（如 `STM32F1`、`GD32F1`、`LPC55`、`nRF52`、`ATSAMD21`）；多个前缀互相嵌套时（Kinetis `MK` 与 `MKL`、`STM32WB` 与 `STM32WBA`）按最长匹配决定归属。系列名可指向一个 DFP，跨多个 DFP 的系列留空并由 Pack 下拉选择。内置 OpenOCD target 表只覆盖 STM32/GD32；其它厂商生成烧录/调试配置时必须在结果中警告需要手动修改 `configFiles`/target。
 - 烧录后端 `openocd|jlink|pyocd` 与探针兼容矩阵见 `src/flash/backendProfiles.ts`；pyocd 后端不支持 J-Link 探针（硬件限制）。
