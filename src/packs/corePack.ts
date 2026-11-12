@@ -231,7 +231,7 @@ const coreHeaderByCore: Record<string, string> = {
 async function neededCoreHeaders(
   includeDir: string,
   core: string,
-  compilerFamily: 'gcc' | 'armclang'
+  compilerFamily: 'gcc' | 'armclang' | 'clang'
 ): Promise<Set<string> | undefined> {
   const base = coreHeaderByCore[core.trim().toLowerCase()];
   if (!base) {
@@ -306,7 +306,9 @@ async function neededCoreHeaders(
       // trees and the other compiler headers are dead weight.
       const excluded = compilerFamily === 'armclang'
         ? /(^|\/)(cmsis_(gcc|clang|iccarm)[^/]*\.h|a-profile\/|r-profile\/)/i
-        : /(^|\/)(cmsis_(armclang|clang|iccarm)[^/]*\.h|a-profile\/|r-profile\/)/i;
+        : compilerFamily === 'clang'
+          ? /(^|\/)(cmsis_(gcc|armclang|iccarm)[^/]*\.h|a-profile\/|r-profile\/)/i
+          : /(^|\/)(cmsis_(armclang|clang|iccarm)[^/]*\.h|a-profile\/|r-profile\/)/i;
       if (excluded.test(included)) {
         continue;
       }
@@ -334,7 +336,7 @@ export async function planCoreHeaderCopy(
   projectRoot: string,
   targetDir = coreProjectIncludeDir,
   core?: string,
-  compilerFamily: 'gcc' | 'armclang' = 'gcc'
+  compilerFamily: 'gcc' | 'armclang' | 'clang' = 'gcc'
 ): Promise<CoreHeaderCopy[]> {
   const needed = core
     ? await neededCoreHeaders(includeDir, core, compilerFamily)

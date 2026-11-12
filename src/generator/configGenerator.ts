@@ -32,7 +32,11 @@ export function generateProjectConfig(
     toolchain: {
       family: profile.toolchainFamily ?? 'gcc',
       compiler: profile.mcuCompiler
-        ?? (profile.toolchainFamily === 'armclang' ? 'armclang' : `${profile.toolchainPrefix}-gcc`),
+        ?? (profile.toolchainFamily === 'armclang'
+          ? 'armclang'
+          : profile.toolchainFamily === 'clang'
+            ? 'clang'
+            : `${profile.toolchainPrefix}-gcc`),
       linker: profile.linkerFileName
     },
     memory: {

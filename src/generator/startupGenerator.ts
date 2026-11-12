@@ -86,7 +86,10 @@ function coreVectorsFor(core: string): string[] {
  * "cannot honor width suffix". Loading the stack pointer through a register and
  * updating the copy pointers with `adds` assembles for every ARMv6-M/7-M/8-M core.
  */
-export function generateGnuStartup(profile: DeviceProfile): string {
+export function generateGnuStartup(
+  profile: DeviceProfile,
+  options: { libcInit?: boolean } = {}
+): string {
   const coreVectors = coreVectorsFor(profile.core);
   const vectors = [
     '_estack',
@@ -147,8 +150,7 @@ Reset_Handler:
 4:
   /* SystemInit runs after the data copy and the BSS clear, as in the ST startup files. */
   bl SystemInit
-  bl __libc_init_array
-  bl main
+${options.libcInit === false ? '' : '  bl __libc_init_array\n'}  bl main
 5:
   b 5b
 .size Reset_Handler, . - Reset_Handler
@@ -259,7 +261,13 @@ __initial_sp:
 
 /** Startup file for the profile's compiler family. */
 export function generateStartupFile(profile: DeviceProfile): string {
-  return profile.toolchainFamily === 'armclang'
-    ? generateArmclangStartup(profile)
-    : generateGnuStartup(profile);
+  if (profile.toolchainFamily === 'armclang') {
+    return generateArmclangStartup(profile);
+  }
+  if (profile.toolchainFamily === 'clang') {
+    // LLVM clang links with `-nostdlib`: there is no newlib `__libc_init_array`,
+    // but the data copy and SystemInit still run before main.
+    return generateGnuStartup(profile, { libcInit: false });
+  }
+  return generateGnuStartup(profile);
 }

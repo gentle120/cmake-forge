@@ -250,6 +250,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private selectedMcuToolchain(): BuildToolchain | undefined {
     const toolchains = this.buildToolchains();
     return findBuildToolchain(toolchains, this.selectionValue.mcu.buildToolchain)
+      ?? toolchains.find((toolchain) => toolchain.detected)
       ?? toolchains[0];
   }
 
@@ -1179,11 +1180,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         const warnings = [...(result.warnings ?? [])];
         // A project generated with the device-profile default prefix when no
         // compiler was found would silently fail at configure time; say so.
-        if (mcuToolchain === undefined) {
+        if (mcuToolchain !== undefined && mcuToolchain.detected === false) {
           warnings.push(
-            '未检测到 armgcc 或 armclang：已按器件默认的 arm-none-eabi 前缀生成，安装编译链后重新生成即可。'
+            `未检测到 ${mcuToolchain.label}：已按命令名生成，安装后把编译器加入 PATH 即可构建。`
           );
-        } else if (mcuToolchain.family === 'armclang' && !mcuToolchain.fromelf) {
+        }
+        if (mcuToolchain?.family === 'armclang' && !mcuToolchain.fromelf) {
           warnings.push(
             '未找到 fromelf：工程可以构建出 .elf，但不会生成 .hex/.bin。'
           );

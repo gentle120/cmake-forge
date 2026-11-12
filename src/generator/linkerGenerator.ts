@@ -18,15 +18,15 @@ export function generateLinkerScript(profile: DeviceProfile): string {
   return `/* Generated for ${profile.part}. Review custom memory reservations before flashing. */
 ENTRY(Reset_Handler)
 
-/* Highest address of the stack. */
-_estack = ORIGIN(RAM) + LENGTH(RAM);
-_Min_Heap_Size = 0x200;
-_Min_Stack_Size = 0x400;
-
 MEMORY
 {
 ${memoryLines}
 }
+
+/* Highest address of the stack; must come after MEMORY for LLD. */
+_estack = ORIGIN(RAM) + LENGTH(RAM);
+_Min_Heap_Size = 0x200;
+_Min_Stack_Size = 0x400;
 
 SECTIONS
 {
@@ -61,14 +61,14 @@ SECTIONS
     . = ALIGN(4);
   } >FLASH
 
-  .ARM.extab (READONLY) :
+  .ARM.extab :
   {
     . = ALIGN(4);
     *(.ARM.extab* .gnu.linkonce.armextab.*)
     . = ALIGN(4);
   } >FLASH
 
-  .ARM (READONLY) :
+  .ARM :
   {
     . = ALIGN(4);
     __exidx_start = .;
@@ -77,7 +77,7 @@ SECTIONS
     . = ALIGN(4);
   } >FLASH
 
-  .preinit_array (READONLY) :
+  .preinit_array :
   {
     . = ALIGN(4);
     PROVIDE_HIDDEN(__preinit_array_start = .);
@@ -86,7 +86,7 @@ SECTIONS
     . = ALIGN(4);
   } >FLASH
 
-  .init_array (READONLY) :
+  .init_array :
   {
     . = ALIGN(4);
     PROVIDE_HIDDEN(__init_array_start = .);
@@ -96,7 +96,7 @@ SECTIONS
     . = ALIGN(4);
   } >FLASH
 
-  .fini_array (READONLY) :
+  .fini_array :
   {
     . = ALIGN(4);
     PROVIDE_HIDDEN(__fini_array_start = .);

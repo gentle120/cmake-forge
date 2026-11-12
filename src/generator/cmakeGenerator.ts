@@ -32,20 +32,20 @@ export function generateCMakeLists(
   const runtimeBasenames = new Set(
     runtimeSourceNames.map((name) => (name.split('/').pop() ?? '').toLowerCase())
   );
-  const armclangFamily = profile.toolchainFamily === 'armclang';
+  const gccFamily = profile.toolchainFamily !== 'armclang' && profile.toolchainFamily !== 'clang';
   const sources = project.sources.filter((source) => {
     const name = (source.split('/').pop() ?? '').toLowerCase();
     if (name === generatedStartup) return false;
     // A regenerated armclang project may still contain the newlib stubs from an
     // earlier GCC generation; they must not be compiled into an Arm C library
     // image.
-    if (armclangFamily && runtimeBasenames.has(name)) return false;
+    if (!gccFamily && runtimeBasenames.has(name)) return false;
     return !(name.startsWith('startup') && /\.s$/.test(name));
   });
   sources.push(profile.gnuStartupFileName);
   // Arm Compiler 6 uses its own C library retargeting and does not need the
   // newlib syscall stubs; adding them would fail on <sys/stat.h>.
-  if (!armclangFamily) {
+  if (gccFamily) {
     for (const runtimeSourceName of runtimeSourceNames) {
       const runtimeBasename = runtimeSourceName.split('/').pop()?.toLowerCase();
       if (!sources.some((source) => source.split('/').pop()?.toLowerCase() === runtimeBasename)) {
@@ -93,19 +93,29 @@ export function generateCMakeLists(
   ].join('\n');
 
   const armclang = profile.toolchainFamily === 'armclang';
+  const clangFamily = profile.toolchainFamily === 'clang';
   const linkOptionBlock = armclang
     ? [
         `    "--scatter=\${CMAKE_SOURCE_DIR}/${profile.linkerFileName}"`,
         '    "--map"',
         '    "--entry=Reset_Handler"'
       ].join('\n')
-    : [
-        `    "-T\${CMAKE_SOURCE_DIR}/${profile.linkerFileName}"`,
-        '    "--specs=nano.specs"',
-        `    "-Wl,-Map=\${CMAKE_BINARY_DIR}/${projectName}.map"`,
-        '    "-Wl,--gc-sections"',
-        '    "-Wl,--print-memory-usage"'
-      ].join('\n');
+    : clangFamily
+      ? [
+          '    "-nostdlib"',
+          '    "-fuse-ld=lld"',
+          `    "-T\${CMAKE_SOURCE_DIR}/${profile.linkerFileName}"`,
+          `    "-Wl,-Map=\${CMAKE_BINARY_DIR}/${projectName}.map"`,
+          '    "-Wl,--gc-sections"',
+          '    "-Wl,--print-memory-usage"'
+        ].join('\n')
+      : [
+          `    "-T\${CMAKE_SOURCE_DIR}/${profile.linkerFileName}"`,
+          '    "--specs=nano.specs"',
+          `    "-Wl,-Map=\${CMAKE_BINARY_DIR}/${projectName}.map"`,
+          '    "-Wl,--gc-sections"',
+          '    "-Wl,--print-memory-usage"'
+        ].join('\n');
 
   // Artifact generation differs per compiler family: armclang ships `fromelf`
   // while GCC uses objcopy/size. Emitting only the selected family's block keeps

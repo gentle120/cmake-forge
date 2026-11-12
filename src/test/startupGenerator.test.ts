@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { generateArmclangStartup, generateGnuStartup } from '../generator/startupGenerator';
+import { generateArmclangStartup, generateGnuStartup, generateStartupFile } from '../generator/startupGenerator';
 import {
   fixtureDeviceProfile,
   gd32F103Profile,
@@ -122,4 +122,14 @@ test('armclang startup starts with __initial_sp and hands control to __main', ()
   assert.match(startup, /__initial_sp:/);
   // GNU startup keeps the manual data copy; the Arm C library does that instead.
   assert.doesNotMatch(startup, /_sdata|_sbss/);
+});
+
+test('LLVM clang startup keeps main but skips newlib initialization', () => {
+  const profile = { ...fixtureDeviceProfile(), toolchainFamily: 'clang' as const };
+  const startup = generateStartupFile(profile);
+  assert.match(startup, /\.word _estack/);
+  assert.match(startup, /bl SystemInit/);
+  assert.match(startup, /bl main/);
+  assert.doesNotMatch(startup, /__libc_init_array/);
+  assert.doesNotMatch(startup, /__main/);
 });

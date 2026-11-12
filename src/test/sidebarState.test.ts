@@ -609,6 +609,27 @@ test('drops a toolchain selection that is no longer installed', () => {
   assert.equal(selection.mcu.buildToolchain, 'mcu:gcc');
 });
 
+test('defaults to a detected MCU family when the saved one is missing', () => {
+  const missingGcc = { ...mcuToolchains[0], detected: false };
+  const armclang = {
+    ...mcuToolchains[0],
+    id: 'mcu:armclang',
+    family: 'armclang' as const,
+    prefix: '',
+    cCompiler: 'armclang',
+    cCompilerPath: '',
+    detected: true
+  };
+  const selection = sanitizeSidebarSelection(
+    { mcu: { buildToolchain: 'mcu:clang' } },
+    undefined,
+    [],
+    false,
+    [missingGcc, armclang]
+  );
+  assert.equal(selection.mcu.buildToolchain, 'mcu:armclang');
+});
+
 test('keeps a persisted toolchain id before discovery has run', () => {
   // The first render may happen before the scan finishes; wiping the id there
   // would reset the dropdown on every window start.

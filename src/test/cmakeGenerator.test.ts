@@ -293,3 +293,22 @@ test('armclang CMake lists the scatter file and C++ target', () => {
   assert.match(cmake, /"--scatter=\$\{CMAKE_SOURCE_DIR\}\/STM32F103C8T6\.sct"/);
   assert.match(cmake, /"--entry=Reset_Handler"/);
 });
+
+test('LLVM clang CMake links with LLD and no C runtime', () => {
+  const profile = {
+    ...fixtureDeviceProfile(),
+    toolchainFamily: 'clang' as const,
+    linkerFileName: 'STM32F103C8T6.ld',
+    mcuCompiler: 'clang'
+  };
+  const cmake = generateCMakeLists('clang_tool', {
+    sources: ['main.c'],
+    includeDirs: [],
+    defines: []
+  }, profile);
+  assert.match(cmake, /"-nostdlib"/);
+  assert.match(cmake, /"-fuse-ld=lld"/);
+  assert.match(cmake, /"-T\$\{CMAKE_SOURCE_DIR\}\/STM32F103C8T6\.ld"/);
+  assert.doesNotMatch(cmake, /CMAKE_FROMELF/);
+  assert.doesNotMatch(cmake, /system\/syscalls\.c/);
+});

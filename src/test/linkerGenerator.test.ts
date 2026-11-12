@@ -20,11 +20,15 @@ test('generates a linker memory map for a Cortex-M3 device', () => {
   assert.match(linker, /ENTRY\(Reset_Handler\)/);
   assert.match(linker, /_sidata = LOADADDR\(\.data\)/);
   assert.match(linker, /_sdata = \.[\s\S]*_edata = \./);
-  assert.match(linker, /\.ARM\.extab \(READONLY\)/);
-  assert.match(linker, /\.ARM \(READONLY\)/);
-  assert.match(linker, /\.preinit_array \(READONLY\)/);
-  assert.match(linker, /\.init_array \(READONLY\)/);
-  assert.match(linker, /\.fini_array \(READONLY\)/);
+  // LLD does not understand GNU ld's `(READONLY)` section qualifier; the
+  // script must stay usable by both ld and ld.lld.
+  assert.doesNotMatch(linker, /\(READONLY\)/);
+  assert.match(linker, /\.ARM\.extab :/);
+  assert.match(linker, /\.preinit_array :/);
+  assert.match(linker, /\.init_array :/);
+  assert.match(linker, /\.fini_array :/);
+  // ORIGIN(RAM) must follow MEMORY for ld.lld.
+  assert.ok(linker.indexOf('MEMORY') < linker.indexOf('_estack ='));
   assert.match(linker, /PROVIDE_HIDDEN\(__preinit_array_start/);
   assert.match(linker, /PROVIDE_HIDDEN\(__init_array_end/);
   assert.match(linker, /ASSERT\(/);

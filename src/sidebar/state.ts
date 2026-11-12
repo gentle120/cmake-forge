@@ -312,7 +312,7 @@ export function sanitizeSidebarSelection(
     ? requestedMcuToolchain
     : findBuildToolchain(buildToolchains, requestedMcuToolchain) !== undefined
       ? requestedMcuToolchain
-      : buildToolchains[0].id;
+      : (buildToolchains.find((toolchain) => toolchain.detected) ?? buildToolchains[0]).id;
   const requestedProbe = validProbe(flash?.probeId);
   const probeId = probeForBackend(backend, requestedProbe);
 
@@ -750,10 +750,14 @@ export function buildSidebarState(
     })),
     // MCU offers only the compiler families that are actually installed; an
     // empty list hides the row instead of showing an unusable dropdown.
+    // All three families stay selectable; the scan only fills the path and
+    // marks which one is installed on this machine.
     mcuToolchains: buildToolchains.map((toolchain) => ({
       value: toolchain.id,
       label: toolchain.label,
-      description: toolchain.binDir,
+      description: toolchain.detected === false
+        ? '未检测到：生成后把编译器加入 PATH 即可构建'
+        : toolchain.binDir,
       detail: toolchain.cCompiler
     })),
     selection: {

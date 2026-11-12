@@ -13,7 +13,7 @@ import {
 } from '../shared/cppPropertiesFile';
 
 export interface McuCppPropertiesOptions {
-  family?: 'gcc' | 'armclang';
+  family?: 'gcc' | 'armclang' | 'clang';
   compilerPath?: string;
 }
 
@@ -23,10 +23,14 @@ function configureEntry(
 ): CppConfiguration {
   const configured = normalizeCompilerArgs({ ...entry });
   const armclang = options.family === 'armclang';
-  configured.name = armclang ? 'ARM Compiler 6 (armclang)' : 'ARM GCC (arm-none-eabi)';
-  configured.compilerPath = options.compilerPath ?? (armclang ? 'armclang' : 'arm-none-eabi-gcc');
+  const clang = options.family === 'clang';
+  configured.name = armclang
+    ? 'ARM Compiler 6 (armclang)'
+    : clang ? 'LLVM clang (arm-none-eabi)' : 'ARM GCC (arm-none-eabi)';
+  configured.compilerPath = options.compilerPath
+    ?? (armclang ? 'armclang' : clang ? 'clang' : 'arm-none-eabi-gcc');
   configured.compileCommands = '${workspaceFolder}/build/debug/compile_commands.json';
-  configured.intelliSenseMode = armclang ? 'clang-arm' : 'gcc-arm';
+  configured.intelliSenseMode = armclang || clang ? 'clang-arm' : 'gcc-arm';
   delete configured.configurationProvider;
   return configured;
 }

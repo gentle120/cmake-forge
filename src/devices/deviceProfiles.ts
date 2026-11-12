@@ -25,7 +25,7 @@ export interface DeviceProfile {
    * Compiler family used for generation. Packs never decide this; the generator
    * sets it from the sidebar selection. Absent means GCC.
    */
-  toolchainFamily?: 'gcc' | 'armclang';
+  toolchainFamily?: 'gcc' | 'armclang' | 'clang';
   /** Compiler command (PATH name or absolute path) for armclang / off-PATH GCC. */
   mcuCompiler?: string;
   mcuCxxCompiler?: string;

@@ -18,6 +18,11 @@ function fileSystem(tree: Record<string, string[]>): BuildToolchainFileSystem {
   };
 }
 
+const detectedTools = (tools: ReturnType<typeof discoverMcuBuildToolchains>) =>
+  tools.filter((toolchain) => toolchain.detected);
+const toolById = (tools: ReturnType<typeof discoverMcuBuildToolchains>, id: string) =>
+  tools.find((toolchain) => toolchain.id === id)!;
+
 test('finds the Arm GNU Toolchain on PATH for MCU projects', () => {
   const discovered = discoverMcuBuildToolchains(
     { PATH: 'C:/arm/bin;C:/zephyr/bin;C:/linux-cross/bin', SystemDrive: 'C:' },
@@ -29,8 +34,8 @@ test('finds the Arm GNU Toolchain on PATH for MCU projects', () => {
     'win32'
   );
 
-  assert.deepEqual(discovered.map((toolchain) => toolchain.id), ['mcu:gcc']);
-  const arm = discovered[0];
+  assert.deepEqual(detectedTools(discovered).map((toolchain) => toolchain.id), ['mcu:gcc']);
+  const arm = toolById(discovered, 'mcu:gcc');
   assert.equal(arm.prefix, 'arm-none-eabi');
   assert.equal(arm.cCompiler, 'arm-none-eabi-gcc');
   assert.equal(arm.cxxCompiler, 'arm-none-eabi-g++');
@@ -49,10 +54,11 @@ test('reports the first PATH hit and deduplicates the MCU family', () => {
     'win32'
   );
 
-  assert.equal(discovered.length, 1);
-  assert.equal(discovered[0].cxxCompiler, undefined);
+  assert.equal(detectedTools(discovered).length, 1);
+  const gcc = toolById(discovered, 'mcu:gcc');
+  assert.equal(gcc.cxxCompiler, undefined);
   // The first PATH hit wins, matching how the shell would resolve the driver.
-  assert.equal(discovered[0].binDir, 'C:/only-c');
+  assert.equal(gcc.binDir, 'C:/only-c');
 });
 
 test('finds armclang in Keil and GCC on PATH for the MCU families', () => {
@@ -65,32 +71,37 @@ test('finds armclang in Keil and GCC on PATH for the MCU families', () => {
     'win32'
   );
 
-  assert.deepEqual(discovered.map((toolchain) => toolchain.id), ['mcu:gcc', 'mcu:armclang']);
-  assert.equal(discovered[0].prefix, 'arm-none-eabi');
-  assert.equal(discovered[0].onPath, true);
+  assert.deepEqual(detectedTools(discovered).map((toolchain) => toolchain.id), ['mcu:gcc', 'mcu:armclang']);
+  const gcc = toolById(discovered, 'mcu:gcc');
+  const armclang = toolById(discovered, 'mcu:armclang');
+  assert.equal(gcc.prefix, 'arm-none-eabi');
+  assert.equal(gcc.onPath, true);
   // armclang lives in Keil, which is not on PATH: the absolute path is required.
-  assert.equal(discovered[1].onPath, false);
-  assert.match(discovered[1].cCompiler, /Keil_v5\/ARM\/ARMCLANG\/bin\/armclang(\.exe)?$/);
-  assert.match(discovered[1].fromelf ?? '', /Keil_v5\/ARM\/ARMCLANG\/bin\/fromelf(\.exe)?$/);
+  assert.equal(armclang.onPath, false);
+  assert.match(armclang.cCompiler, /Keil_v5\/ARM\/ARMCLANG\/bin\/armclang(\.exe)?$/);
+  assert.match(armclang.fromelf ?? '', /Keil_v5\/ARM\/ARMCLANG\/bin\/fromelf(\.exe)?$/);
 });
 
-test('omits a family that is not installed', () => {
+test('marks a family that is not installed as undetected but keeps it selectable', () => {
   const gccOnly = discoverMcuBuildToolchains(
     { PATH: 'C:/arm/bin', SystemDrive: 'C:' },
     fileSystem({ 'C:/arm/bin': ['arm-none-eabi-gcc.exe'] }),
     'win32'
   );
-  assert.deepEqual(gccOnly.map((toolchain) => toolchain.id), ['mcu:gcc']);
+  assert.deepEqual(detectedTools(gccOnly).map((toolchain) => toolchain.id), ['mcu:gcc']);
+  assert.equal(toolById(gccOnly, 'mcu:clang').detected, false);
+  assert.equal(gccOnly.length, 3);
 
   const armclangOnly = discoverMcuBuildToolchains(
     { PATH: '', SystemDrive: 'C:' },
     fileSystem({ 'C:/Keil_v5/ARM/ARMCLANG/bin': ['armclang.exe', 'fromelf.exe'] }),
     'win32'
   );
-  assert.deepEqual(armclangOnly.map((toolchain) => toolchain.id), ['mcu:armclang']);
+  assert.deepEqual(detectedTools(armclangOnly).map((toolchain) => toolchain.id), ['mcu:armclang']);
 
   const none = discoverMcuBuildToolchains({ PATH: '', SystemDrive: 'C:' }, fileSystem({}), 'win32');
-  assert.deepEqual(none, []);
+  assert.deepEqual(none.map((toolchain) => toolchain.id), ['mcu:gcc', 'mcu:armclang', 'mcu:clang']);
+  assert.equal(detectedTools(none).length, 0);
 });
 
 test('finds toolchains in program-files and non-system drive roots', () => {
@@ -112,9 +123,9 @@ test('finds toolchains in program-files and non-system drive roots', () => {
     'win32'
   );
 
-  assert.deepEqual(discovered.map((toolchain) => toolchain.id), ['mcu:gcc', 'mcu:armclang']);
-  assert.match(discovered[0].detail, /Arm GNU Toolchain/);
-  assert.match(discovered[1].detail, /Keil_v5/);
+  assert.deepEqual(detectedTools(discovered).map((toolchain) => toolchain.id), ['mcu:gcc', 'mcu:armclang']);
+  assert.match(toolById(discovered, 'mcu:gcc').detail, /Arm GNU Toolchain/);
+  assert.match(toolById(discovered, 'mcu:armclang').detail, /Keil_v5/);
 });
 
 test('finds a standalone Arm Compiler under Program Files', () => {
@@ -133,8 +144,8 @@ test('finds a standalone Arm Compiler under Program Files', () => {
     'win32'
   );
 
-  assert.deepEqual(discovered.map((toolchain) => toolchain.id), ['mcu:armclang']);
-  assert.match(discovered[0].binDir, /Arm Compiler for Embedded 6\.24\/bin$/);
+  assert.deepEqual(detectedTools(discovered).map((toolchain) => toolchain.id), ['mcu:armclang']);
+  assert.match(toolById(discovered, 'mcu:armclang').binDir, /Arm Compiler for Embedded 6\.24\/bin$/);
 });
 
 test('honours toolchain environment variables and PlatformIO/xPack layouts', () => {
@@ -160,9 +171,9 @@ test('honours toolchain environment variables and PlatformIO/xPack layouts', () 
     'win32'
   );
 
-  assert.deepEqual(discovered.map((toolchain) => toolchain.id), ['mcu:gcc', 'mcu:armclang']);
-  assert.match(discovered[0].detail, /platformio/);
-  assert.match(discovered[1].detail, /tools\/ac6\/bin/);
+  assert.deepEqual(detectedTools(discovered).map((toolchain) => toolchain.id), ['mcu:gcc', 'mcu:armclang']);
+  assert.match(toolById(discovered, 'mcu:gcc').detail, /platformio/);
+  assert.match(toolById(discovered, 'mcu:armclang').detail, /tools\/ac6\/bin/);
 });
 
 test('off-PATH GCC keeps absolute objcopy/size for builds without PATH setup', () => {
@@ -180,11 +191,12 @@ test('off-PATH GCC keeps absolute objcopy/size for builds without PATH setup', (
     'win32'
   );
 
-  assert.deepEqual(discovered.map((toolchain) => toolchain.id), ['mcu:gcc']);
-  assert.equal(discovered[0].onPath, false);
-  assert.match(discovered[0].cCompiler, /arm-none-eabi-gcc\.exe$/);
-  assert.match(discovered[0].objcopy ?? '', /arm-none-eabi-objcopy\.exe$/);
-  assert.match(discovered[0].size ?? '', /arm-none-eabi-size\.exe$/);
+  assert.deepEqual(detectedTools(discovered).map((toolchain) => toolchain.id), ['mcu:gcc']);
+  const gcc = toolById(discovered, 'mcu:gcc');
+  assert.equal(gcc.onPath, false);
+  assert.match(gcc.cCompiler, /arm-none-eabi-gcc\.exe$/);
+  assert.match(gcc.objcopy ?? '', /arm-none-eabi-objcopy\.exe$/);
+  assert.match(gcc.size ?? '', /arm-none-eabi-size\.exe$/);
 });
 
 test('resolves an MCU selection id back to its toolchain', () => {
@@ -196,4 +208,21 @@ test('resolves an MCU selection id back to its toolchain', () => {
   assert.equal(findBuildToolchain(discovered, '')?.id, undefined);
   assert.equal(findBuildToolchain(discovered, 'mcu:gcc')?.prefix, 'arm-none-eabi');
   assert.equal(findBuildToolchain(discovered, 'mcu:unknown'), undefined);
+});
+
+test('finds LLVM clang for the third MCU family', () => {
+  const discovered = discoverMcuBuildToolchains(
+    { PATH: 'C:/llvm/bin', SystemDrive: 'C:' },
+    fileSystem({
+      'C:/llvm/bin': ['clang.exe', 'clang++.exe', 'llvm-objcopy.exe', 'llvm-size.exe']
+    }),
+    'win32'
+  );
+  const clang = toolById(discovered, 'mcu:clang');
+  assert.equal(clang.detected, true);
+  assert.equal(clang.family, 'clang');
+  assert.equal(clang.cCompiler, 'clang');
+  assert.equal(clang.cxxCompiler, 'clang++');
+  assert.match(clang.objcopy ?? '', /llvm-objcopy(\.exe)?$/);
+  assert.match(clang.label, /LLVM clang/);
 });

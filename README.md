@@ -15,13 +15,18 @@ cmake --build --preset debug
 
 ## 编译链选择
 
-侧栏的「编译链」下拉不写死编译器；只列出本机实际安装的选项（不执行编译器进程）：
+侧栏的「编译链」下拉固定提供三种 MCU 编译链，扫描只用于默认值和状态提示
+（不执行编译器进程）：
 
-- MCU：只提供 **Arm GNU Toolchain (armgcc)** 和 **Arm Compiler 6 (armclang)**。
-  扫描 `PATH`、Keil `ARM/ARMCLANG/bin`、STM32CubeCLT 与 Program Files 下的
-  Arm GNU Toolchain；某个编译器没装就不显示。选 armclang 时生成 armclang
-  工具链、`.sct` 分散加载文件、armclang 启动文件与 `fromelf` 产物转换；
-  选 armgcc 时生成 GNU 工具链、`.ld` 链接脚本和 GNU 启动文件。
+- **Arm GNU Toolchain (armgcc)**：生成 GNU 工具链、`.ld` 链接脚本、GNU 启动文件；
+- **Arm Compiler 6 (armclang / Keil)**：生成 armclang 工具链、`.sct` 分散加载文件、
+  armclang 启动文件与 `fromelf` 产物转换；
+- **LLVM clang (arm-none-eabi)**：生成 clang 工具链、`.ld` 链接脚本，使用 LLD 和
+  `-nostdlib`（裸机无 C 运行时），启动文件为不调用 newlib 的 GNU 变体。
+
+扫描 `PATH`、Keil、STM32CubeCLT、Program Files、LLVM 目录及工具链环境变量后，
+已检测到的家族显示真实路径并作为默认；未检测到的家族仍可选择，生成结果只写
+命令名（如 `armclang`/`clang`），之后把编译器加入 `PATH` 即可构建。
 - 桌面：**不提供编译链选择**，编译器完全交给 CMake Tools 的 Kit（或 CMake 自身）
   环境扫描决定；生成的 CMakeLists 不写 `CMAKE_C_COMPILER` /
   `CMAKE_CXX_COMPILER`，并关闭 CMake Tools 的预设模式（`useCMakePresets: never`），
@@ -33,11 +38,12 @@ cmake --build --preset debug
 
 - 检测位置：`PATH`；Keil MDK 的 `ARM/ARMCLANG/bin`（含 `Keil_v5`、`Keil` 及
   自定义目录）；独立安装的 Arm Compiler；`Program Files` 下的 Arm GNU
-  Toolchain；STM32CubeCLT；PlatformIO/xPack 解压目录；以及**所有环境变量**
-  中出现的绝对路径（不限变量名，`PATH` 也在内）。
+  Toolchain 与 LLVM；STM32CubeCLT；PlatformIO/xPack 解压目录；以及**所有
+  环境变量**中出现的绝对路径（不限变量名，`PATH` 也在内）。
 - 编译器版本：armgcc 使用标准 GNU 工具链；armclang 需要 Arm Compiler 6
-  （本仓库用 AC6.24 + CMake 4.2 验证，GCC 用 arm-none-eabi 15.3 验证）。
-  CMake 需 ≥ 3.22；更老的 armclang 或 CMake 可能缺少对应的 ARMClang 集成。
+  （本仓库用 AC6.24 + CMake 4.2 验证，GCC 用 arm-none-eabi 15.3 验证，LLVM
+  用 clang 22 + lld 验证）。LLVM 方案需要 `lld`（`-fuse-ld=lld`）且不链接
+  C 运行时；CMake 需 ≥ 3.22。
 - armclang 使用 Arm C 库而不是 newlib：不生成 `syscalls.c`/`sysmem.c`；
   使用 `printf`/文件 IO 时需要自行添加 retarget（semihosting 或串口）。
 - 分散加载文件只描述主 Flash/主 RAM；`additionalMemory`（CCM、备份 RAM 等）

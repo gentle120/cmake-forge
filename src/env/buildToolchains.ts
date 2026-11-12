@@ -1,10 +1,11 @@
 /**
  * Compiler toolchain discovery for the MCU and desktop directions.
  *
- * The MCU direction offers exactly two families: Arm GNU Toolchain (arm-none-eabi
- * GCC) and Arm Compiler 6 (armclang). Both are looked up on `PATH` and in the
- * usual installation roots (Keil MDK, STM32CubeCLT, Arm GNU Toolchain under
- * Program Files); a family that is not installed is omitted from the list.
+ * The MCU direction always offers three families: Arm GNU Toolchain (arm-none-eabi
+ * GCC), Arm Compiler 6 (armclang) and LLVM clang. They are looked up on `PATH`
+ * and in the usual installation roots (Keil MDK, STM32CubeCLT, Arm GNU
+ * Toolchain/LLVM under Program Files); the scan only marks which family is
+ * installed, because a project may be generated here and built elsewhere.
  *
  * Desktop discovery lists the host compilers on `PATH` (gcc, clang, MinGW
  * prefixes), which is what a desktop CMake project can use.
@@ -15,10 +16,10 @@
 import { readdirSync } from 'node:fs';
 
 export type BuildToolchainDirection = 'mcu';
-export type McuToolchainFamily = 'gcc' | 'armclang';
+export type McuToolchainFamily = 'gcc' | 'armclang' | 'clang';
 
 export interface BuildToolchain {
-  /** Stable selection id: `mcu:gcc`, `mcu:armclang`, `native:gcc`. */
+  /** Stable selection id: `mcu:gcc`, `mcu:armclang`, `mcu:clang`. */
   id: string;
   direction: BuildToolchainDirection;
   /** MCU compiler family. */
@@ -33,6 +34,8 @@ export interface BuildToolchain {
   cCompilerPath: string;
   /** Absolute `fromelf` path for armclang (hex/bin conversion). */
   fromelf?: string;
+  /** True when a real installation was found; the options stay selectable when false. */
+  detected?: boolean;
   /** Absolute objcopy/size paths when the GCC toolchain is not on PATH. */
   objcopy?: string;
   size?: string;
@@ -117,6 +120,8 @@ interface CompilerSearchRoots {
   armclangDirs: string[];
   /** Candidate directories containing arm-none-eabi-gcc. */
   gccDirs: string[];
+  /** Candidate directories containing LLVM clang. */
+  clangDirs: string[];
 }
 
 function pushDirectory(list: string[], directory: string | undefined): void {
@@ -147,9 +152,11 @@ function defaultSearchRoots(
 ): CompilerSearchRoots {
   const armclangDirs: string[] = [];
   const gccDirs: string[] = [];
+  const clangDirs: string[] = [];
   const hints = environmentHintDirectories(environment, platform);
   gccDirs.push(...hints);
   armclangDirs.push(...hints);
+  clangDirs.push(...hints);
 
   if (platform !== 'win32') {
     // POSIX installs are usually on PATH, but standalone Arm Compiler and
@@ -164,7 +171,13 @@ function defaultSearchRoots(
         pushDirectory(gccDirs, `${root}/${child}/bin`);
       }
     }
-    return { armclangDirs, gccDirs };
+    for (const root of ['/opt/llvm', '/opt/LLVM', '/usr/local/llvm', '/usr/local/LLVM', '/usr/lib/llvm']) {
+      pushDirectory(clangDirs, `${root}/bin`);
+      for (const child of readChildren(fileSystem, root)) {
+        pushDirectory(clangDirs, `${root}/${child}/bin`);
+      }
+    }
+    return { armclangDirs, gccDirs, clangDirs };
   }
 
   const systemDrive = environment.SystemDrive?.replace(/^([A-Za-z]):.*$/, '$1:') ?? 'C:';
@@ -179,6 +192,8 @@ function defaultSearchRoots(
   for (const drive of drives) {
     pushDirectory(armclangDirs, `${drive}/Keil_v5/ARM/ARMCLANG/bin`);
     pushDirectory(armclangDirs, `${drive}/Keil/ARM/ARMCLANG/bin`);
+    pushDirectory(clangDirs, `${drive}/LLVM/bin`);
+    pushDirectory(clangDirs, `${drive}/llvm/bin`);
     // Keil installed into a custom folder on the drive (e.g. D:/tools/Keil_v5).
     for (const child of readChildren(fileSystem, `${drive}/`)) {
       if (/keil|mdk/i.test(child)) {
@@ -212,6 +227,12 @@ function defaultSearchRoots(
           pushDirectory(armclangDirs, directory);
         }
       }
+      if (/^LLVM$/i.test(child) || /llvm/i.test(child)) {
+        pushDirectory(clangDirs, joinPath(root, `${child}/bin`));
+        for (const version of readChildren(fileSystem, joinPath(root, child))) {
+          pushDirectory(clangDirs, joinPath(root, `${child}/${version}/bin`));
+        }
+      }
       if (/^Arm$/i.test(child)) {
         for (const grandchild of readChildren(fileSystem, joinPath(root, child))) {
           if (/Compiler|armclang/i.test(grandchild)) {
@@ -240,9 +261,10 @@ function defaultSearchRoots(
     const xpack = joinPath(home, '.xpack');
     for (const directory of binDirectoriesBelow(fileSystem, xpack, 4)) {
       pushDirectory(gccDirs, directory);
+      pushDirectory(clangDirs, directory);
     }
   }
-  return { armclangDirs, gccDirs };
+  return { armclangDirs, gccDirs, clangDirs };
 }
 
 
@@ -349,9 +371,10 @@ function mcuGccToolchain(
     cCompilerPath: compilerPath,
     ...(onPath || objcopyPath === undefined ? {} : { objcopy: objcopyPath }),
     ...(onPath || sizePath === undefined ? {} : { size: sizePath }),
+    detected: true,
     onPath,
     binDir: directory,
-    label: 'Arm GNU Toolchain (arm-none-eabi)',
+    label: 'Arm GNU Toolchain (armgcc)',
     detail: directory
   };
 }
@@ -372,10 +395,63 @@ function mcuArmclangToolchain(
     cxxCompiler: executable,
     cCompilerPath: compilerPath,
     ...(fromelf === undefined ? {} : { fromelf }),
+    detected: true,
     onPath,
     binDir: directory,
     label: 'Arm Compiler 6 (armclang)',
     detail: directory
+  };
+}
+
+function mcuClangToolchain(
+  directory: string,
+  onPath: boolean,
+  compilerPath: string,
+  cxxPath: string | undefined,
+  objcopyPath: string | undefined,
+  sizePath: string | undefined
+): BuildToolchain {
+  return {
+    id: 'mcu:clang',
+    direction: 'mcu',
+    family: 'clang',
+    prefix: '',
+    cCompiler: onPath ? 'clang' : compilerPath,
+    ...(cxxPath === undefined
+      ? {}
+      : { cxxCompiler: onPath ? 'clang++' : cxxPath }),
+    cCompilerPath: compilerPath,
+    ...(objcopyPath === undefined ? {} : { objcopy: onPath ? 'llvm-objcopy' : objcopyPath }),
+    ...(sizePath === undefined ? {} : { size: onPath ? 'llvm-size' : sizePath }),
+    detected: true,
+    onPath,
+    binDir: directory,
+    label: 'LLVM clang (arm-none-eabi)',
+    detail: directory
+  };
+}
+
+/** Placeholder entries keep all three families selectable before installation. */
+function missingMcuToolchain(
+  family: McuToolchainFamily,
+  id: string,
+  label: string,
+  cCompiler: string,
+  cxxCompiler: string
+): BuildToolchain {
+  return {
+    id,
+    direction: 'mcu',
+    family,
+    prefix: family === 'gcc' ? 'arm-none-eabi' : '',
+    cCompiler,
+    cxxCompiler,
+    cCompilerPath: '',
+    detected: false,
+    onPath: false,
+    binDir: '',
+    label,
+    detail: '未检测到：生成后请把编译器加入 PATH，或安装对应工具链'
   };
 }
 
@@ -432,7 +508,31 @@ export function discoverMcuBuildToolchains(
     break;
   }
 
-  return [gcc, armclang].filter((toolchain): toolchain is BuildToolchain => toolchain !== undefined);
+  let clang: BuildToolchain | undefined;
+  for (const directory of [...pathDirs, ...roots.clangDirs]) {
+    const compilerPath = probeCompiler(fileSystem, directory, 'clang');
+    if (compilerPath === undefined) {
+      continue;
+    }
+    const cxxPath = probeCompiler(fileSystem, directory, 'clang++');
+    const objcopyPath = probeCompiler(fileSystem, directory, 'llvm-objcopy');
+    const sizePath = probeCompiler(fileSystem, directory, 'llvm-size');
+    clang = mcuClangToolchain(
+      directory,
+      directoryOnPath(directory, pathDirs),
+      compilerPath,
+      cxxPath,
+      objcopyPath,
+      sizePath
+    );
+    break;
+  }
+
+  return [
+    gcc ?? missingMcuToolchain('gcc', 'mcu:gcc', 'Arm GNU Toolchain (armgcc)', 'arm-none-eabi-gcc', 'arm-none-eabi-g++'),
+    armclang ?? missingMcuToolchain('armclang', 'mcu:armclang', 'Arm Compiler 6 (armclang)', 'armclang', 'armclang'),
+    clang ?? missingMcuToolchain('clang', 'mcu:clang', 'LLVM clang (arm-none-eabi)', 'clang', 'clang++')
+  ];
 }
 
 /** Looks a toolchain id up in the discovered MCU compiler families. */

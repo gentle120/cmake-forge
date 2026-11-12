@@ -106,8 +106,62 @@ set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 `;
 }
 
+/**
+ * LLVM clang bare-metal toolchain.
+ *
+ * Clang's driver selects the ARM backend through `--target=arm-none-eabi`;
+ * linking uses LLD (GNU linker scripts and the generated startup are accepted)
+ * and `-nostdlib` because a standalone LLVM install ships no ARM C library.
+ */
+function clangToolchainFile(profile: DeviceProfile): string {
+  const cCompiler = profile.mcuCompiler?.trim() || 'clang';
+  const cxxCompiler = profile.mcuCxxCompiler?.trim() || 'clang++';
+  const targetFlags = profile.compilerFlags.join(' ');
+  const objcopy = profile.mcuObjcopy;
+  const size = profile.mcuSize;
+  return `set(CMAKE_SYSTEM_NAME Generic)
+set(CMAKE_SYSTEM_PROCESSOR arm)
+
+set(CMAKE_C_COMPILER "${cCompiler}")
+set(CMAKE_CXX_COMPILER "${cxxCompiler}")
+set(CMAKE_ASM_COMPILER "${cCompiler}")
+set(CMAKE_C_COMPILER_TARGET arm-none-eabi)
+set(CMAKE_CXX_COMPILER_TARGET arm-none-eabi)
+set(CMAKE_ASM_COMPILER_TARGET arm-none-eabi)
+set(MCU_TOOLCHAIN_FAMILY clang CACHE STRING "Compiler family")
+set(CMAKE_EXECUTABLE_SUFFIX ".elf")
+${objcopy === undefined ? '' : `set(CMAKE_OBJCOPY "${objcopy}" CACHE FILEPATH "objcopy executable")`}
+${size === undefined ? '' : `set(CMAKE_SIZE "${size}" CACHE FILEPATH "size executable")`}
+
+set(TARGET_FLAGS "--target=arm-none-eabi ${targetFlags}")
+
+set(CMAKE_C_FLAGS_INIT "\${TARGET_FLAGS} -Wall -fdata-sections -ffunction-sections -ffreestanding")
+set(CMAKE_ASM_FLAGS_INIT "\${TARGET_FLAGS} -x assembler-with-cpp")
+
+set(CMAKE_C_FLAGS_DEBUG "-Og -g3")
+set(CMAKE_C_FLAGS_RELEASE "-Os -g0")
+set(CMAKE_C_FLAGS_MINSIZEREL "-Os -g0")
+set(CMAKE_C_FLAGS_RELWITHDEBINFO "-Og -g3")
+
+set(CMAKE_CXX_FLAGS_DEBUG "-Og -g3")
+set(CMAKE_CXX_FLAGS_RELEASE "-Os -g0")
+set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -g0")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Og -g3")
+set(CMAKE_CXX_FLAGS_INIT "\${TARGET_FLAGS} -Wall -fdata-sections -ffunction-sections -ffreestanding -fno-rtti -fno-exceptions -fno-threadsafe-statics")
+
+# LLD understands the generated GNU linker script; no C runtime is linked.
+set(CMAKE_EXE_LINKER_FLAGS_INIT "\${TARGET_FLAGS} -nostdlib -fuse-ld=lld")
+
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+`;
+}
+
 export function generateToolchainFile(profile: DeviceProfile): string {
-  return profile.toolchainFamily === 'armclang'
-    ? armclangToolchainFile(profile)
-    : gccToolchainFile(profile);
+  if (profile.toolchainFamily === 'armclang') {
+    return armclangToolchainFile(profile);
+  }
+  if (profile.toolchainFamily === 'clang') {
+    return clangToolchainFile(profile);
+  }
+  return gccToolchainFile(profile);
 }

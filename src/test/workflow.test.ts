@@ -497,3 +497,27 @@ test('switching the device removes the previous startup, linker, and toolchain',
     assert.ok(existsSync(join(root, 'system', 'syscalls.c')));
   });
 });
+
+test('LLVM clang workflow writes a GNU linker script and no C runtime', async () => {
+  await withWorkspace(async (root) => {
+    await writeFile(join(root, 'main.c'), 'int main(void) { return 0; }\n');
+    const result = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), {
+      toolchain: {
+        family: 'clang',
+        cCompiler: 'clang',
+        cxxCompiler: 'clang++',
+        cCompilerPath: 'C:/LLVM/bin/clang.exe'
+      }
+    });
+    assert.equal(result.ok, true);
+    assert.ok(existsSync(join(root, 'STM32F103C8T6.ld')));
+    assert.equal(existsSync(join(root, 'system', 'syscalls.c')), false);
+    const cmake = await readFile(join(root, 'CMakeLists.txt'), 'utf8');
+    assert.match(cmake, /"-nostdlib"/);
+    assert.match(cmake, /"-fuse-ld=lld"/);
+    const startup = await readFile(join(root, 'startup_stm32f103xb.S'), 'utf8');
+    assert.doesNotMatch(startup, /__libc_init_array/);
+    const cpp = await readFile(join(root, '.vscode', 'c_cpp_properties.json'), 'utf8');
+    assert.match(cpp, /LLVM clang|clang-arm/);
+  });
+});

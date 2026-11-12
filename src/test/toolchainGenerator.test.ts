@@ -76,3 +76,19 @@ test('armclang toolchain sets the C++ target and quotes the compiler', () => {
   assert.match(toolchain, /set\(CMAKE_FROMELF "D:\/Keil_v5/);
   assert.doesNotMatch(toolchain, /--scatter=/);
 });
+
+test('LLVM clang toolchain targets arm-none-eabi without a C runtime', () => {
+  const toolchain = generateToolchainFile(fixtureDeviceProfile({
+    toolchainFamily: 'clang',
+    mcuCompiler: 'D:/LLVM/bin/clang.exe',
+    mcuCxxCompiler: 'D:/LLVM/bin/clang++.exe',
+    mcuObjcopy: 'D:/LLVM/bin/llvm-objcopy.exe',
+    mcuSize: 'D:/LLVM/bin/llvm-size.exe'
+  }));
+  assert.match(toolchain, /set\(CMAKE_C_COMPILER "D:\/LLVM\/bin\/clang\.exe"\)/);
+  assert.match(toolchain, /set\(CMAKE_CXX_COMPILER_TARGET arm-none-eabi\)/);
+  assert.match(toolchain, /set\(MCU_TOOLCHAIN_FAMILY clang/);
+  assert.match(toolchain, /-nostdlib -fuse-ld=lld/);
+  assert.match(toolchain, /llvm-objcopy/);
+  assert.doesNotMatch(toolchain, /--specs=nano/);
+});

@@ -33,9 +33,11 @@
 - 桌面方向移除编译链选择：编译器由 CMake Tools 的 Kit 选择，CMakeLists 不写
   `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER`；桌面 `.vscode/settings.json` 设置
   `cmake.useCMakePresets: never`，避免 CMake Tools 锁定预设而无法切换 Kit。
-- 编译链选择：MCU 提供 Arm GNU Toolchain (armgcc) 与 Arm Compiler 6
-  (armclang) 两种，扫描 PATH/Keil/STM32CubeCLT/Program Files，未安装的家族不
-  显示；armclang 生成 `.sct` 分散加载文件、armclang 启动文件与 fromelf 转换，
-  armgcc 保持 GNU 工具链与 `.ld` 链接脚本。选择按工作区保存。
+- 编译链选择：MCU 固定提供 Arm GNU Toolchain (armgcc)、Arm Compiler 6
+  (armclang/Keil) 与 LLVM clang (arm-none-eabi) 三种；扫描 PATH/Keil/
+  STM32CubeCLT/Program Files/LLVM 目录后只决定默认项与“已检测/未检测”提示，
+  未检测到的家族仍可选择；armclang 生成 `.sct`/fromelf 转换，armgcc 生成
+  `.ld`/GNU 启动，LLVM clang 生成 `.ld`/`-nostdlib -fuse-ld=lld` 启动变体。
+  选择按工作区保存。
 - Pack 解析支持 Zip64、`<variant>` 型号、`name=` 内存区、启动向量注释、
   器件头选择宏推导、非整 KiB 链接区大小等厂商差异。

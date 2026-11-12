@@ -74,7 +74,7 @@ export interface WorkflowResult {
 }
 
 export interface McuToolchainSelection {
-  family: 'gcc' | 'armclang';
+  family: 'gcc' | 'armclang' | 'clang';
   /** GCC prefix without the trailing dash (`arm-none-eabi`). */
   prefix?: string;
   /** Compiler command or absolute path. */
@@ -348,7 +348,7 @@ function createMcuFiles(
     })
   }];
 
-  if (profile.toolchainFamily !== 'armclang') {
+  if (profile.toolchainFamily !== 'armclang' && profile.toolchainFamily !== 'clang') {
     if (!hasSource(runtimeSourceNames[0])) {
       files.push({
         path: join(root, runtimeSourceNames[0]),
@@ -1082,7 +1082,7 @@ export async function generateDebugWorkflow(
   openocdPath: string,
   backend: FlashBackendId = 'openocd',
   device?: FlashDeviceContext,
-  options: { toolchainPrefix?: string; toolchainFamily?: 'gcc' | 'armclang' } = {}
+  options: { toolchainPrefix?: string; toolchainFamily?: 'gcc' | 'armclang' | 'clang' } = {}
 ): Promise<WorkflowResult> {
   const root = host.workspaceRoot();
   if (!root) {
@@ -1107,7 +1107,7 @@ export async function generateDebugWorkflow(
     // depend on CMake Tools having a selected launch target.
     executable: `\${workspaceFolder}/build/debug/${projectNameFromRoot(root)}.elf`,
     searchDirs: backend === 'openocd' ? await findOpenOcdSearchDirs(openocdPath) : [],
-    ...(options.toolchainFamily !== 'armclang' && options.toolchainPrefix
+    ...(options.toolchainFamily !== 'armclang' && options.toolchainFamily !== 'clang' && options.toolchainPrefix
       ? { toolchainPrefix: options.toolchainPrefix }
       : {})
   });

@@ -1181,7 +1181,7 @@ async function selectFlashBackend(
 function selectedMcuBuildToolchain(): BuildToolchain | undefined {
   const id = activeSidebar?.selection().mcu.buildToolchain ?? '';
   const mcu = discoverMcuBuildToolchains();
-  return findBuildToolchain(mcu, id) ?? mcu[0];
+  return findBuildToolchain(mcu, id) ?? mcu.find((toolchain) => toolchain.detected) ?? mcu[0];
 }
 
 function mcuToolchainSelection(
