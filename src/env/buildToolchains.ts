@@ -535,17 +535,20 @@ function mcuClangToolchain(
     family: 'clang',
     prefix: '',
     variant,
-    cCompiler: onPath ? cName : compilerPath,
+    // ATfE's compiler is also called `clang`; using the bare command could pick
+    // a different LLVM install earlier on PATH (without picolibc). Keep its
+    // absolute path so the generated toolchain is unambiguous.
+    cCompiler: atfe || !onPath ? compilerPath : cName,
     ...(cxxPath === undefined
       ? {}
-      : { cxxCompiler: onPath ? cxxName : cxxPath }),
+      : { cxxCompiler: atfe || !onPath ? cxxPath : cxxName }),
     cCompilerPath: compilerPath,
     ...(objcopyPath === undefined
       ? {}
-      : { objcopy: onPath ? (starm ? 'starm-objcopy' : 'llvm-objcopy') : objcopyPath }),
+      : { objcopy: atfe || !onPath ? objcopyPath : (starm ? 'starm-objcopy' : 'llvm-objcopy') }),
     ...(sizePath === undefined
       ? {}
-      : { size: onPath ? (starm ? 'starm-size' : 'llvm-size') : sizePath }),
+      : { size: atfe || !onPath ? sizePath : (starm ? 'starm-size' : 'llvm-size') }),
     ...(linkerPath === undefined ? {} : { linker: onPath ? 'ld.lld' : linkerPath }),
     detected: true,
     onPath,

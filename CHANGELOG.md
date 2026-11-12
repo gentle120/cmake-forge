@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.4
+
+- ATfE 工具链始终写绝对 `clang.exe` 路径，避免 PATH 上另一个 LLVM 抢先匹配；
+  工具链文件增加注释说明 `arm-none-eabi` 是目标三元组、不是 GCC 编译器。
+- IntelliSense 配置名区分 ATfE / STARM / LLVM clang。
+- 修复生成工程仍使用旧 `build/CMakeCache.txt` 时的误导：重新生成后需删除 build
+  再配置；测试 455 项通过。
+
 ## 1.0.3
 
 - 支持 **Arm Toolchain for Embedded (ATfE)**：检测 `ATfE-<version>` 安装目录

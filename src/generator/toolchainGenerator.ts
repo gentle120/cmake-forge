@@ -119,7 +119,9 @@ function clangToolchainFile(profile: DeviceProfile): string {
   const targetFlags = profile.compilerFlags.join(' ');
   const objcopy = profile.mcuObjcopy;
   const size = profile.mcuSize;
-  return `set(CMAKE_SYSTEM_NAME Generic)
+  return `# Arm Toolchain for Embedded (ATfE) clang.
+# arm-none-eabi is the target triple; this is NOT arm-none-eabi-gcc.
+set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 
 set(CMAKE_C_COMPILER "${cCompiler}")
@@ -224,7 +226,9 @@ function atfeClangToolchainFile(profile: DeviceProfile): string {
   const objcopy = profile.mcuObjcopy?.trim() || 'llvm-objcopy';
   const size = profile.mcuSize?.trim() || 'llvm-size';
   const targetFlags = profile.compilerFlags.join(' ');
-  return `set(CMAKE_SYSTEM_NAME Generic)
+  return `# Arm Toolchain for Embedded (ATfE) clang.
+# arm-none-eabi is the target triple; this is NOT arm-none-eabi-gcc.
+set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 
 set(CMAKE_C_COMPILER "${cCompiler}")

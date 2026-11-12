@@ -14,6 +14,7 @@ import {
 
 export interface McuCppPropertiesOptions {
   family?: 'gcc' | 'armclang' | 'clang';
+  variant?: 'llvm' | 'starm' | 'atfe';
   compilerPath?: string;
 }
 
@@ -26,7 +27,13 @@ function configureEntry(
   const clang = options.family === 'clang';
   configured.name = armclang
     ? 'ARM Compiler 6 (armclang)'
-    : clang ? 'LLVM clang (arm-none-eabi)' : 'ARM GCC (arm-none-eabi)';
+    : clang
+      ? options.variant === 'atfe'
+        ? 'Arm Toolchain for Embedded (ATfE)'
+        : options.variant === 'starm'
+          ? 'STARM clang (STM32CubeMX)'
+          : 'LLVM clang (arm-none-eabi)'
+      : 'ARM GCC (arm-none-eabi)';
   configured.compilerPath = options.compilerPath
     ?? (armclang ? 'armclang' : clang ? 'clang' : 'arm-none-eabi-gcc');
   configured.compileCommands = '${workspaceFolder}/build/debug/compile_commands.json';

@@ -640,6 +640,7 @@ export async function generateMcuWorkflow(
     path: cppPropertiesPath,
     content: configureCppProperties(cppPropertiesContent, {
       family: effectiveProfile.toolchainFamily,
+      variant: effectiveProfile.clangVariant,
       compilerPath: effectiveProfile.mcuCompilerPath
         ?? `${effectiveProfile.toolchainPrefix}-gcc`
     })
