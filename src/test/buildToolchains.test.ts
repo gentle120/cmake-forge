@@ -214,7 +214,7 @@ test('finds LLVM clang for the third MCU family', () => {
   const discovered = discoverMcuBuildToolchains(
     { PATH: 'C:/llvm/bin', SystemDrive: 'C:' },
     fileSystem({
-      'C:/llvm/bin': ['clang.exe', 'clang++.exe', 'llvm-objcopy.exe', 'llvm-size.exe']
+      'C:/llvm/bin': ['clang.exe', 'clang++.exe', 'llvm-objcopy.exe', 'llvm-size.exe', 'ld.lld.exe']
     }),
     'win32'
   );
@@ -224,5 +224,6 @@ test('finds LLVM clang for the third MCU family', () => {
   assert.equal(clang.cCompiler, 'clang');
   assert.equal(clang.cxxCompiler, 'clang++');
   assert.match(clang.objcopy ?? '', /llvm-objcopy(\.exe)?$/);
+  assert.equal(clang.linker, 'ld.lld');
   assert.match(clang.label, /LLVM clang/);
 });

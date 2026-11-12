@@ -39,6 +39,8 @@ export interface BuildToolchain {
   /** Absolute objcopy/size paths when the GCC toolchain is not on PATH. */
   objcopy?: string;
   size?: string;
+  /** LLD executable for the LLVM clang family. */
+  linker?: string;
   /** True when `binDir` is a `PATH` entry, so command names are portable. */
   onPath: boolean;
   binDir: string;
@@ -409,7 +411,8 @@ function mcuClangToolchain(
   compilerPath: string,
   cxxPath: string | undefined,
   objcopyPath: string | undefined,
-  sizePath: string | undefined
+  sizePath: string | undefined,
+  linkerPath: string | undefined
 ): BuildToolchain {
   return {
     id: 'mcu:clang',
@@ -423,6 +426,7 @@ function mcuClangToolchain(
     cCompilerPath: compilerPath,
     ...(objcopyPath === undefined ? {} : { objcopy: onPath ? 'llvm-objcopy' : objcopyPath }),
     ...(sizePath === undefined ? {} : { size: onPath ? 'llvm-size' : sizePath }),
+    ...(linkerPath === undefined ? {} : { linker: onPath ? 'ld.lld' : linkerPath }),
     detected: true,
     onPath,
     binDir: directory,
@@ -517,13 +521,16 @@ export function discoverMcuBuildToolchains(
     const cxxPath = probeCompiler(fileSystem, directory, 'clang++');
     const objcopyPath = probeCompiler(fileSystem, directory, 'llvm-objcopy');
     const sizePath = probeCompiler(fileSystem, directory, 'llvm-size');
+    const linkerPath = probeCompiler(fileSystem, directory, 'ld.lld')
+      ?? probeCompiler(fileSystem, directory, 'lld');
     clang = mcuClangToolchain(
       directory,
       directoryOnPath(directory, pathDirs),
       compilerPath,
       cxxPath,
       objcopyPath,
-      sizePath
+      sizePath,
+      linkerPath
     );
     break;
   }

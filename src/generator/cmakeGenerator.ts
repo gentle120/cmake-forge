@@ -37,7 +37,8 @@ export function generateCMakeLists(
   const clangRuntimeBasename = clangRuntimeFileName.split('/').pop()?.toLowerCase();
   const sources = project.sources.filter((source) => {
     const name = (source.split('/').pop() ?? '').toLowerCase();
-    if (clangFamily && name === clangRuntimeBasename) return false;
+    // A file left over from the other compiler family must not join the build.
+    if (name === clangRuntimeBasename) return false;
     if (name === generatedStartup) return false;
     // A regenerated armclang project may still contain the newlib stubs from an
     // earlier GCC generation; they must not be compiled into an Arm C library
