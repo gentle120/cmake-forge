@@ -12,3 +12,10 @@ test('configures CMake Tools and C/C++ IntelliSense for the generated debug pres
     'C_Cpp.dimInactiveRegions': true
   });
 });
+
+test('desktop settings keep CMake Tools kits usable for compiler selection', async () => {
+  const { getNativeWorkspaceSettings } = await import('../native/integration');
+  const settings = getNativeWorkspaceSettings();
+  assert.equal(settings['cmake.useCMakePresets'], 'never');
+  assert.equal(settings['cmake.sourceDirectory'], '${workspaceFolder}');
+});

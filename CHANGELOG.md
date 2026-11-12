@@ -30,8 +30,9 @@
 - Linux：loongarch64 / aarch64 / armv7hf / riscv64 交叉工具链，可选 `CMAKE_SYSROOT`。
 - 桌面：本机工具链，可执行文件 / 静态库 / 动态库。
 - 侧栏按厂商→系列→Pack→版本→型号向导式生成，生成文件以树形展示。
-- 桌面方向移除编译链选择：编译器由 CMake Tools / CMake 自动检测，生成的
-  CMakeLists 不写 `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER`，工程不绑定机器路径。
+- 桌面方向移除编译链选择：编译器由 CMake Tools 的 Kit 选择，CMakeLists 不写
+  `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER`；桌面 `.vscode/settings.json` 设置
+  `cmake.useCMakePresets: never`，避免 CMake Tools 锁定预设而无法切换 Kit。
 - 编译链选择：MCU 提供 Arm GNU Toolchain (armgcc) 与 Arm Compiler 6
   (armclang) 两种，扫描 PATH/Keil/STM32CubeCLT/Program Files，未安装的家族不
   显示；armclang 生成 `.sct` 分散加载文件、armclang 启动文件与 fromelf 转换，

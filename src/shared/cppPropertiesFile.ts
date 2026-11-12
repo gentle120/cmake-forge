@@ -70,14 +70,22 @@ export function normalizeCompilerArgs(entry: CppConfiguration): CppConfiguration
   return entry;
 }
 
-/** CMake Tools and C/C++ settings every generated project needs. */
-export function baseWorkspaceSettings(): Record<string, string | boolean> {
+/**
+ * CMake Tools and C/C++ settings every generated project needs.
+ *
+ * `useCMakePresets: 'never'` lets the desktop direction keep using CMake Tools
+ * kits (the user's compiler choice); with `'always'` CMake Tools ignores kits
+ * and the compiler is only whatever the preset/cache happens to contain.
+ */
+export function baseWorkspaceSettings(
+  useCMakePresets: 'always' | 'never' = 'always'
+): Record<string, string | boolean> {
   return {
     // The generated CMakeLists.txt and CMakePresets.json always live in the
     // workspace root, so a stale source directory would hide the generated
     // presets from CMake Tools.
     'cmake.sourceDirectory': '${workspaceFolder}',
-    'cmake.useCMakePresets': 'always',
+    'cmake.useCMakePresets': useCMakePresets,
     'cmake.configureOnOpen': true,
     'C_Cpp.intelliSenseEngine': 'default',
     'C_Cpp.default.compileCommands': compileCommandsWorkspacePath,

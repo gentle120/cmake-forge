@@ -29,5 +29,8 @@ export function configureNativeCppProperties(content: string | undefined): strin
 }
 
 export function getNativeWorkspaceSettings(): Record<string, string | boolean> {
-  return baseWorkspaceSettings();
+  // Desktop keeps CMake Tools in kit mode: the user selects the compiler from
+  // the CMake extension, and the generated CMakePresets.json stays available
+  // for command-line builds only.
+  return baseWorkspaceSettings('never');
 }

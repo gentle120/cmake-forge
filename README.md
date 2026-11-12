@@ -22,9 +22,10 @@ cmake --build --preset debug
   Arm GNU Toolchain；某个编译器没装就不显示。选 armclang 时生成 armclang
   工具链、`.sct` 分散加载文件、armclang 启动文件与 `fromelf` 产物转换；
   选 armgcc 时生成 GNU 工具链、`.ld` 链接脚本和 GNU 启动文件。
-- 桌面：**不提供编译链选择**，编译器完全交给 CMake Tools（或 CMake 自身）
-  扫描环境后决定；生成的 CMakeLists 不写 `CMAKE_C_COMPILER` /
-  `CMAKE_CXX_COMPILER`，因此工程不绑定任何机器路径，拷到别的电脑也能构建。
+- 桌面：**不提供编译链选择**，编译器完全交给 CMake Tools 的 Kit（或 CMake 自身）
+  环境扫描决定；生成的 CMakeLists 不写 `CMAKE_C_COMPILER` /
+  `CMAKE_CXX_COMPILER`，并关闭 CMake Tools 的预设模式（`useCMakePresets: never`），
+  这样状态栏可以选择/切换编译器 Kit。工程不绑定任何机器路径，拷到别的电脑也能构建。
 - 选择按工作区保存，生成工程时复用。armclang 工程的调试仍由 Cortex-Debug
   调用 `arm-none-eabi-gdb`，需要本机同时有 Arm GNU Toolchain 的 gdb。
 
