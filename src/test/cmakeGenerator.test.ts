@@ -330,3 +330,22 @@ test('STARM clang CMake links picolibc and keeps the GNU runtime stubs', () => {
   assert.doesNotMatch(cmake, /clang_runtime\.c/);
   assert.match(cmake, /system\/syscalls\.c/);
 });
+
+test('ATfE clang CMake uses picolibc and our startup', () => {
+  const profile = {
+    ...fixtureDeviceProfile(),
+    toolchainFamily: 'clang' as const,
+    clangVariant: 'atfe' as const,
+    linkerFileName: 'STM32F103C8T6.ld',
+    mcuCompiler: 'clang'
+  };
+  const cmake = generateCMakeLists('atfe_tool', {
+    sources: ['main.c'],
+    includeDirs: [],
+    defines: []
+  }, profile);
+  assert.match(cmake, /"-nostartfiles"/);
+  assert.match(cmake, /"-fuse-ld=lld"/);
+  assert.doesNotMatch(cmake, /"-nostdlib"/);
+  assert.match(cmake, /system\/syscalls\.c/);
+});

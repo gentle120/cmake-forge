@@ -114,3 +114,18 @@ test('STARM clang toolchain mirrors STM32CubeMX picolibc configuration', () => {
   assert.doesNotMatch(toolchain, /-nostdlib/);
   assert.doesNotMatch(toolchain, /--target=arm-none-eabi/);
 });
+
+test('ATfE clang toolchain keeps picolibc and replaces only the startup file', () => {
+  const toolchain = generateToolchainFile(fixtureDeviceProfile({
+    toolchainFamily: 'clang',
+    clangVariant: 'atfe',
+    mcuCompiler: 'D:/ATfE/bin/clang.exe',
+    mcuCxxCompiler: 'D:/ATfE/bin/clang++.exe',
+    mcuObjcopy: 'D:/ATfE/bin/llvm-objcopy.exe',
+    mcuSize: 'D:/ATfE/bin/llvm-size.exe'
+  }));
+  assert.match(toolchain, /set\(CMAKE_C_COMPILER_TARGET arm-none-eabi\)/);
+  assert.match(toolchain, /-nostartfiles -fuse-ld=lld/);
+  assert.doesNotMatch(toolchain, /-nostdlib/);
+  assert.doesNotMatch(toolchain, /starm-/);
+});

@@ -210,14 +210,68 @@ set(CMAKE_EXE_LINKER_FLAGS_INIT "\${TARGET_FLAGS} -lcrt0-hosted -z norelro -z no
 `;
 }
 
+/**
+ * Arm Toolchain for Embedded (ATfE).
+ *
+ * ATfE is ARM's LLVM-based bare-metal toolchain with picolibc/newlib multilibs.
+ * It uses the regular `clang` driver plus `--target=arm-none-eabi`, so it needs
+ * neither STARM's prefix nor a `-nostdlib` custom runtime. `-nostartfiles`
+ * keeps our vector/startup file while picolibc still supplies libc.
+ */
+function atfeClangToolchainFile(profile: DeviceProfile): string {
+  const cCompiler = profile.mcuCompiler?.trim() || 'clang';
+  const cxxCompiler = profile.mcuCxxCompiler?.trim() || 'clang++';
+  const objcopy = profile.mcuObjcopy?.trim() || 'llvm-objcopy';
+  const size = profile.mcuSize?.trim() || 'llvm-size';
+  const targetFlags = profile.compilerFlags.join(' ');
+  return `set(CMAKE_SYSTEM_NAME Generic)
+set(CMAKE_SYSTEM_PROCESSOR arm)
+
+set(CMAKE_C_COMPILER "${cCompiler}")
+set(CMAKE_CXX_COMPILER "${cxxCompiler}")
+set(CMAKE_ASM_COMPILER "${cCompiler}")
+set(CMAKE_C_COMPILER_TARGET arm-none-eabi)
+set(CMAKE_CXX_COMPILER_TARGET arm-none-eabi)
+set(CMAKE_ASM_COMPILER_TARGET arm-none-eabi)
+set(CMAKE_OBJCOPY "${objcopy}" CACHE FILEPATH "objcopy executable")
+set(CMAKE_SIZE "${size}" CACHE FILEPATH "size executable")
+set(MCU_TOOLCHAIN_FAMILY clang CACHE STRING "Compiler family")
+set(CMAKE_EXECUTABLE_SUFFIX ".elf")
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
+set(TARGET_FLAGS "--target=arm-none-eabi ${targetFlags}")
+
+set(CMAKE_C_FLAGS_INIT "\${TARGET_FLAGS} -Wall -fdata-sections -ffunction-sections")
+set(CMAKE_ASM_FLAGS_INIT "\${TARGET_FLAGS} -x assembler-with-cpp")
+
+set(CMAKE_C_FLAGS_DEBUG "-Og -g3")
+set(CMAKE_C_FLAGS_RELEASE "-Os -g0")
+set(CMAKE_C_FLAGS_MINSIZEREL "-Os -g0")
+set(CMAKE_C_FLAGS_RELWITHDEBINFO "-Og -g3")
+
+set(CMAKE_CXX_FLAGS_DEBUG "-Og -g3")
+set(CMAKE_CXX_FLAGS_RELEASE "-Os -g0")
+set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -g0")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Og -g3")
+set(CMAKE_CXX_FLAGS_INIT "\${TARGET_FLAGS} -Wall -fdata-sections -ffunction-sections -fno-rtti -fno-exceptions -fno-threadsafe-statics")
+
+# Our startup file replaces ATfE's crt0, but picolibc's libc remains linked.
+set(CMAKE_EXE_LINKER_FLAGS_INIT "\${TARGET_FLAGS} -nostartfiles -fuse-ld=lld")
+`;
+}
+
 export function generateToolchainFile(profile: DeviceProfile): string {
   if (profile.toolchainFamily === 'armclang') {
     return armclangToolchainFile(profile);
   }
   if (profile.toolchainFamily === 'clang') {
-    return profile.clangVariant === 'starm'
-      ? starmClangToolchainFile(profile)
-      : clangToolchainFile(profile);
+    if (profile.clangVariant === 'starm') {
+      return starmClangToolchainFile(profile);
+    }
+    if (profile.clangVariant === 'atfe') {
+      return atfeClangToolchainFile(profile);
+    }
+    return clangToolchainFile(profile);
   }
   return gccToolchainFile(profile);
 }

@@ -1,16 +1,30 @@
 # Changelog
 
+## 1.0.3
+
+- 支持 **Arm Toolchain for Embedded (ATfE)**：检测 `ATfE-<version>` 安装目录
+  （含 `lib/clang-runtimes`），按 `--target=arm-none-eabi`、picolibc、
+  `-nostartfiles -fuse-ld=lld` 生成 `cmake/atfe-clang.cmake`；保留项目启动文件、
+  syscalls 与 `__libc_init_array` shim。
+- clang 检测优先级：ATfE → STM32CubeIDE STARM → 独立 LLVM clang。
+- 用 ATfE 23.1.0 实测：普通 C、C++、含 `core_cm3.h` 的 CMSIS 工程均可构建，
+  生成 elf/hex/bin。
+- 测试 455 项通过。
+
 ## 1.0.2
 
 - MCU 的 clang 选项优先使用 STM32CubeIDE 的 **STARM clang**，并按 CubeMX
   `cmake/starm-clang.cmake` 生成 picolibc 配置（`STARM_PICOLIBC`、
   `-lcrt0-hosted -z norelro -z noexecstack`、`starm-objcopy/starm-size`），
-  工具链文件名为 `cmake/starm-clang.cmake`；没有 STARM 时回退 LLVM clang。
+  工具链文件名为 `cmake/starm-clang.cmake`。
+- 支持 Arm Toolchain for Embedded (ATfE)：自动识别其 `clang` + picolibc
+  布局，使用 `--target=arm-none-eabi`、`-nostartfiles`、`-fuse-ld=lld`，并保留
+  项目自带的启动文件与 GNU 运行时；检测优先级 ATfE → STARM → LLVM。
 - STARM/LLVM 的 CMSIS 头选择修正：STARM 使用 GNU 头（CubeMX 的 CMSIS 没有
   `cmsis_clang.h`），LLVM 同时保留 GNU 头作为旧 Pack 回退。
 - 自动扫描 STM32CubeIDE/CubeMX 的 STARM 安装目录，并在 UI/生成结果中区分
   STARM 与 LLVM clang。
-- 测试 451 项通过。
+- 测试 455 项通过。
 
 ## 1.0.1
 

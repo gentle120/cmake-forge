@@ -18,7 +18,7 @@ import { readdirSync } from 'node:fs';
 export type BuildToolchainDirection = 'mcu';
 export type McuToolchainFamily = 'gcc' | 'armclang' | 'clang';
 /** STM32CubeMX/STM32CubeIDE uses ST's `starm-clang` distribution. */
-export type McuClangVariant = 'llvm' | 'starm';
+export type McuClangVariant = 'llvm' | 'starm' | 'atfe';
 
 export interface BuildToolchain {
   /** Stable selection id: `mcu:gcc`, `mcu:armclang`, `mcu:clang`. */
@@ -130,6 +130,8 @@ interface CompilerSearchRoots {
   clangDirs: string[];
   /** Candidate directories containing STM32CubeIDE's starm-clang. */
   starmDirs: string[];
+  /** Candidate directories containing Arm Toolchain for Embedded (ATfE). */
+  atfeDirs: string[];
 }
 
 function pushDirectory(list: string[], directory: string | undefined): void {
@@ -162,11 +164,13 @@ function defaultSearchRoots(
   const gccDirs: string[] = [];
   const clangDirs: string[] = [];
   const starmDirs: string[] = [];
+  const atfeDirs: string[] = [];
   const hints = environmentHintDirectories(environment, platform);
   gccDirs.push(...hints);
   armclangDirs.push(...hints);
   clangDirs.push(...hints);
   starmDirs.push(...hints);
+  atfeDirs.push(...hints);
 
   if (platform !== 'win32') {
     // POSIX installs are usually on PATH, but standalone Arm Compiler and
@@ -187,7 +191,13 @@ function defaultSearchRoots(
         pushDirectory(clangDirs, `${root}/${child}/bin`);
       }
     }
-    return { armclangDirs, gccDirs, clangDirs, starmDirs };
+    for (const root of ['/opt/ATfE', '/opt/arm-toolchain', '/usr/local/ATfE', '/usr/local/arm-toolchain']) {
+      pushDirectory(atfeDirs, `${root}/bin`);
+      for (const child of readChildren(fileSystem, root)) {
+        pushDirectory(atfeDirs, `${root}/${child}/bin`);
+      }
+    }
+    return { armclangDirs, gccDirs, clangDirs, starmDirs, atfeDirs };
   }
 
   const systemDrive = environment.SystemDrive?.replace(/^([A-Za-z]):.*$/, '$1:') ?? 'C:';
@@ -200,8 +210,27 @@ function defaultSearchRoots(
   }
 
   for (const drive of drives) {
+    // Portable installs often sit directly on a drive or in a tools directory.
+    for (const container of [
+      `${drive}/tools`,
+      `${drive}/tools/toolchain`,
+      `${drive}/toolchains`,
+      `${drive}/Toolchains`,
+      `${drive}/Desktop/tools`,
+      `${drive}/Desktop/tools/toolchain`,
+      `${drive}/Desktop/Tools`
+    ]) {
+      for (const directory of allBinDirectories(fileSystem, container, 4)) {
+        pushDirectory(atfeDirs, directory);
+      }
+    }
     // Portable installs often sit directly on a drive (D:/STM32CubeIDE_..., D:/STM32CubeMX).
     for (const child of readChildren(fileSystem, `${drive}/`)) {
+      if (/ATfE|Arm Toolchain for Embedded|arm-toolchain/i.test(child)) {
+        for (const directory of allBinDirectories(fileSystem, `${drive}/${child}`, 4)) {
+          pushDirectory(atfeDirs, directory);
+        }
+      }
       if (/STM32CubeIDE|STM32CubeMX|STM32CubeCLT|STMicroelectronics|STARM/i.test(child)) {
         for (const directory of allBinDirectories(fileSystem, `${drive}/${child}`, 8)) {
           pushDirectory(starmDirs, directory);
@@ -266,6 +295,11 @@ function defaultSearchRoots(
           pushDirectory(clangDirs, joinPath(root, `${child}/${version}/bin`));
         }
       }
+      if (/ATfE|Arm Toolchain for Embedded|arm-toolchain/i.test(child)) {
+        for (const directory of allBinDirectories(fileSystem, joinPath(root, child), 4)) {
+          pushDirectory(atfeDirs, directory);
+        }
+      }
       if (/STM32CubeIDE|STM32CubeMX|STM32CubeCLT|STMicroelectronics/i.test(child)) {
         for (const directory of allBinDirectories(fileSystem, joinPath(root, child), 8)) {
           pushDirectory(starmDirs, directory);
@@ -302,7 +336,7 @@ function defaultSearchRoots(
       pushDirectory(clangDirs, directory);
     }
   }
-  return { armclangDirs, gccDirs, clangDirs, starmDirs };
+  return { armclangDirs, gccDirs, clangDirs, starmDirs, atfeDirs };
 }
 
 
@@ -468,6 +502,19 @@ function mcuArmclangToolchain(
   };
 }
 
+/** ATfE ships clang/lld with picolibc/newlib runtimes under ../lib. */
+function looksLikeAtfe(
+  fileSystem: BuildToolchainFileSystem,
+  directory: string
+): boolean {
+  if (/atfe|arm-toolchain/i.test(directory)) {
+    return true;
+  }
+  const parent = directory.replace(/\\/g, '/').replace(/\/bin$/i, '');
+  const libraries = readChildren(fileSystem, `${parent}/lib`);
+  return libraries.some((name) => /clang-runtimes|picolibc|llvm-libc|newlib/i.test(name));
+}
+
 function mcuClangToolchain(
   directory: string,
   onPath: boolean,
@@ -479,6 +526,7 @@ function mcuClangToolchain(
   variant: McuClangVariant
 ): BuildToolchain {
   const starm = variant === 'starm';
+  const atfe = variant === 'atfe';
   const cName = starm ? 'starm-clang' : 'clang';
   const cxxName = starm ? 'starm-clang++' : 'clang++';
   return {
@@ -502,7 +550,9 @@ function mcuClangToolchain(
     detected: true,
     onPath,
     binDir: directory,
-    label: starm ? 'STARM clang (STM32CubeMX)' : 'LLVM clang (arm-none-eabi)',
+    label: starm
+      ? 'STARM clang (STM32CubeMX)'
+      : atfe ? 'Arm Toolchain for Embedded (ATfE)' : 'LLVM clang (arm-none-eabi)',
     detail: directory
   };
 }
@@ -586,10 +636,38 @@ export function discoverMcuBuildToolchains(
   }
 
   let clang: BuildToolchain | undefined;
+  // Arm Toolchain for Embedded (ATfE) is ARM's upstream LLVM distribution with
+  // picolibc/newlib multilibs. Prefer a real versioned install over temporary
+  // copies that development setups may leave behind.
+  const atfeCandidates: Array<{ directory: string; compilerPath: string; score: number }> = [];
+  for (const directory of [...pathDirs, ...roots.atfeDirs]) {
+    const compilerPath = probeCompiler(fileSystem, directory, 'clang');
+    if (compilerPath === undefined || !looksLikeAtfe(fileSystem, directory)) {
+      continue;
+    }
+    let score = 0;
+    if (/ATfE-\d+\.\d+/i.test(directory)) score += 10;
+    if (/arm_clang|Arm-Toolchain/i.test(directory)) score += 4;
+    if (/_atfe_tmp|\\tmp|\\temp/i.test(directory)) score -= 20;
+    atfeCandidates.push({ directory, compilerPath, score });
+  }
+  atfeCandidates.sort((left, right) => right.score - left.score);
+  if (atfeCandidates.length > 0) {
+    const { directory, compilerPath } = atfeCandidates[0];
+    clang = mcuClangToolchain(
+      directory,
+      directoryOnPath(directory, pathDirs),
+      compilerPath,
+      probeCompiler(fileSystem, directory, 'clang++'),
+      probeCompiler(fileSystem, directory, 'llvm-objcopy'),
+      probeCompiler(fileSystem, directory, 'llvm-size'),
+      probeCompiler(fileSystem, directory, 'ld.lld') ?? probeCompiler(fileSystem, directory, 'lld'),
+      'atfe'
+    );
+  }
   // STM32CubeIDE/CubeMX clang is ST's STARM distribution: it links picolibc and
-  // is what CubeMX's `cmake/starm-clang.cmake` expects. Prefer it over a host
-  // LLVM clang when both are installed.
-  for (const directory of [...pathDirs, ...roots.starmDirs]) {
+  // is what CubeMX's `cmake/starm-clang.cmake` expects.
+  if (clang === undefined) for (const directory of [...pathDirs, ...roots.starmDirs]) {
     const compilerPath = probeCompiler(fileSystem, directory, 'starm-clang');
     if (compilerPath === undefined) {
       continue;
@@ -625,7 +703,7 @@ export function discoverMcuBuildToolchains(
         objcopyPath,
         sizePath,
         linkerPath,
-        'llvm'
+        looksLikeAtfe(fileSystem, directory) ? 'atfe' : 'llvm'
       );
       break;
     }

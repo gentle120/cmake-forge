@@ -27,7 +27,7 @@ export interface DeviceProfile {
    */
   toolchainFamily?: 'gcc' | 'armclang' | 'clang';
   /** Clang distribution: generic LLVM or ST's STARM (CubeMX). */
-  clangVariant?: 'llvm' | 'starm';
+  clangVariant?: 'llvm' | 'starm' | 'atfe';
   /** Compiler command (PATH name or absolute path) for armclang / off-PATH GCC. */
   mcuCompiler?: string;
   mcuCxxCompiler?: string;

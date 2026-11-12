@@ -224,7 +224,7 @@ test('finds LLVM clang for the third MCU family', () => {
   assert.equal(clang.cCompiler, 'clang');
   assert.equal(clang.cxxCompiler, 'clang++');
   assert.match(clang.objcopy ?? '', /llvm-objcopy(\.exe)?$/);
-  assert.equal(clang.linker, 'ld.lld');
+  assert.match(clang.linker ?? '', /ld\.lld(\.exe)?$/);
   assert.match(clang.label, /LLVM clang/);
 });
 
@@ -250,4 +250,23 @@ test('finds STM32CubeIDE STARM clang and prefers it over generic clang', () => {
   assert.equal(clang.cxxCompiler, 'starm-clang++');
   assert.match(clang.label, /STARM clang/);
   assert.match(clang.binDir, /starm-clang/);
+});
+
+test('detects Arm Toolchain for Embedded (ATfE) as an embedded clang variant', () => {
+  const bin = 'D:/tools/ATfE-21.1.0-Windows-x86_64/bin';
+  const discovered = discoverMcuBuildToolchains(
+    { PATH: '', SystemDrive: 'C:' },
+    fileSystem({
+      'D:/': ['tools'],
+      'D:/tools': ['ATfE-21.1.0-Windows-x86_64'],
+      'D:/tools/ATfE-21.1.0-Windows-x86_64': ['bin', 'lib'],
+      [bin]: ['clang.exe', 'clang++.exe', 'llvm-objcopy.exe', 'llvm-size.exe', 'ld.lld.exe'],
+      'D:/tools/ATfE-21.1.0-Windows-x86_64/lib': ['clang-runtimes']
+    }),
+    'win32'
+  );
+  const clang = toolById(discovered, 'mcu:clang');
+  assert.equal(clang.variant, 'atfe');
+  assert.match(clang.label, /Arm Toolchain for Embedded/);
+  assert.match(clang.linker ?? '', /ld\.lld(\.exe)?$/);
 });

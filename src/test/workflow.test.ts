@@ -545,3 +545,23 @@ test('STARM clang workflow generates CubeMX-style toolchain and runtime', async 
     assert.match(toolchain, /-lcrt0-hosted/);
   });
 });
+
+test('ATfE clang workflow generates picolibc toolchain and GNU runtime', async () => {
+  await withWorkspace(async (root) => {
+    await writeFile(join(root, 'main.c'), 'int main(void) { return 0; }\n');
+    const result = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), {
+      toolchain: {
+        family: 'clang',
+        variant: 'atfe',
+        cCompiler: 'clang',
+        cxxCompiler: 'clang++',
+        cCompilerPath: 'D:/ATfE/bin/clang.exe'
+      }
+    });
+    assert.equal(result.ok, true);
+    const toolchain = await readFile(join(root, 'cmake', 'atfe-clang.cmake'), 'utf8');
+    assert.match(toolchain, /-nostartfiles -fuse-ld=lld/);
+    assert.ok(existsSync(join(root, 'system', 'syscalls.c')));
+    assert.ok(existsSync(join(root, 'system', 'clang_runtime.c')));
+  });
+});

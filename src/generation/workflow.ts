@@ -94,7 +94,7 @@ export interface McuToolchainSelection {
   objcopy?: string;
   size?: string;
   /** Clang distribution selected by the scanner. */
-  variant?: 'llvm' | 'starm';
+  variant?: 'llvm' | 'starm' | 'atfe';
 }
 
 export interface McuWorkflowOptions {
@@ -359,8 +359,9 @@ function createMcuFiles(
   }];
 
   const starmClang = profile.toolchainFamily === 'clang' && profile.clangVariant === 'starm';
+  const atfeClang = profile.toolchainFamily === 'clang' && profile.clangVariant === 'atfe';
   const gnuRuntime = profile.toolchainFamily !== 'armclang'
-    && (profile.toolchainFamily !== 'clang' || starmClang);
+    && (profile.toolchainFamily !== 'clang' || starmClang || atfeClang);
   if (gnuRuntime) {
     if (!hasSource(runtimeSourceNames[0])) {
       files.push({
@@ -584,7 +585,9 @@ export async function generateMcuWorkflow(
     ...(family === 'clang' && selected?.variant ? { clangVariant: selected.variant } : {}),
     ...(family === 'clang' && selected?.variant === 'starm'
       ? { toolchainFileName: 'starm-clang.cmake' }
-      : {}),
+      : family === 'clang' && selected?.variant === 'atfe'
+        ? { toolchainFileName: 'atfe-clang.cmake' }
+        : {}),
     // armclang links with a scatter file, not a GNU ld script.
     ...(family === 'armclang' ? { linkerFileName: `${profile.part}.sct` } : {})
   };

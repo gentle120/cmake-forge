@@ -35,7 +35,8 @@ export function generateCMakeLists(
   const gccFamily = profile.toolchainFamily !== 'armclang' && profile.toolchainFamily !== 'clang';
   const clangFamily = profile.toolchainFamily === 'clang';
   const starmClang = clangFamily && profile.clangVariant === 'starm';
-  const gnuRuntimeFamily = gccFamily || starmClang;
+  const atfeClang = clangFamily && profile.clangVariant === 'atfe';
+  const gnuRuntimeFamily = gccFamily || starmClang || atfeClang;
   const clangRuntimeBasename = clangRuntimeFileName.split('/').pop()?.toLowerCase();
   const sources = project.sources.filter((source) => {
     const name = (source.split('/').pop() ?? '').toLowerCase();
@@ -109,6 +110,15 @@ export function generateCMakeLists(
         '    "--map"',
         '    "--entry=Reset_Handler"'
       ].join('\n')
+    : atfeClang
+      ? [
+          '    "-nostartfiles"',
+          '    "-fuse-ld=lld"',
+          `    "-T\${CMAKE_SOURCE_DIR}/${profile.linkerFileName}"`,
+          `    "-Wl,-Map=\${CMAKE_BINARY_DIR}/${projectName}.map"`,
+          '    "-Wl,--gc-sections"',
+          '    "-Wl,--print-memory-usage"'
+        ].join('\n')
     : starmClang
       ? [
           `    "-T\${CMAKE_SOURCE_DIR}/${profile.linkerFileName}"`,
