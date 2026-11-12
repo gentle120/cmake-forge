@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.6
+
+- clang 工具链按内核写目标三元组：Cortex-M0/M1 → `thumbv6m-none-eabi`、
+  M3/SC300 → `thumbv7m-none-eabi`、M4/M7 → `thumbv7em-none-eabi`、M23 →
+  `thumbv8m.base-none-eabi`、M33/M35 → `thumbv8m.main-none-eabi`。
+  这样 clang 配置不再出现容易和 GCC 前缀混淆的 `arm-none-eabi`；
+  GCC 仍使用 `arm-none-eabi-gcc`。
+- 保持 ATfE 绝对 clang 路径与旧 CMake 缓存清理；测试 456 项通过。
+
 ## 1.0.5
 
 - 重新生成 MCU 工程时检查 `build/debug|release/CMakeCache.txt`：如果缓存里的

@@ -109,33 +109,45 @@ set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 /**
  * LLVM clang bare-metal toolchain.
  *
- * Clang's driver selects the ARM backend through `--target=arm-none-eabi`;
+ * Clang's driver selects the ARM backend through a target triple such as
+ * `thumbv7m-none-eabi`;
  * linking uses LLD (GNU linker scripts and the generated startup are accepted)
  * and `-nostdlib` because a standalone LLVM install ships no ARM C library.
  */
+/** Clang target triple for the selected core (GCC keeps arm-none-eabi-*). */
+function clangTargetTriple(profile: DeviceProfile): string {
+  const core = profile.core.trim().toLowerCase();
+  if (/m0|m1|sc000|v6m/.test(core)) return 'thumbv6m-none-eabi';
+  if (/m3|sc300|v7m/.test(core)) return 'thumbv7m-none-eabi';
+  if (/m4|m7|v7em/.test(core)) return 'thumbv7em-none-eabi';
+  if (/m23|v8m\.base/.test(core)) return 'thumbv8m.base-none-eabi';
+  if (/m33|m35|v8m\.main/.test(core)) return 'thumbv8m.main-none-eabi';
+  if (/m55|m85|v8\.1m/.test(core)) return 'thumbv8.1m.main-none-eabi';
+  return 'arm-none-eabi';
+}
+
 function clangToolchainFile(profile: DeviceProfile): string {
   const cCompiler = profile.mcuCompiler?.trim() || 'clang';
   const cxxCompiler = profile.mcuCxxCompiler?.trim() || 'clang++';
+  const targetTriple = clangTargetTriple(profile);
   const targetFlags = profile.compilerFlags.join(' ');
   const objcopy = profile.mcuObjcopy;
   const size = profile.mcuSize;
-  return `# Arm Toolchain for Embedded (ATfE) clang.
-# arm-none-eabi is the target triple; this is NOT arm-none-eabi-gcc.
-set(CMAKE_SYSTEM_NAME Generic)
+  return `set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 
 set(CMAKE_C_COMPILER "${cCompiler}")
 set(CMAKE_CXX_COMPILER "${cxxCompiler}")
 set(CMAKE_ASM_COMPILER "${cCompiler}")
-set(CMAKE_C_COMPILER_TARGET arm-none-eabi)
-set(CMAKE_CXX_COMPILER_TARGET arm-none-eabi)
-set(CMAKE_ASM_COMPILER_TARGET arm-none-eabi)
+set(CMAKE_C_COMPILER_TARGET ${targetTriple})
+set(CMAKE_CXX_COMPILER_TARGET ${targetTriple})
+set(CMAKE_ASM_COMPILER_TARGET ${targetTriple})
 set(MCU_TOOLCHAIN_FAMILY clang CACHE STRING "Compiler family")
 set(CMAKE_EXECUTABLE_SUFFIX ".elf")
 ${objcopy === undefined ? '' : `set(CMAKE_OBJCOPY "${objcopy}" CACHE FILEPATH "objcopy executable")`}
 ${size === undefined ? '' : `set(CMAKE_SIZE "${size}" CACHE FILEPATH "size executable")`}
 
-set(TARGET_FLAGS "--target=arm-none-eabi ${targetFlags}")
+set(TARGET_FLAGS "--target=${targetTriple} ${targetFlags}")
 
 set(CMAKE_C_FLAGS_INIT "\${TARGET_FLAGS} -Wall -fdata-sections -ffunction-sections -ffreestanding")
 set(CMAKE_ASM_FLAGS_INIT "\${TARGET_FLAGS} -x assembler-with-cpp")
@@ -225,25 +237,26 @@ function atfeClangToolchainFile(profile: DeviceProfile): string {
   const cxxCompiler = profile.mcuCxxCompiler?.trim() || 'clang++';
   const objcopy = profile.mcuObjcopy?.trim() || 'llvm-objcopy';
   const size = profile.mcuSize?.trim() || 'llvm-size';
+  const targetTriple = clangTargetTriple(profile);
   const targetFlags = profile.compilerFlags.join(' ');
   return `# Arm Toolchain for Embedded (ATfE) clang.
-# arm-none-eabi is the target triple; this is NOT arm-none-eabi-gcc.
+# The target triple is not a GCC prefix; this is clang, not arm-none-eabi-gcc.
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 
 set(CMAKE_C_COMPILER "${cCompiler}")
 set(CMAKE_CXX_COMPILER "${cxxCompiler}")
 set(CMAKE_ASM_COMPILER "${cCompiler}")
-set(CMAKE_C_COMPILER_TARGET arm-none-eabi)
-set(CMAKE_CXX_COMPILER_TARGET arm-none-eabi)
-set(CMAKE_ASM_COMPILER_TARGET arm-none-eabi)
+set(CMAKE_C_COMPILER_TARGET ${targetTriple})
+set(CMAKE_CXX_COMPILER_TARGET ${targetTriple})
+set(CMAKE_ASM_COMPILER_TARGET ${targetTriple})
 set(CMAKE_OBJCOPY "${objcopy}" CACHE FILEPATH "objcopy executable")
 set(CMAKE_SIZE "${size}" CACHE FILEPATH "size executable")
 set(MCU_TOOLCHAIN_FAMILY clang CACHE STRING "Compiler family")
 set(CMAKE_EXECUTABLE_SUFFIX ".elf")
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
-set(TARGET_FLAGS "--target=arm-none-eabi ${targetFlags}")
+set(TARGET_FLAGS "--target=${targetTriple} ${targetFlags}")
 
 set(CMAKE_C_FLAGS_INIT "\${TARGET_FLAGS} -Wall -fdata-sections -ffunction-sections")
 set(CMAKE_ASM_FLAGS_INIT "\${TARGET_FLAGS} -x assembler-with-cpp")

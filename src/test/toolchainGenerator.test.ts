@@ -86,7 +86,7 @@ test('LLVM clang toolchain targets arm-none-eabi without a C runtime', () => {
     mcuSize: 'D:/LLVM/bin/llvm-size.exe'
   }));
   assert.match(toolchain, /set\(CMAKE_C_COMPILER "D:\/LLVM\/bin\/clang\.exe"\)/);
-  assert.match(toolchain, /set\(CMAKE_CXX_COMPILER_TARGET arm-none-eabi\)/);
+  assert.match(toolchain, /set\(CMAKE_CXX_COMPILER_TARGET thumbv7m-none-eabi\)/);
   assert.match(toolchain, /set\(MCU_TOOLCHAIN_FAMILY clang/);
   assert.match(toolchain, /-nostdlib -fuse-ld=lld/);
   assert.match(toolchain, /llvm-objcopy/);
@@ -112,7 +112,7 @@ test('STARM clang toolchain mirrors STM32CubeMX picolibc configuration', () => {
   assert.match(toolchain, /-lcrt0-hosted -z norelro -z noexecstack/);
   assert.match(toolchain, /starm-objcopy/);
   assert.doesNotMatch(toolchain, /-nostdlib/);
-  assert.doesNotMatch(toolchain, /--target=arm-none-eabi/);
+  assert.doesNotMatch(toolchain, /--target=thumbv7m-none-eabi/);
 });
 
 test('ATfE clang toolchain keeps picolibc and replaces only the startup file', () => {
@@ -124,7 +124,7 @@ test('ATfE clang toolchain keeps picolibc and replaces only the startup file', (
     mcuObjcopy: 'D:/ATfE/bin/llvm-objcopy.exe',
     mcuSize: 'D:/ATfE/bin/llvm-size.exe'
   }));
-  assert.match(toolchain, /set\(CMAKE_C_COMPILER_TARGET arm-none-eabi\)/);
+  assert.match(toolchain, /set\(CMAKE_C_COMPILER_TARGET thumbv7m-none-eabi\)/);
   assert.match(toolchain, /-nostartfiles -fuse-ld=lld/);
   assert.doesNotMatch(toolchain, /-nostdlib/);
   assert.doesNotMatch(toolchain, /starm-/);
