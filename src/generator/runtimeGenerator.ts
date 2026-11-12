@@ -1,5 +1,32 @@
 export const runtimeSourceNames = ['system/syscalls.c', 'system/sysmem.c'] as const;
 
+/** LLVM clang build has no newlib, so the startup arrays need a local runner. */
+export const clangRuntimeFileName = 'system/clang_runtime.c';
+
+export function generateClangRuntime(): string {
+  return `/* C++/C startup-array runner generated for LLVM clang -nostdlib. */
+typedef void (*forge_init_func)(void);
+
+extern forge_init_func __preinit_array_start[] __attribute__((weak));
+extern forge_init_func __preinit_array_end[] __attribute__((weak));
+extern forge_init_func __init_array_start[] __attribute__((weak));
+extern forge_init_func __init_array_end[] __attribute__((weak));
+
+__attribute__((weak)) void __libc_init_array(void)
+{
+  forge_init_func *function;
+
+  for (function = __preinit_array_start; function < __preinit_array_end; ++function) {
+    (*function)();
+  }
+  for (function = __init_array_start; function < __init_array_end; ++function) {
+    (*function)();
+  }
+}
+`;
+}
+
+
 export function generateSyscalls(): string {
   return `/* Minimal newlib system calls generated for bare-metal firmware. */
 #include <errno.h>

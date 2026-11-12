@@ -124,12 +124,12 @@ test('armclang startup starts with __initial_sp and hands control to __main', ()
   assert.doesNotMatch(startup, /_sdata|_sbss/);
 });
 
-test('LLVM clang startup keeps main but skips newlib initialization', () => {
+test('LLVM clang startup calls the generated init-array shim, not Arm __main', () => {
   const profile = { ...fixtureDeviceProfile(), toolchainFamily: 'clang' as const };
   const startup = generateStartupFile(profile);
   assert.match(startup, /\.word _estack/);
   assert.match(startup, /bl SystemInit/);
+  assert.match(startup, /bl __libc_init_array/);
   assert.match(startup, /bl main/);
-  assert.doesNotMatch(startup, /__libc_init_array/);
   assert.doesNotMatch(startup, /__main/);
 });

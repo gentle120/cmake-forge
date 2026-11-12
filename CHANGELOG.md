@@ -33,6 +33,10 @@
 - 桌面方向移除编译链选择：编译器由 CMake Tools 的 Kit 选择，CMakeLists 不写
   `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER`；桌面 `.vscode/settings.json` 设置
   `cmake.useCMakePresets: never`，避免 CMake Tools 锁定预设而无法切换 Kit。
+- LLVM clang 工程生成极简 `system/clang_runtime.c`（`__libc_init_array`）并在启动
+  文件调用，C++ 静态构造函数可运行；C++ 编译去掉 `-ffreestanding`，避免 clang
+  把 `main` 改名导致链接失败；armclang 未检测到 `fromelf` 时不再生成无效的
+  fromelf 转换命令。
 - 编译链选择：MCU 固定提供 Arm GNU Toolchain (armgcc)、Arm Compiler 6
   (armclang/Keil) 与 LLVM clang (arm-none-eabi) 三种；扫描 PATH/Keil/
   STM32CubeCLT/Program Files/LLVM 目录后只决定默认项与“已检测/未检测”提示，

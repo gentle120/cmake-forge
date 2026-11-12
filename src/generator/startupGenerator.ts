@@ -264,10 +264,8 @@ export function generateStartupFile(profile: DeviceProfile): string {
   if (profile.toolchainFamily === 'armclang') {
     return generateArmclangStartup(profile);
   }
-  if (profile.toolchainFamily === 'clang') {
-    // LLVM clang links with `-nostdlib`: there is no newlib `__libc_init_array`,
-    // but the data copy and SystemInit still run before main.
-    return generateGnuStartup(profile, { libcInit: false });
-  }
+  // clang also runs the generated `system/clang_runtime.c` init-array shim
+  // before main, so C++ static constructors are honored without newlib.
+
   return generateGnuStartup(profile);
 }

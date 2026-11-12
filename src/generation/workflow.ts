@@ -10,7 +10,13 @@ import { generateFlashScript } from '../generator/flashScriptGenerator';
 import { generateLinkerFile } from '../generator/linkerGenerator';
 import { generateCMakePresets } from '../generator/presetsGenerator';
 import { generateStartupFile } from '../generator/startupGenerator';
-import { generateSyscalls, generateSysmem, runtimeSourceNames } from '../generator/runtimeGenerator';
+import {
+  clangRuntimeFileName,
+  generateClangRuntime,
+  generateSyscalls,
+  generateSysmem,
+  runtimeSourceNames
+} from '../generator/runtimeGenerator';
 import { generateToolchainFile } from '../generator/toolchainGenerator';
 import {
   copyCoreHeaders,
@@ -191,8 +197,8 @@ async function findObsoleteCopies(
       continue;
     }
     const basenameLower = normalized.split('/').pop() ?? '';
-    // Device-independent newlib stubs are never made obsolete by a Pack change.
-    if (basenameLower === 'syscalls.c' || basenameLower === 'sysmem.c') {
+    // Device-independent runtime shims are never made obsolete by a Pack change.
+    if (runtimeStubBasenames.has(basenameLower)) {
       continue;
     }
     if (!managedPrefixesLower.some((prefix) => normalized.startsWith(prefix))) {
@@ -211,14 +217,16 @@ async function findObsoleteCopies(
   return obsolete;
 }
 
+const runtimeStubBasenames = new Set(['syscalls.c', 'sysmem.c', 'clang_runtime.c']);
+
 /** Generated paths that belong to a project and can safely be cleaned up. */
 function isManagedGeneratedPath(relative: string): boolean {
   const lower = relative.replace(/\\/g, '/').toLowerCase();
   const name = lower.split('/').pop() ?? '';
-  // The newlib stubs are device-independent and are regenerated only when the
-  // scan cannot see them; deleting a still-referenced copy would leave the new
-  // project without syscalls. Keep them across device switches.
-  if (name === 'syscalls.c' || name === 'sysmem.c') {
+  // Device-independent runtime shims are regenerated only when the scan cannot
+  // see them; deleting a still-referenced copy would leave the new project
+  // without its runtime. Keep them across device switches.
+  if (runtimeStubBasenames.has(name)) {
     return false;
   }
   if (['cmake/', 'system/', 'cmsis/', '.vscode/'].some((prefix) => lower.startsWith(prefix))) {
@@ -361,6 +369,12 @@ function createMcuFiles(
         content: generateSysmem()
       });
     }
+  }
+  if (profile.toolchainFamily === 'clang' && !hasSource(clangRuntimeFileName)) {
+    files.push({
+      path: join(root, clangRuntimeFileName),
+      content: generateClangRuntime()
+    });
   }
   files.push(
     {

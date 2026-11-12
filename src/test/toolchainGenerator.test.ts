@@ -91,4 +91,7 @@ test('LLVM clang toolchain targets arm-none-eabi without a C runtime', () => {
   assert.match(toolchain, /-nostdlib -fuse-ld=lld/);
   assert.match(toolchain, /llvm-objcopy/);
   assert.doesNotMatch(toolchain, /--specs=nano/);
+  // `-ffreestanding` makes clang mangle C++ `main` on an ARM target; keep it
+  // out of the C++ flags so startup's `bl main` resolves.
+  assert.doesNotMatch(toolchain, /CMAKE_CXX_FLAGS_INIT[^\n]*-ffreestanding/);
 });

@@ -1,5 +1,5 @@
 import type { DeviceProfile } from '../devices/deviceProfiles';
-import { runtimeSourceNames } from './runtimeGenerator';
+import { clangRuntimeFileName, runtimeSourceNames } from './runtimeGenerator';
 import type { ProjectDescription } from '../scanner/projectScanner';
 import { cmakeString, projectPath } from '../shared/cmakeText';
 import { preserveUserCodeSection, userCodeSection } from '../shared/userCodeSection';
@@ -33,8 +33,11 @@ export function generateCMakeLists(
     runtimeSourceNames.map((name) => (name.split('/').pop() ?? '').toLowerCase())
   );
   const gccFamily = profile.toolchainFamily !== 'armclang' && profile.toolchainFamily !== 'clang';
+  const clangFamily = profile.toolchainFamily === 'clang';
+  const clangRuntimeBasename = clangRuntimeFileName.split('/').pop()?.toLowerCase();
   const sources = project.sources.filter((source) => {
     const name = (source.split('/').pop() ?? '').toLowerCase();
+    if (clangFamily && name === clangRuntimeBasename) return false;
     if (name === generatedStartup) return false;
     // A regenerated armclang project may still contain the newlib stubs from an
     // earlier GCC generation; they must not be compiled into an Arm C library
@@ -52,6 +55,9 @@ export function generateCMakeLists(
         sources.push(runtimeSourceName);
       }
     }
+  }
+  if (clangFamily && !sources.some((source) => source.split('/').pop()?.toLowerCase() === clangRuntimeBasename)) {
+    sources.push(clangRuntimeFileName);
   }
   // The copied device system source is generated, so it is not in the scan.
   for (const generatedSource of externalDirs.generatedSources ?? []) {
@@ -93,7 +99,6 @@ export function generateCMakeLists(
   ].join('\n');
 
   const armclang = profile.toolchainFamily === 'armclang';
-  const clangFamily = profile.toolchainFamily === 'clang';
   const linkOptionBlock = armclang
     ? [
         `    "--scatter=\${CMAKE_SOURCE_DIR}/${profile.linkerFileName}"`,

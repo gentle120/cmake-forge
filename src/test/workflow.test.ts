@@ -512,11 +512,13 @@ test('LLVM clang workflow writes a GNU linker script and no C runtime', async ()
     assert.equal(result.ok, true);
     assert.ok(existsSync(join(root, 'STM32F103C8T6.ld')));
     assert.equal(existsSync(join(root, 'system', 'syscalls.c')), false);
+    assert.ok(existsSync(join(root, 'system', 'clang_runtime.c')));
     const cmake = await readFile(join(root, 'CMakeLists.txt'), 'utf8');
     assert.match(cmake, /"-nostdlib"/);
     assert.match(cmake, /"-fuse-ld=lld"/);
+    assert.match(cmake, /system\/clang_runtime\.c/);
     const startup = await readFile(join(root, 'startup_stm32f103xb.S'), 'utf8');
-    assert.doesNotMatch(startup, /__libc_init_array/);
+    assert.match(startup, /__libc_init_array/);
     const cpp = await readFile(join(root, '.vscode', 'c_cpp_properties.json'), 'utf8');
     assert.match(cpp, /LLVM clang|clang-arm/);
   });

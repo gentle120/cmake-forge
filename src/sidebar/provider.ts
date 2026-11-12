@@ -1190,6 +1190,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
             '未找到 fromelf：工程可以构建出 .elf，但不会生成 .hex/.bin。'
           );
         }
+        if (mcuToolchain?.family === 'clang' && (!mcuToolchain.objcopy || !mcuToolchain.size)) {
+          warnings.push(
+            '未找到 llvm-objcopy/llvm-size：工程可以构建出 .elf，但不会生成 .hex/.bin。'
+          );
+        }
         // An empty device-file set is legitimate for a Pack without a declared
         // device header, but it also silently produces a project without real
         // `SystemInit`; name it so the sidebar explains instead of leaving the

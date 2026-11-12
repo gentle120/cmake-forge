@@ -22,7 +22,8 @@ cmake --build --preset debug
 - **Arm Compiler 6 (armclang / Keil)**：生成 armclang 工具链、`.sct` 分散加载文件、
   armclang 启动文件与 `fromelf` 产物转换；
 - **LLVM clang (arm-none-eabi)**：生成 clang 工具链、`.ld` 链接脚本，使用 LLD 和
-  `-nostdlib`（裸机无 C 运行时），启动文件为不调用 newlib 的 GNU 变体。
+  `-nostdlib`（裸机无 C 运行时），并生成极简 `system/clang_runtime.c` 提供
+  `__libc_init_array`，C++ 静态构造函数可运行。
 
 扫描 `PATH`、Keil、STM32CubeCLT、Program Files、LLVM 目录及工具链环境变量后，
 已检测到的家族显示真实路径并作为默认；未检测到的家族仍可选择，生成结果只写

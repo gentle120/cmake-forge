@@ -66,7 +66,7 @@ function armclangToolchainFile(profile: DeviceProfile): string {
   const cCompiler = profile.mcuCompiler?.trim() || 'armclang';
   const cxxCompiler = profile.mcuCxxCompiler?.trim() || cCompiler;
   const targetFlags = profile.compilerFlags.join(' ');
-  const fromelf = profile.mcuFromelf?.trim() || 'fromelf';
+  const fromelf = profile.mcuFromelf?.trim();
   return `set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 cmake_policy(SET CMP0123 NEW)
@@ -77,7 +77,7 @@ set(CMAKE_ASM_COMPILER "${cCompiler}")
 set(CMAKE_C_COMPILER_TARGET arm-arm-none-eabi)
 set(CMAKE_CXX_COMPILER_TARGET arm-arm-none-eabi)
 set(CMAKE_ASM_COMPILER_TARGET arm-arm-none-eabi)
-set(CMAKE_FROMELF "${fromelf}" CACHE FILEPATH "fromelf executable")
+${fromelf === undefined ? '' : `set(CMAKE_FROMELF "${fromelf}" CACHE FILEPATH "fromelf executable")`}
 set(MCU_TOOLCHAIN_FAMILY armclang CACHE STRING "Compiler family")
 set(CMAKE_EXECUTABLE_SUFFIX ".elf")
 
@@ -147,7 +147,7 @@ set(CMAKE_CXX_FLAGS_DEBUG "-Og -g3")
 set(CMAKE_CXX_FLAGS_RELEASE "-Os -g0")
 set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -g0")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Og -g3")
-set(CMAKE_CXX_FLAGS_INIT "\${TARGET_FLAGS} -Wall -fdata-sections -ffunction-sections -ffreestanding -fno-rtti -fno-exceptions -fno-threadsafe-statics")
+set(CMAKE_CXX_FLAGS_INIT "\${TARGET_FLAGS} -Wall -fdata-sections -ffunction-sections -fno-rtti -fno-exceptions -fno-threadsafe-statics")
 
 # LLD understands the generated GNU linker script; no C runtime is linked.
 set(CMAKE_EXE_LINKER_FLAGS_INIT "\${TARGET_FLAGS} -nostdlib -fuse-ld=lld")
