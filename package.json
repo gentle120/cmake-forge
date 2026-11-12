@@ -2,7 +2,7 @@
   "name": "cmake-forge",
   "displayName": "CMake Forge",
   "description": "Generate ready-to-build CMake projects for ARM Cortex-M MCU firmware (chip data from CMSIS Packs), Linux / SoC cross compilation and desktop C/C++.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "gentle120",
   "repository": {
     "type": "git",

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.1
+
+- MCU 编译链固定提供 armgcc / armclang / LLVM clang 三种：扫描只决定默认项与
+  “已检测/未检测”提示，未检测到的家族仍可选择。
+- 新增 LLVM clang（`--target=arm-none-eabi`、LLD、`-nostdlib`）支持，并生成
+  `system/clang_runtime.c` 让 C++ 静态构造函数可运行；C++ 编译去掉
+  `-ffreestanding` 避免 `main` 被改名。
+- 修复含空格路径、armclang/LLVM C++、fromelf 缺失、跨家族 runtime 等构建问题。
+- 桌面方向改用 CMake Tools Kit 选择编译器，并用 CMake Tools 的 IntelliSense
+  配置提供器；C/C++ 扩展改为推荐安装，VS Code 1.85（Node 18）兼容。
+- 测试 447 项通过。
+
 ## 1.0.0
 
 ### 稳定性与安全修复
