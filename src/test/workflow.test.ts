@@ -565,3 +565,25 @@ test('ATfE clang workflow generates picolibc toolchain and GNU runtime', async (
     assert.ok(existsSync(join(root, 'system', 'clang_runtime.c')));
   });
 });
+
+test('MCU workflow clears a build cache left by the previous compiler', async () => {
+  await withWorkspace(async (root) => {
+    await mkdir(join(root, 'build', 'debug'), { recursive: true });
+    await writeFile(join(root, 'build', 'debug', 'CMakeCache.txt'), [
+      'CMAKE_C_COMPILER:FILEPATH=D:/vs_pkg/community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/cl.exe',
+      'CMAKE_TOOLCHAIN_FILE:UNINITIALIZED=D:/old/cmake/stmicroelectronicsstm32f1_series-toolchain.cmake'
+    ].join('\n'));
+    const result = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), {
+      toolchain: {
+        family: 'clang',
+        variant: 'atfe',
+        cCompiler: 'D:/ATfE/bin/clang.exe',
+        cxxCompiler: 'D:/ATfE/bin/clang++.exe',
+        cCompilerPath: 'D:/ATfE/bin/clang.exe'
+      }
+    });
+    assert.equal(result.ok, true);
+    assert.equal(existsSync(join(root, 'build', 'debug', 'CMakeCache.txt')), false);
+    assert.ok((result.warnings ?? []).some((warning) => warning.includes('旧编译器缓存')));
+  });
+});

@@ -533,6 +533,54 @@ async function missingUmbrellaIncludes(
   return [...new Set(missing)];
 }
 
+/**
+ * CMake keeps the compiler it detected in CMakeCache.txt. When the selected
+ * MCU toolchain changes, a cache from the previous compiler (for example a
+ * Visual Studio kit or an older GCC project) wins over the new toolchain file
+ * and CMake Tools keeps reporting "cl.exe"/"arm-none-eabi-gcc". Drop only the
+ * stale cache state so the next configure starts from the generated toolchain.
+ */
+async function clearStaleMcuBuildCaches(
+  root: string,
+  toolchainPath: string,
+  expectedCompiler: string
+): Promise<string[]> {
+  const cleared: string[] = [];
+  const expectedToolchain = resolve(toolchainPath).replace(/\\/g, '/').toLowerCase();
+  const expectedBasename = basename(expectedCompiler).toLowerCase();
+  for (const configuration of ['debug', 'release']) {
+    const buildDir = join(root, 'build', configuration);
+    const cachePath = join(buildDir, 'CMakeCache.txt');
+    if (!(await exists(cachePath))) {
+      continue;
+    }
+    let content = '';
+    try {
+      content = await readFile(cachePath, 'utf8');
+    } catch {
+      continue;
+    }
+    const cachedToolchain = /^CMAKE_TOOLCHAIN_FILE(?::[^=]+)?=(.+)$/m.exec(content)?.[1]
+      ?.trim()
+      .replace(/\\/g, '/')
+      .toLowerCase();
+    const cachedCompiler = /^CMAKE_C_COMPILER(?::[^=]+)?=(.+)$/m.exec(content)?.[1]
+      ?.trim()
+      .toLowerCase();
+    const toolchainChanged = cachedToolchain !== undefined
+      && resolve(cachedToolchain).replace(/\\/g, '/').toLowerCase() !== expectedToolchain;
+    const compilerChanged = cachedCompiler !== undefined
+      && basename(cachedCompiler).toLowerCase() !== expectedBasename;
+    if (!toolchainChanged && !compilerChanged) {
+      continue;
+    }
+    await rm(cachePath, { force: true });
+    await rm(join(buildDir, 'CMakeFiles'), { recursive: true, force: true });
+    cleared.push(`build/${configuration}`);
+  }
+  return cleared;
+}
+
 export async function generateMcuWorkflow(
   host: ProjectWorkflowHost,
   profile: DeviceProfile,
@@ -764,6 +812,11 @@ export async function generateMcuWorkflow(
   for (const stale of staleGeneratedFiles) {
     await rm(stale, { force: true });
   }
+  const clearedBuildCaches = await clearStaleMcuBuildCaches(
+    root,
+    join(root, 'cmake', effectiveProfile.toolchainFileName),
+    effectiveProfile.mcuCompiler ?? `${effectiveProfile.toolchainPrefix}-gcc`
+  );
   await host.updateSettings(getWorkspaceSettings(), root);
   return {
     kind: 'mcu',
@@ -783,6 +836,9 @@ export async function generateMcuWorkflow(
       }
       if (missingUmbrella.length > 0) {
         warnings.push(`器件头通过厂商配置头引入了外设驱动库（${missingUmbrella.slice(0, 4).join('、')}${missingUmbrella.length > 4 ? '…' : ''}），本插件不复制驱动库：请把厂商驱动目录加入工程 include 路径后再编译。`);
+      }
+      if (clearedBuildCaches.length > 0) {
+        warnings.push(`检测到 ${clearedBuildCaches.join('、')} 里仍是旧编译器缓存，已清理；请重新 Configure，避免继续使用旧的 cl.exe/GCC。`);
       }
       return warnings.length > 0 ? warnings : undefined;
     })(),

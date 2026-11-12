@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.5
+
+- 重新生成 MCU 工程时检查 `build/debug|release/CMakeCache.txt`：如果缓存里的
+  `CMAKE_C_COMPILER` 或 `CMAKE_TOOLCHAIN_FILE` 与本次选择的编译链不一致，自动
+  清除该配置的 cache 与 CMakeFiles，并提示重新 Configure。修复切换 ATfE/STARM/
+  GCC 后 CMake Tools 继续使用旧 `cl.exe`/`arm-none-eabi-gcc` 的问题。
+- ATfE 工具链改用绝对 `clang.exe` 路径并注明 `arm-none-eabi` 是目标三元组；
+  IntelliSense 名称区分 ATfE/STARM/LLVM。
+- 测试 456 项通过。
+
 ## 1.0.4
 
 - ATfE 工具链始终写绝对 `clang.exe` 路径，避免 PATH 上另一个 LLVM 抢先匹配；
