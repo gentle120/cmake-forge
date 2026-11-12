@@ -60,11 +60,13 @@ test('reports an MCU GCC without a C++ driver and deduplicates PATH entries', ()
   assert.equal(discovered.mcu[0].binDir, 'C:/only-c');
 });
 
-test('finds host compilers and MinGW prefixes for desktop projects', () => {
+test('desktop discovery offers only gcc and clang', () => {
   const discovered = discoverBuildToolchains(
     { PATH: 'C:/usr/bin;C:/mingw/bin' },
     fileSystem({
       'C:/usr/bin': ['gcc', 'g++', 'clang', 'clang++', 'python3'],
+      // A MinGW install keeps a prefixed driver too; the portable entry is the
+      // plain `gcc`/`g++` pair, so the prefix is not a separate kit.
       'C:/mingw/bin': ['x86_64-w64-mingw32-gcc.exe', 'x86_64-w64-mingw32-g++.exe']
     }),
     'win32'
@@ -72,13 +74,23 @@ test('finds host compilers and MinGW prefixes for desktop projects', () => {
 
   assert.deepEqual(discovered.native.map((toolchain) => toolchain.id), [
     'native:gcc',
-    'native:clang',
-    'native:x86_64-w64-mingw32'
+    'native:clang'
   ]);
   assert.equal(discovered.native[0].cCompiler, 'gcc');
   assert.equal(discovered.native[0].cxxCompiler, 'g++');
-  assert.equal(discovered.native[2].cCompiler, 'x86_64-w64-mingw32-gcc');
-  assert.equal(discovered.native[2].cxxCompiler, 'x86_64-w64-mingw32-g++');
+  assert.equal(discovered.native[1].cCompiler, 'clang');
+});
+
+test('ignores prefixed-only MinGW drivers without a plain gcc', () => {
+  const discovered = discoverBuildToolchains(
+    { PATH: 'C:/mingw/bin' },
+    fileSystem({
+      'C:/mingw/bin': ['x86_64-w64-mingw32-gcc.exe', 'x86_64-w64-mingw32-g++.exe']
+    }),
+    'win32'
+  );
+
+  assert.deepEqual(discovered.native, []);
 });
 
 test('keeps only the plain driver when MinGW ships both in one bin directory', () => {

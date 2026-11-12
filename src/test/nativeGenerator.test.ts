@@ -67,6 +67,24 @@ test('pins the selected host compiler before project()', () => {
   assert.ok(generated.indexOf('set(CMAKE_C_COMPILER') < generated.indexOf('project('));
 });
 
+test('desktop compiler pinning uses portable driver names, never absolute paths', () => {
+  const structure = describeNativeProject({
+    sources: ['src/main.c'],
+    includeDirs: [],
+    defines: []
+  }, 'portable_tool', {
+    toolchain: { cCompiler: 'gcc', cxxCompiler: 'g++' }
+  });
+
+  const generated = generateNativeCMakeLists(structure);
+  assert.match(generated, /set\(CMAKE_C_COMPILER gcc\)/);
+  assert.match(generated, /set\(CMAKE_CXX_COMPILER g\+\+\)/);
+  // A machine-specific path in a generated desktop project would break every
+  // other machine; only `gcc`/`g++` command names are allowed.
+  assert.doesNotMatch(generated, /[A-Za-z]:[\\/]/);
+  assert.doesNotMatch(generated, /\/usr\/|\/opt\//);
+});
+
 test('leaves compiler detection to CMake without a selection', () => {
   const structure = describeNativeProject({
     sources: ['src/main.c'],

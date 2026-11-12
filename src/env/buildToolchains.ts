@@ -542,16 +542,16 @@ function nativeCompilerLabel(
 }
 
 function nativeCompiler(basename: string): { cCompiler: string; cxxCompiler: string } | undefined {
+  // Desktop projects only offer the two portable driver names. CMake itself
+  // already discovers MinGW/MSVC kits, and writing `gcc`/`clang` keeps the
+  // generated CMakeLists independent of any machine path.
   if (basename === 'gcc') {
     return { cCompiler: 'gcc', cxxCompiler: 'g++' };
   }
   if (basename === 'clang') {
     return { cCompiler: 'clang', cxxCompiler: 'clang++' };
   }
-  const mingw = /^([a-z0-9_]+-w64-mingw32)-gcc$/i.exec(basename);
-  return mingw
-    ? { cCompiler: `${mingw[1]}-gcc`, cxxCompiler: `${mingw[1]}-g++` }
-    : undefined;
+  return undefined;
 }
 
 function mcuLabel(prefix: string): string {
@@ -633,20 +633,7 @@ export function discoverBuildToolchains(
     }
   }
 
-  // A MinGW installation usually ships both `gcc` and `x86_64-w64-mingw32-gcc`
-  // in one `bin` directory; the plain driver is the same compiler, so the
-  // prefixed duplicate is only offered as a fallback when it is the sole entry.
-  const plainDirs = new Set(
-    native
-      .filter((toolchain) => toolchain.cCompiler === 'gcc' || toolchain.cCompiler === 'clang')
-      .map((toolchain) => toolchain.binDir)
-  );
-  return {
-    mcu,
-    native: native.filter((toolchain) =>
-      !(toolchain.cCompiler.endsWith('-w64-mingw32-gcc') && plainDirs.has(toolchain.binDir))
-    )
-  };
+  return { mcu, native };
 }
 
 /** Looks a selection id up; `''` means the automatic/default compiler. */

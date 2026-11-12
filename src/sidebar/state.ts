@@ -673,10 +673,10 @@ function toolchainOptions(
     ...toolchains.map((toolchain) => ({
       value: toolchain.id,
       label: toolchain.label,
-      // CMake Kit style: the label names type/version/target, the hint keeps the
-      // driver and installation directory for disambiguation.
-      description: toolchain.detail,
-      detail: toolchain.cCompilerPath
+      // CMake Kit style: the label names type/version/target; the hint stays a
+      // portable driver name because desktop projects never embed absolute paths.
+      description: toolchain.cCompiler,
+      detail: toolchain.cCompiler
     }))
   ];
 }

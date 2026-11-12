@@ -30,7 +30,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - Keil 安装目录中的已解压 Pack 以目录引用方式导入（`packs.json` 记录元数据但不复制目录）；目录旁存在 `.pack` 时记录其绝对路径，删除导入记录不触碰原目录。
 - `CMAKE_EMBEDDED_SKIP_FIRMWARE_BUILDS=1` 跳过真实固件编译用例；CI（release.yml）默认置位。
 - `.mcu-cmake.json`、`.vscode/launch.json`、`c_cpp_properties.json` 的写入保留用户已有内容（JSONC 解析合并）；三个方向的 `c_cpp_properties.json` 与 settings 编辑共用 `shared/cppPropertiesFile.ts`，CMakePresets 共用 `shared/cmakePresets.ts`。
-- `.linux-cmake.json` 记录所选工具链、输出类型、宏定义与可选 `sysroot`，重新生成时以扫描结果重建工程结构并回读这四项；`sysroot` 非空时工具链文件写 `CMAKE_SYSROOT` 与 `CMAKE_FIND_ROOT_PATH*`（PROGRAM NEVER，其余 ONLY），空值不写任何 sysroot 设置；`.native-cmake.json` 记录目标类型与语言标准，命令面板以保存值为默认选项。MCU 与桌面方向的编译链选择按工作区保存：MCU 只提供 armgcc / armclang 两个家族，未安装的家族不出现在列表里；armgcc 写工具链前缀与命令名，armclang 写绝对 `armclang` 路径、`.sct` 分散加载文件并跳过 newlib 的 `syscalls.c`/`sysmem.c`；桌面把所选编译器命令名写进 `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER`，空选择表示交给 CMake 检测。
+- `.linux-cmake.json` 记录所选工具链、输出类型、宏定义与可选 `sysroot`，重新生成时以扫描结果重建工程结构并回读这四项；`sysroot` 非空时工具链文件写 `CMAKE_SYSROOT` 与 `CMAKE_FIND_ROOT_PATH*`（PROGRAM NEVER，其余 ONLY），空值不写任何 sysroot 设置；`.native-cmake.json` 记录目标类型与语言标准，命令面板以保存值为默认选项。MCU 与桌面方向的编译链选择按工作区保存：MCU 只提供 armgcc / armclang 两个家族，未安装的家族不出现在列表里；armgcc 写工具链前缀与命令名，armclang 写绝对 `armclang` 路径、`.sct` 分散加载文件并跳过 newlib 的 `syscalls.c`/`sysmem.c`；桌面只列 gcc/clang 两项，把可移植命令名 `gcc/g++/clang/clang++` 写进 `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER`，绝不写机器绝对路径；空选择表示交给 CMake 检测。
 
 ## Compatibility
 

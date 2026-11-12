@@ -22,9 +22,10 @@ cmake --build --preset debug
   Arm GNU Toolchain；某个编译器没装就不显示。选 armclang 时生成 armclang
   工具链、`.sct` 分散加载文件、armclang 启动文件与 `fromelf` 产物转换；
   选 armgcc 时生成 GNU 工具链、`.ld` 链接脚本和 GNU 启动文件。
-- 桌面：列出 `PATH` 中的 `gcc`、`clang` 与 MinGW 前缀，写入 CMakeLists 的
-  `CMAKE_C_COMPILER` / `CMAKE_CXX_COMPILER`；「自动」交给 CMake 检测。标签按
-  CMake Kit 风格显示编译器类型、版本和目标三元组（如
+- 桌面：只扫描 `PATH` 中的 `gcc` 与 `clang`（MinGW 的 `gcc` 也走这一项），
+  不单独列前缀变体；写入 CMakeLists 的只有可移植命令名
+  `gcc`/`g++`/`clang`/`clang++`，**不写任何绝对路径**，「自动」交给 CMake
+  检测。标签按 CMake Kit 风格显示编译器类型、版本和目标三元组（如
   `GCC 16.1.0 (x86_64-w64-mingw32)`、`Clang 22`），版本从安装目录读取，
   不执行编译器进程。
 - 选择按工作区保存，生成工程时复用。armclang 工程的调试仍由 Cortex-Debug
