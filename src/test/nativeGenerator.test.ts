@@ -8,6 +8,7 @@ import test from 'node:test';
 import { generateNativeCMakeLists } from '../native/cmakeGenerator';
 import { generateNativeCMakePresets } from '../native/presetsGenerator';
 import { describeNativeProject } from '../native/projectStructure';
+import { configureNativeCppProperties } from '../native/integration';
 import type { ProjectDescription } from '../scanner/projectScanner';
 
 const execFileAsync = promisify(execFile);
@@ -130,4 +131,14 @@ test('generated ordinary C++ project configures and builds with CMake and Ninja'
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('desktop IntelliSense asks CMake Tools for the configuration', () => {
+  const cpp = JSON.parse(configureNativeCppProperties(undefined)) as {
+    configurations: Array<Record<string, unknown>>;
+  };
+  const entry = cpp.configurations[0];
+  assert.equal(entry.configurationProvider, 'ms-vscode.cmake-tools');
+  assert.equal('compileCommands' in entry, false);
+  assert.equal('compilerPath' in entry, false);
 });

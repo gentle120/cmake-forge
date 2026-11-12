@@ -18,4 +18,7 @@ test('desktop settings keep CMake Tools kits usable for compiler selection', asy
   const settings = getNativeWorkspaceSettings();
   assert.equal(settings['cmake.useCMakePresets'], 'never');
   assert.equal(settings['cmake.sourceDirectory'], '${workspaceFolder}');
+  // In kit mode CMake Tools owns the build directory; a pinned compile database
+  // path would point at build/debug, which the IDE does not use.
+  assert.equal('C_Cpp.default.compileCommands' in settings, false);
 });

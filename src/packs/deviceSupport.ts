@@ -329,6 +329,30 @@ function headerIncludeClosure(
   return picked;
 }
 
+/** Recursive relative names; avoids `readdir({ recursive: true })`, which is newer
+ * than the Node runtime shipped with the minimum supported VS Code. */
+async function snapshotFileNames(directory: string): Promise<string[]> {
+  const names: string[] = [];
+  const walk = async (current: string, prefix: string): Promise<void> => {
+    let entries;
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) {
+        await walk(join(current, entry.name), relative);
+      } else if (entry.isFile()) {
+        names.push(relative);
+      }
+    }
+  };
+  await walk(directory, '');
+  return names;
+}
+
 export async function loadDeviceSupportFiles(
   storageRoot: string,
   packFile: string,
@@ -340,7 +364,7 @@ export async function loadDeviceSupportFiles(
   if (!needsRebuild) {
     // A snapshot written by an older filter can still hold files the current one
     // would not keep; rebuild it once.
-    const names = await readdir(snapshot, { recursive: true }).catch(() => [] as string[]);
+    const names = await snapshotFileNames(snapshot);
     needsRebuild = names.some((name) => /\.(h|c)$/i.test(name) && !isDeviceSupportEntry(name.replace(/\\/g, '/')));
   }
   if (needsRebuild) {

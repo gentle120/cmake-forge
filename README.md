@@ -91,7 +91,8 @@ cmake --build --preset debug
 
 ## 环境要求
 
-VS Code 1.85+、CMake Tools、C/C++、CMake ≥ 3.22、Ninja。
+VS Code 1.85+、CMake Tools、CMake ≥ 3.22、Ninja；C/C++ 扩展推荐安装
+（不装也能生成工程，只是没有 IntelliSense 集成）。
 MCU 另需 Cortex-Debug、OpenOCD，以及 Arm GNU Toolchain（`arm-none-eabi-gcc`）或
 Keil MDK 的 Arm Compiler 6（`armclang`）之一；Linux 另需对应前缀的 `gcc`/`g++`。
 

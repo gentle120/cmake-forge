@@ -30,8 +30,7 @@
     "firmware"
   ],
   "extensionDependencies": [
-    "ms-vscode.cmake-tools",
-    "ms-vscode.cpptools"
+    "ms-vscode.cmake-tools"
   ],
   "main": "./out/extension.js",
   "icon": "images/icon.png",
