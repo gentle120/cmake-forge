@@ -556,80 +556,57 @@ test('trims the persisted Linux sysroot', () => {
   assert.equal(cleared.linux.sysroot, '');
 });
 
-const discoveredToolchains = {
-  mcu: [{
-    id: 'mcu:gcc',
-    direction: 'mcu' as const,
-    family: 'gcc' as const,
-    prefix: 'arm-none-eabi',
-    cCompiler: 'arm-none-eabi-gcc',
-    cxxCompiler: 'arm-none-eabi-g++',
-    cCompilerPath: 'C:/arm/bin/arm-none-eabi-gcc.exe',
-    onPath: true,
-    binDir: 'C:/arm/bin',
-    label: 'Arm GNU Toolchain (arm-none-eabi)',
-    detail: 'C:/arm/bin'
-  }],
-  native: [{
-    id: 'native:gcc',
-    direction: 'native' as const,
-    prefix: '',
-    cCompiler: 'gcc',
-    cxxCompiler: 'g++',
-    cCompilerPath: 'C:/mingw/bin/gcc.exe',
-    onPath: true,
-    binDir: 'C:/mingw/bin',
-    label: '本机 GCC',
-    detail: 'gcc — C:/mingw/bin'
-  }]
-};
+const mcuToolchains = [{
+  id: 'mcu:gcc',
+  direction: 'mcu' as const,
+  family: 'gcc' as const,
+  prefix: 'arm-none-eabi',
+  cCompiler: 'arm-none-eabi-gcc',
+  cxxCompiler: 'arm-none-eabi-g++',
+  cCompilerPath: 'C:/arm/bin/arm-none-eabi-gcc.exe',
+  onPath: true,
+  binDir: 'C:/arm/bin',
+  label: 'Arm GNU Toolchain (arm-none-eabi)',
+  detail: 'C:/arm/bin'
+}];
 
-test('offers discovered compiler toolchains for MCU and desktop', () => {
+test('offers discovered MCU compiler toolchains', () => {
   const selection = sanitizeSidebarSelection(
     {
       mode: 'native',
-      mcu: { buildToolchain: 'mcu:gcc' },
-      native: { buildToolchain: 'native:gcc' }
+      mcu: { buildToolchain: 'mcu:gcc' }
     },
     undefined,
     [],
     false,
-    discoveredToolchains
+    mcuToolchains
   );
   assert.equal(selection.mcu.buildToolchain, 'mcu:gcc');
-  assert.equal(selection.native.buildToolchain, 'native:gcc');
 
   const state = buildSidebarState(
-    'demo', selection, [], [], '', false, [], '', undefined, '', '', [], discoveredToolchains
+    'demo', selection, [], [], '', false, [], '', undefined, '', '', [], mcuToolchains
   );
   assert.deepEqual(
     state.mcuToolchains.map((option) => option.value),
     ['mcu:gcc']
   );
-  assert.deepEqual(
-    state.nativeToolchains.map((option) => option.value),
-    ['', 'native:gcc']
-  );
   assert.equal(state.selection.mcu.buildToolchain, 'mcu:gcc');
-  assert.equal(state.selection.native.buildToolchain, 'native:gcc');
 });
 
 test('drops a toolchain selection that is no longer installed', () => {
   const selection = sanitizeSidebarSelection(
     {
       mode: 'mcu',
-      mcu: { buildToolchain: 'mcu:armclang' },
-      native: { buildToolchain: 'native:clang' }
+      mcu: { buildToolchain: 'mcu:armclang' }
     },
     undefined,
     [],
     false,
-    discoveredToolchains
+    mcuToolchains
   );
   // MCU always has a concrete family once discovery found one, so a stale id
   // falls back to the first installed compiler instead of an empty selection.
   assert.equal(selection.mcu.buildToolchain, 'mcu:gcc');
-  assert.equal(selection.native.buildToolchain, '');
 });
 
 test('keeps a persisted toolchain id before discovery has run', () => {

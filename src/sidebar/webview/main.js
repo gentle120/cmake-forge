@@ -505,15 +505,13 @@
     const standards = document.createElement('div');
     standards.className = 'target-grid';
     standards.append(cStandard.wrapper, cxxStandard.wrapper);
-    const toolchain = createSelectField('编译链', (value) => {
-      if (!state) return;
-      saveSelection({
-        ...state.selection,
-        native: { ...state.selection.native, buildToolchain: value }
-      });
-    });
-    const toolchainNote = paragraph('field-detail', '');
-    section.append(targetType.wrapper, standards, toolchain.wrapper, toolchainNote);
+    // Desktop compilers are detected by CMake Tools / CMake itself; the plugin
+    // deliberately offers no compiler picker.
+    const compilerNote = paragraph(
+      'empty-note',
+      '编译器由 CMake Tools 自动检测，无需在这里选择。'
+    );
+    section.append(targetType.wrapper, standards, compilerNote);
     panel.append(section);
     panel.append(paragraph(
       'empty-note',
@@ -523,9 +521,7 @@
       panel,
       targetType: targetType.select,
       cStandard: cStandard.select,
-      cxxStandard: cxxStandard.select,
-      toolchain: toolchain.select,
-      toolchainNote
+      cxxStandard: cxxStandard.select
     };
     return nativePanel;
   }
@@ -549,10 +545,6 @@
       { value: '20', label: 'C++20' },
       { value: '23', label: 'C++23' }
     ], String(selection.cxxStandard));
-    applyOptions(panel.toolchain, state.nativeToolchains, selection.buildToolchain);
-    const toolchain = selectedOption(state.nativeToolchains, selection.buildToolchain);
-    panel.toolchainNote.textContent = toolchain?.description || '';
-    panel.toolchainNote.hidden = !panel.toolchainNote.textContent;
     return panel.panel;
   }
 

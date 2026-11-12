@@ -23,7 +23,7 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 | `src/flash/` | 烧录探针、target、后端注册表 | devices 档案（经 debugTarget 桥） | 调用外部进程 |
 | `src/scanner/` | 工作区源码/头文件/宏扫描 | vendorRegistry（宏前缀） | — |
 | `src/sidebar/` + `src/extension.ts` | 命令/QuickPick/Webview 交互层、状态持久化 | 全部下层注册表 API | 生成逻辑 |
-| `src/linux/`、`src/native/` | 独立的 Linux 交叉与桌面方向 | — | MCU 芯片数据 |
+| `src/linux/`、`src/native/` | 独立的 Linux 交叉与桌面方向；桌面编译器由 CMake Tools 检测 | — | MCU 芯片数据 |
 
 ## Dependency Direction
 

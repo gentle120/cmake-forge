@@ -12,13 +12,11 @@
 - Linux：loongarch64 / aarch64 / armv7hf / riscv64 交叉工具链，可选 `CMAKE_SYSROOT`。
 - 桌面：本机工具链，可执行文件 / 静态库 / 动态库。
 - 侧栏按厂商→系列→Pack→版本→型号向导式生成，生成文件以树形展示。
-- 桌面编译链只扫描 PATH 中的 gcc/clang，下拉按 CMake Kit 风格显示类型、版本
-  与目标三元组（`GCC 16.1.0 (x86_64-w64-mingw32)`、`Clang 22`）；生成文件只写
-  `gcc/g++/clang/clang++` 命令名，不含绝对路径。
+- 桌面方向移除编译链选择：编译器由 CMake Tools / CMake 自动检测，生成的
+  CMakeLists 不写 `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER`，工程不绑定机器路径。
 - 编译链选择：MCU 提供 Arm GNU Toolchain (armgcc) 与 Arm Compiler 6
   (armclang) 两种，扫描 PATH/Keil/STM32CubeCLT/Program Files，未安装的家族不
   显示；armclang 生成 `.sct` 分散加载文件、armclang 启动文件与 fromelf 转换，
-  armgcc 保持 GNU 工具链与 `.ld` 链接脚本。桌面方向列出 PATH 中的
-  gcc/clang/MinGW。选择按工作区保存。
+  armgcc 保持 GNU 工具链与 `.ld` 链接脚本。选择按工作区保存。
 - Pack 解析支持 Zip64、`<variant>` 型号、`name=` 内存区、启动向量注释、
   器件头选择宏推导、非整 KiB 链接区大小等厂商差异。

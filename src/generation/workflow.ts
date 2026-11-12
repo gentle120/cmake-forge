@@ -859,8 +859,7 @@ export async function generateNativeWorkflow(
         includeDirs: structure.includeDirs,
         defines: structure.defines,
         cStandard: structure.cStandard,
-        cxxStandard: structure.cxxStandard,
-        toolchain: structure.toolchain ?? null
+        cxxStandard: structure.cxxStandard
       },
       defines: structure.defines,
       generatedFiles: [

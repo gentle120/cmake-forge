@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  discoverBuildToolchains,
   discoverMcuBuildToolchains,
   findBuildToolchain,
   type BuildToolchainFileSystem
@@ -19,9 +18,9 @@ function fileSystem(tree: Record<string, string[]>): BuildToolchainFileSystem {
   };
 }
 
-test('finds ARM bare-metal GCC installations on PATH', () => {
-  const discovered = discoverBuildToolchains(
-    { PATH: 'C:/arm/bin;C:/zephyr/bin;C:/linux-cross/bin' },
+test('finds the Arm GNU Toolchain on PATH for MCU projects', () => {
+  const discovered = discoverMcuBuildToolchains(
+    { PATH: 'C:/arm/bin;C:/zephyr/bin;C:/linux-cross/bin', SystemDrive: 'C:' },
     fileSystem({
       'C:/arm/bin': ['arm-none-eabi-gcc.exe', 'arm-none-eabi-g++.exe', 'arm-none-eabi-gdb.exe'],
       'C:/zephyr/bin': ['arm-zephyr-eabi-gcc', 'arm-zephyr-eabi-g++'],
@@ -30,23 +29,19 @@ test('finds ARM bare-metal GCC installations on PATH', () => {
     'win32'
   );
 
-  assert.deepEqual(discovered.mcu.map((toolchain) => toolchain.id), [
-    'mcu:arm-none-eabi',
-    'mcu:arm-zephyr-eabi'
-  ]);
-  const arm = discovered.mcu[0];
+  assert.deepEqual(discovered.map((toolchain) => toolchain.id), ['mcu:gcc']);
+  const arm = discovered[0];
   assert.equal(arm.prefix, 'arm-none-eabi');
   assert.equal(arm.cCompiler, 'arm-none-eabi-gcc');
   assert.equal(arm.cxxCompiler, 'arm-none-eabi-g++');
   assert.equal(arm.binDir, 'C:/arm/bin');
-  assert.equal(arm.label, 'Arm GNU Toolchain (arm-none-eabi)');
-  // A Linux cross compiler is not an MCU toolchain.
+  // Zephyr/Linux cross compilers are not offered as the MCU family.
   assert.ok(!arm.id.includes('linux'));
 });
 
-test('reports an MCU GCC without a C++ driver and deduplicates PATH entries', () => {
-  const discovered = discoverBuildToolchains(
-    { PATH: 'C:/only-c;C:/arm;C:/arm' },
+test('reports the first PATH hit and deduplicates the MCU family', () => {
+  const discovered = discoverMcuBuildToolchains(
+    { PATH: 'C:/only-c;C:/arm;C:/arm', SystemDrive: 'C:' },
     fileSystem({
       'C:/only-c': ['arm-none-eabi-gcc'],
       'C:/arm': ['arm-none-eabi-gcc', 'arm-none-eabi-g++']
@@ -54,77 +49,10 @@ test('reports an MCU GCC without a C++ driver and deduplicates PATH entries', ()
     'win32'
   );
 
-  assert.equal(discovered.mcu.length, 1);
-  assert.equal(discovered.mcu[0].cxxCompiler, undefined);
-  // The first PATH hit wins, matching how the shell would resolve `gcc`.
-  assert.equal(discovered.mcu[0].binDir, 'C:/only-c');
-});
-
-test('desktop discovery offers only gcc and clang', () => {
-  const discovered = discoverBuildToolchains(
-    { PATH: 'C:/usr/bin;C:/mingw/bin' },
-    fileSystem({
-      'C:/usr/bin': ['gcc', 'g++', 'clang', 'clang++', 'python3'],
-      // A MinGW install keeps a prefixed driver too; the portable entry is the
-      // plain `gcc`/`g++` pair, so the prefix is not a separate kit.
-      'C:/mingw/bin': ['x86_64-w64-mingw32-gcc.exe', 'x86_64-w64-mingw32-g++.exe']
-    }),
-    'win32'
-  );
-
-  assert.deepEqual(discovered.native.map((toolchain) => toolchain.id), [
-    'native:gcc',
-    'native:clang'
-  ]);
-  assert.equal(discovered.native[0].cCompiler, 'gcc');
-  assert.equal(discovered.native[0].cxxCompiler, 'g++');
-  assert.equal(discovered.native[1].cCompiler, 'clang');
-});
-
-test('ignores prefixed-only MinGW drivers without a plain gcc', () => {
-  const discovered = discoverBuildToolchains(
-    { PATH: 'C:/mingw/bin' },
-    fileSystem({
-      'C:/mingw/bin': ['x86_64-w64-mingw32-gcc.exe', 'x86_64-w64-mingw32-g++.exe']
-    }),
-    'win32'
-  );
-
-  assert.deepEqual(discovered.native, []);
-});
-
-test('keeps only the plain driver when MinGW ships both in one bin directory', () => {
-  const discovered = discoverBuildToolchains(
-    { PATH: 'C:/mingw/bin' },
-    fileSystem({
-      'C:/mingw/bin': ['gcc.exe', 'g++.exe', 'x86_64-w64-mingw32-gcc.exe', 'x86_64-w64-mingw32-g++.exe']
-    }),
-    'win32'
-  );
-
-  assert.deepEqual(discovered.native.map((toolchain) => toolchain.cCompiler), ['gcc']);
-});
-
-test('survives unreadable PATH entries and empty environments', () => {
-  const discovered = discoverBuildToolchains(
-    { PATH: 'C:/missing;C:/arm/bin' },
-    fileSystem({ 'C:/arm/bin': [] }),
-    'win32'
-  );
-  assert.deepEqual(discovered, { mcu: [], native: [] });
-  assert.deepEqual(discoverBuildToolchains({}, fileSystem({})), { mcu: [], native: [] });
-});
-
-test('resolves a selection id back to its toolchain', () => {
-  const discovered = discoverBuildToolchains(
-    { PATH: '/arm/bin' },
-    fileSystem({ '/arm/bin': ['arm-none-eabi-gcc', 'arm-none-eabi-g++'] }),
-    'linux'
-  );
-
-  assert.equal(findBuildToolchain(discovered, 'mcu', '')?.id, undefined);
-  assert.equal(findBuildToolchain(discovered, 'mcu', 'mcu:arm-none-eabi')?.prefix, 'arm-none-eabi');
-  assert.equal(findBuildToolchain(discovered, 'mcu', 'mcu:unknown'), undefined);
+  assert.equal(discovered.length, 1);
+  assert.equal(discovered[0].cxxCompiler, undefined);
+  // The first PATH hit wins, matching how the shell would resolve the driver.
+  assert.equal(discovered[0].binDir, 'C:/only-c');
 });
 
 test('finds armclang in Keil and GCC on PATH for the MCU families', () => {
@@ -259,32 +187,13 @@ test('off-PATH GCC keeps absolute objcopy/size for builds without PATH setup', (
   assert.match(discovered[0].size ?? '', /arm-none-eabi-size\.exe$/);
 });
 
-test('labels native compilers like CMake kits using the install layout', () => {
-  const discovered = discoverBuildToolchains(
-    { PATH: 'C:/mingw/bin;C:/llvm/bin' },
-    fileSystem({
-      'C:/mingw/bin': ['gcc.exe', 'g++.exe', 'x86_64-w64-mingw32-gcc.exe'],
-      'C:/mingw/lib/gcc': ['x86_64-w64-mingw32'],
-      'C:/mingw/lib/gcc/x86_64-w64-mingw32': ['16.1.0'],
-      'C:/llvm/bin': ['clang.exe', 'clang++.exe'],
-      'C:/llvm/lib/clang': ['22']
-    }),
-    'win32'
+test('resolves an MCU selection id back to its toolchain', () => {
+  const discovered = discoverMcuBuildToolchains(
+    { PATH: '/arm/bin' },
+    fileSystem({ '/arm/bin': ['arm-none-eabi-gcc'] }),
+    'linux'
   );
-
-  assert.equal(discovered.native[0].label, 'GCC 16.1.0 (x86_64-w64-mingw32)');
-  assert.equal(discovered.native[0].version, '16.1.0');
-  assert.equal(discovered.native[0].target, 'x86_64-w64-mingw32');
-  assert.equal(discovered.native[1].label, 'Clang 22');
-  assert.equal(discovered.native[1].version, '22');
-});
-
-test('falls back to a plain compiler name when the layout is unknown', () => {
-  const discovered = discoverBuildToolchains(
-    { PATH: 'C:/custom/bin' },
-    fileSystem({ 'C:/custom/bin': ['gcc.exe'] }),
-    'win32'
-  );
-
-  assert.equal(discovered.native[0].label, 'GCC');
+  assert.equal(findBuildToolchain(discovered, '')?.id, undefined);
+  assert.equal(findBuildToolchain(discovered, 'mcu:gcc')?.prefix, 'arm-none-eabi');
+  assert.equal(findBuildToolchain(discovered, 'mcu:unknown'), undefined);
 });

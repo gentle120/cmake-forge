@@ -51,41 +51,7 @@ target_link_libraries(\${CMAKE_PROJECT_NAME} PRIVATE fmt::fmt)
   assert.doesNotMatch(generated, /arm-none-eabi|startup_|\.ld/);
 });
 
-test('pins the selected host compiler before project()', () => {
-  const structure = describeNativeProject({
-    sources: ['src/main.c'],
-    includeDirs: [],
-    defines: []
-  }, 'clang_tool', {
-    toolchain: { cCompiler: 'clang', cxxCompiler: 'clang++' }
-  });
-
-  const generated = generateNativeCMakeLists(structure);
-  assert.match(generated, /set\(CMAKE_C_COMPILER clang\)/);
-  assert.match(generated, /set\(CMAKE_CXX_COMPILER clang\+\+\)/);
-  // Compilers must be chosen before the project() call enables languages.
-  assert.ok(generated.indexOf('set(CMAKE_C_COMPILER') < generated.indexOf('project('));
-});
-
-test('desktop compiler pinning uses portable driver names, never absolute paths', () => {
-  const structure = describeNativeProject({
-    sources: ['src/main.c'],
-    includeDirs: [],
-    defines: []
-  }, 'portable_tool', {
-    toolchain: { cCompiler: 'gcc', cxxCompiler: 'g++' }
-  });
-
-  const generated = generateNativeCMakeLists(structure);
-  assert.match(generated, /set\(CMAKE_C_COMPILER gcc\)/);
-  assert.match(generated, /set\(CMAKE_CXX_COMPILER g\+\+\)/);
-  // A machine-specific path in a generated desktop project would break every
-  // other machine; only `gcc`/`g++` command names are allowed.
-  assert.doesNotMatch(generated, /[A-Za-z]:[\\/]/);
-  assert.doesNotMatch(generated, /\/usr\/|\/opt\//);
-});
-
-test('leaves compiler detection to CMake without a selection', () => {
+test('leaves the compiler entirely to CMake Tools / CMake detection', () => {
   const structure = describeNativeProject({
     sources: ['src/main.c'],
     includeDirs: [],
@@ -93,7 +59,12 @@ test('leaves compiler detection to CMake without a selection', () => {
   }, 'auto_tool');
 
   const generated = generateNativeCMakeLists(structure);
+  // The desktop direction must not pin a compiler: CMake Tools scans the host
+  // and selects the kit, and the generated project stays portable.
   assert.doesNotMatch(generated, /set\(CMAKE_C_COMPILER/);
+  assert.doesNotMatch(generated, /set\(CMAKE_CXX_COMPILER/);
+  assert.doesNotMatch(generated, /[A-Za-z]:[\\/]/);
+  assert.match(generated, /project\(/);
 });
 
 test('generates native debug and release presets', () => {

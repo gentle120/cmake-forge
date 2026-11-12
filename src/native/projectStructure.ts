@@ -1,5 +1,5 @@
 import type { ProjectDescription } from '../scanner/projectScanner';
-import type { NativeProjectStructure, NativeTargetType, NativeToolchain } from './types';
+import type { NativeProjectStructure, NativeTargetType } from './types';
 
 export function describeNativeProject(
   project: ProjectDescription,
@@ -9,7 +9,6 @@ export function describeNativeProject(
     defines?: string[];
     cStandard?: number;
     cxxStandard?: number;
-    toolchain?: NativeToolchain;
   } = {}
 ): NativeProjectStructure {
   return {
@@ -19,7 +18,6 @@ export function describeNativeProject(
     targetName,
     targetType: options.targetType ?? 'executable',
     cStandard: options.cStandard ?? 11,
-    cxxStandard: options.cxxStandard ?? 17,
-    ...(options.toolchain === undefined ? {} : { toolchain: options.toolchain })
+    cxxStandard: options.cxxStandard ?? 17
   };
 }

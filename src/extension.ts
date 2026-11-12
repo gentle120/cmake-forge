@@ -31,7 +31,6 @@ import {
 } from './devices/importedProfiles';
 import { defaultScanRoots, listKeilPacks } from './env/toolchainScanner';
 import {
-  discoverBuildToolchains,
   discoverMcuBuildToolchains,
   findBuildToolchain,
   type BuildToolchain
@@ -1174,8 +1173,7 @@ async function selectFlashBackend(
 function selectedMcuBuildToolchain(): BuildToolchain | undefined {
   const id = activeSidebar?.selection().mcu.buildToolchain ?? '';
   const mcu = discoverMcuBuildToolchains();
-  const selected = findBuildToolchain({ mcu, native: [] }, 'mcu', id) ?? mcu[0];
-  return selected;
+  return findBuildToolchain(mcu, id) ?? mcu[0];
 }
 
 function mcuToolchainSelection(
@@ -1366,47 +1364,16 @@ async function generateNativeProject(): Promise<void> {
   if (!standardSelection) {
     return;
   }
-  const discoveredNative = discoverBuildToolchains().native;
-  const savedCompiler = saved?.toolchain?.cCompiler;
-  const nativeToolchainItems = [
-    { label: '自动（CMake 检测）', description: '让 CMake 在当前环境中挑选编译器', id: '' },
-    ...discoveredNative.map((toolchain) => ({
-      label: toolchain.label,
-      description: toolchain.detail,
-      id: toolchain.id
-    }))
-  ];
-  const savedId = savedCompiler
-    ? `native:${savedCompiler.replace(/-gcc$/, '')}`
-    : '';
-  const orderedToolchains = savedId
-    ? [...nativeToolchainItems].sort((left, right) =>
-        left.id === savedId ? -1 : right.id === savedId ? 1 : 0)
-    : nativeToolchainItems;
-  const toolchainSelection = await vscode.window.showQuickPick(orderedToolchains, {
-    placeHolder: '选择本机编译链（可直接选「自动」交给 CMake）'
-  });
-  if (!toolchainSelection) {
-    return;
-  }
-  const nativeToolchain = findBuildToolchain(
-    { mcu: [], native: discoveredNative },
-    'native',
-    toolchainSelection.id
-  );
+  // The desktop direction does not pin a compiler: CMake Tools (or plain CMake)
+  // scans the host environment and picks the kit. The generator only writes the
+  // portable CMake code.
   const structure = describeNativeProject(
     project,
     projectNameFromRoot(root),
     {
       targetType: selection.value,
       cStandard: standardSelection.cStandard,
-      cxxStandard: standardSelection.cxxStandard,
-      ...(nativeToolchain === undefined ? {} : {
-        toolchain: {
-          cCompiler: nativeToolchain.cCompiler,
-          ...(nativeToolchain.cxxCompiler ? { cxxCompiler: nativeToolchain.cxxCompiler } : {})
-        }
-      })
+      cxxStandard: standardSelection.cxxStandard
     }
   );
   reportWorkflowResult(await generateNativeWorkflow(createWorkflowHost(root), structure));

@@ -14,14 +14,14 @@
 
 import { readdirSync } from 'node:fs';
 
-export type BuildToolchainDirection = 'mcu' | 'native';
+export type BuildToolchainDirection = 'mcu';
 export type McuToolchainFamily = 'gcc' | 'armclang';
 
 export interface BuildToolchain {
   /** Stable selection id: `mcu:gcc`, `mcu:armclang`, `native:gcc`. */
   id: string;
   direction: BuildToolchainDirection;
-  /** MCU family; undefined for host compilers. */
+  /** MCU compiler family. */
   family?: McuToolchainFamily;
   /** GCC prefix (`arm-none-eabi`); empty for armclang and host compilers. */
   prefix: string;
@@ -36,20 +36,11 @@ export interface BuildToolchain {
   /** Absolute objcopy/size paths when the GCC toolchain is not on PATH. */
   objcopy?: string;
   size?: string;
-  /** Compiler version when it can be read from the installation layout. */
-  version?: string;
-  /** Target triple for GCC/MinGW (`x86_64-w64-mingw32`). */
-  target?: string;
   /** True when `binDir` is a `PATH` entry, so command names are portable. */
   onPath: boolean;
   binDir: string;
   label: string;
   detail: string;
-}
-
-export interface DiscoveredBuildToolchains {
-  mcu: BuildToolchain[];
-  native: BuildToolchain[];
 }
 
 export interface BuildToolchainFileSystem {
@@ -342,7 +333,7 @@ function mcuGccToolchain(
   directory: string,
   onPath: boolean,
   compilerPath: string,
-  cxxPath: string,
+  cxxPath: string | undefined,
   objcopyPath: string | undefined,
   sizePath: string | undefined
 ): BuildToolchain | undefined {
@@ -352,7 +343,9 @@ function mcuGccToolchain(
     family: 'gcc',
     prefix: 'arm-none-eabi',
     cCompiler: onPath ? 'arm-none-eabi-gcc' : compilerPath,
-    cxxCompiler: onPath ? 'arm-none-eabi-g++' : cxxPath,
+    ...(cxxPath === undefined
+      ? {}
+      : { cxxCompiler: onPath ? 'arm-none-eabi-g++' : cxxPath }),
     cCompilerPath: compilerPath,
     ...(onPath || objcopyPath === undefined ? {} : { objcopy: objcopyPath }),
     ...(onPath || sizePath === undefined ? {} : { size: sizePath }),
@@ -409,9 +402,7 @@ export function discoverMcuBuildToolchains(
     if (compilerPath === undefined) {
       continue;
     }
-    const cxxPath = compilerPath.endsWith('.exe')
-      ? compilerPath.replace(/-gcc\.exe$/i, '-g++.exe')
-      : compilerPath.replace(/-gcc$/i, '-g++');
+    const cxxPath = probeCompiler(fileSystem, directory, 'arm-none-eabi-g++');
     const objcopyPath = probeCompiler(fileSystem, directory, 'arm-none-eabi-objcopy');
     const sizePath = probeCompiler(fileSystem, directory, 'arm-none-eabi-size');
     gcc = mcuGccToolchain(
@@ -444,206 +435,13 @@ export function discoverMcuBuildToolchains(
   return [gcc, armclang].filter((toolchain): toolchain is BuildToolchain => toolchain !== undefined);
 }
 
-/** `arm-none-eabi-` from `arm-none-eabi-gcc`; undefined for a host compiler. */
-function mcuPrefix(basename: string): string | undefined {
-  if (!basename.toLowerCase().endsWith('-gcc')) {
-    return undefined;
-  }
-  const prefix = basename.slice(0, -'gcc'.length);
-  return /^arm[a-z0-9]*-.*eabi-$/i.test(prefix) ? prefix : undefined;
-}
-
-
-/** Parent directory of a normalized forward-slash path. */
-function parentDirectory(directory: string): string {
-  const normalized = directory.replace(/\\/g, '/').replace(/\/+$/, '');
-  const slash = normalized.lastIndexOf('/');
-  return slash <= 0 ? normalized : normalized.slice(0, slash);
-}
-
-function numericChildren(
-  fileSystem: BuildToolchainFileSystem,
-  directory: string
-): string[] {
-  return readChildren(fileSystem, directory)
-    .filter((child) => /^\d+(\.\d+)*$/.test(child))
-    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
-}
-
-/**
- * Compiler identity the way CMake Tools labels a kit (`GCC 16.1.0
- * (x86_64-w64-mingw32)`), read from the installation layout without executing
- * the compiler:
- *
- * - MinGW keeps the version under `lib/gcc/<triple>/<version>`;
- * - LLVM keeps `lib/clang/<major>`;
- * - the target triple comes from a prefixed driver (`x86_64-w64-mingw32-gcc`)
- *   or from `lib/gcc/<triple>`.
- */
-function nativeCompilerIdentity(
-  fileSystem: BuildToolchainFileSystem,
-  binDir: string,
-  basename: string,
-  listing: DirectoryListing
-): { version?: string; target?: string } {
-  const root = parentDirectory(binDir);
-  const normalized = basename.toLowerCase();
-  if (normalized === 'gcc' || normalized.endsWith('-gcc')) {
-    let target = /^(.+)-gcc$/.exec(normalized)?.[1];
-    if (target === undefined) {
-      const prefixed = [...listing.names]
-        .map((name) => /^(.+)-gcc$/i.exec(name)?.[1])
-        .find((candidate) => candidate !== undefined && /-w64-mingw32$|-linux-gnu$|-apple-darwin$/.test(candidate));
-      target = prefixed?.toLowerCase();
-    }
-    const gccRoot = `${root}/lib/gcc`;
-    const gccTargets = target === undefined ? readChildren(fileSystem, gccRoot) : [target];
-    if (target === undefined && gccTargets.length === 1) {
-      target = gccTargets[0];
-    }
-    for (const candidate of gccTargets) {
-      const versions = numericChildren(fileSystem, `${gccRoot}/${candidate}`);
-      if (versions.length > 0) {
-        return { version: versions[versions.length - 1], target: candidate };
-      }
-    }
-    const libexecRoot = `${root}/libexec/gcc`;
-    const libexecTargets = target === undefined ? readChildren(fileSystem, libexecRoot) : [target];
-    for (const candidate of libexecTargets) {
-      const versions = numericChildren(fileSystem, `${libexecRoot}/${candidate}`);
-      if (versions.length > 0) {
-        return { version: versions[versions.length - 1], target: candidate };
-      }
-    }
-    // Windows LLVM-MinGW style: `lib/gcc/<version>` without a triple level.
-    for (const candidate of gccTargets) {
-      const versions = numericChildren(fileSystem, `${gccRoot}/${candidate}`);
-      if (versions.length > 0) {
-        return { version: versions[versions.length - 1], target };
-      }
-    }
-    return { target };
-  }
-  if (normalized === 'clang' || normalized.endsWith('-clang')) {
-    const versions = numericChildren(fileSystem, `${root}/lib/clang`);
-    return versions.length === 0 ? {} : { version: versions[versions.length - 1] };
-  }
-  return {};
-}
-
-function nativeCompilerLabel(
-  family: 'gcc' | 'clang',
-  identity: { version?: string; target?: string }
-): string {
-  const name = family === 'gcc' ? 'GCC' : 'Clang';
-  const version = identity.version === undefined ? '' : ` ${identity.version}`;
-  const target = identity.target === undefined ? '' : ` (${identity.target})`;
-  return `${name}${version}${target}`.trim();
-}
-
-function nativeCompiler(basename: string): { cCompiler: string; cxxCompiler: string } | undefined {
-  // Desktop projects only offer the two portable driver names. CMake itself
-  // already discovers MinGW/MSVC kits, and writing `gcc`/`clang` keeps the
-  // generated CMakeLists independent of any machine path.
-  if (basename === 'gcc') {
-    return { cCompiler: 'gcc', cxxCompiler: 'g++' };
-  }
-  if (basename === 'clang') {
-    return { cCompiler: 'clang', cxxCompiler: 'clang++' };
-  }
-  return undefined;
-}
-
-function mcuLabel(prefix: string): string {
-  const trimmed = prefix.endsWith('-') ? prefix.slice(0, -1) : prefix;
-  if (trimmed === 'arm-none-eabi') {
-    return 'Arm GNU Toolchain (arm-none-eabi)';
-  }
-  const vendor = /^arm-(.+?)-eabi$/.exec(trimmed);
-  return vendor ? `ARM EABI (${vendor[1]})` : trimmed;
-}
-
-
-/**
- * Finds every usable compiler toolchain on `PATH`.
- *
- * Results keep `PATH` order and are deduplicated by compiler name, so the first
- * installation wins when the same compiler appears in several directories.
- */
-export function discoverBuildToolchains(
-  environment: NodeJS.ProcessEnv = process.env,
-  fileSystem: BuildToolchainFileSystem = defaultFileSystem,
-  platform: NodeJS.Platform = process.platform
-): DiscoveredBuildToolchains {
-  const mcu: BuildToolchain[] = [];
-  const native: BuildToolchain[] = [];
-  const seenMcu = new Set<string>();
-  const seenNative = new Set<string>();
-
-  for (const directory of environmentPathEntries(environment, platform)) {
-    const listing = listDirectory(fileSystem, directory);
-    for (const name of listing.names) {
-      const rawPrefix = mcuPrefix(name);
-      if (rawPrefix !== undefined) {
-        const prefix = rawPrefix.slice(0, -1);
-        if (seenMcu.has(prefix)) {
-          continue;
-        }
-        seenMcu.add(prefix);
-        const cCompiler = `${prefix}-gcc`;
-        const cxxCompiler = `${prefix}-g++`;
-        mcu.push({
-          id: `mcu:${prefix}`,
-          direction: 'mcu',
-          family: 'gcc',
-          prefix,
-          cCompiler,
-          ...(listing.names.has(cxxCompiler) ? { cxxCompiler } : {}),
-          cCompilerPath: `${joinPath(directory, cCompiler)}.exe`,
-          onPath: true,
-          binDir: directory,
-          label: mcuLabel(rawPrefix),
-          detail: directory
-        });
-        continue;
-      }
-      const host = nativeCompiler(name);
-      if (host === undefined || seenNative.has(host.cCompiler)) {
-        continue;
-      }
-      const identity = nativeCompilerIdentity(fileSystem, directory, name, listing);
-      seenNative.add(host.cCompiler);
-      native.push({
-        id: `native:${host.cCompiler.replace(/-gcc$/, '')}`,
-        direction: 'native',
-        prefix: '',
-        cCompiler: host.cCompiler,
-        ...(listing.names.has(host.cxxCompiler) ? { cxxCompiler: host.cxxCompiler } : {}),
-        cCompilerPath: `${joinPath(directory, host.cCompiler)}.exe`,
-        onPath: true,
-        binDir: directory,
-        ...(identity.version === undefined ? {} : { version: identity.version }),
-        ...(identity.target === undefined ? {} : { target: identity.target }),
-        label: nativeCompilerLabel(
-          host.cCompiler === 'clang' || host.cCompiler.endsWith('-clang') ? 'clang' : 'gcc',
-          identity
-        ),
-        detail: `${host.cCompiler} — ${directory}`
-      });
-    }
-  }
-
-  return { mcu, native };
-}
-
-/** Looks a selection id up; `''` means the automatic/default compiler. */
+/** Looks a toolchain id up in the discovered MCU compiler families. */
 export function findBuildToolchain(
-  discovered: DiscoveredBuildToolchains,
-  direction: BuildToolchainDirection,
+  toolchains: BuildToolchain[],
   id: string
 ): BuildToolchain | undefined {
   if (id === '') {
     return undefined;
   }
-  return discovered[direction].find((toolchain) => toolchain.id === id);
+  return toolchains.find((toolchain) => toolchain.id === id);
 }

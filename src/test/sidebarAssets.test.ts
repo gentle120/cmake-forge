@@ -34,7 +34,7 @@ interface SidebarSelection {
     buildToolchain?: string;
   };
   linux: { toolchainFamily: string };
-  native: { targetType: string; cStandard: number; cxxStandard: number; buildToolchain?: string };
+  native: { targetType: string; cStandard: number; cxxStandard: number };
   flash: { targetId: string; probeId: string; openocdPath: string; backend: string };
 }
 
@@ -54,7 +54,6 @@ interface SidebarState {
   flashBackends: Array<{ value: string; label: string }>;
   linuxToolchains: Array<{ value: string; label: string }>;
   mcuToolchains: Array<{ value: string; label: string; description?: string }>;
-  nativeToolchains: Array<{ value: string; label: string; description?: string }>;
   packCatalogNotice: string;
   corePackNotice: string;
   mcuBlockedReason: string;
@@ -87,10 +86,6 @@ function baseState(overrides: Partial<SidebarState> = {}): SidebarState {
       { value: '', label: '自动（按器件默认）' },
       { value: 'mcu:arm-none-eabi', label: 'Arm GNU Toolchain', description: 'C:/tools/bin' }
     ],
-    nativeToolchains: [
-      { value: '', label: '自动（CMake 检测）' },
-      { value: 'native:gcc', label: '本机 GCC', description: 'C:/mingw/bin' }
-    ],
     selection: {
       mode: 'mcu',
       mcu: {
@@ -102,7 +97,7 @@ function baseState(overrides: Partial<SidebarState> = {}): SidebarState {
         buildToolchain: ''
       },
       linux: { toolchainFamily: 'loongson' },
-      native: { targetType: 'executable', cStandard: 11, cxxStandard: 17, buildToolchain: '' },
+      native: { targetType: 'executable', cStandard: 11, cxxStandard: 17 },
       corePackInclude: true,
       flash: { targetId: 'stm32f1xx', probeId: 'stlink', openocdPath: 'openocd', backend: 'openocd' }
     },

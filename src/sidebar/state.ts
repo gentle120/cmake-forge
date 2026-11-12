@@ -26,11 +26,7 @@ import {
   type LinuxToolchainHit
 } from '../linux/types';
 import { getVendorMetadata, hasVendor } from '../devices/vendorRegistry';
-import {
-  findBuildToolchain,
-  type BuildToolchain,
-  type DiscoveredBuildToolchains
-} from '../env/buildToolchains';
+import { findBuildToolchain, type BuildToolchain } from '../env/buildToolchains';
 import { curatedVendors } from '../devices/curatedVendors';
 import { backendSupportsProbe, listFlashBackendProfiles, type FlashBackendId } from '../flash/backendProfiles';
 
@@ -72,8 +68,6 @@ export interface SidebarSelection {
     targetType: 'executable' | 'static' | 'shared';
     cStandard: 11 | 17 | 23;
     cxxStandard: 14 | 17 | 20 | 23;
-    /** Selected host compiler toolchain id; empty lets CMake detect one. */
-    buildToolchain: string;
   };
   /** Adds the installed CMSIS core pack include directory to generated projects. */
   corePackInclude: boolean;
@@ -114,7 +108,6 @@ export interface SidebarBootstrapState {
   flashBackends: SidebarOption[];
   linuxToolchains: SidebarOption[];
   mcuToolchains: SidebarOption[];
-  nativeToolchains: SidebarOption[];
   selection: SidebarSelection;
 }
 
@@ -234,8 +227,7 @@ export function defaultSidebarSelection(): SidebarSelection {
     native: {
       targetType: 'executable',
       cStandard: 11,
-      cxxStandard: 17,
-      buildToolchain: ''
+      cxxStandard: 17
     },
     corePackInclude: true,
     flash: {
@@ -252,7 +244,7 @@ export function sanitizeSidebarSelection(
   fallback: SidebarSelection = defaultSidebarSelection(),
   packOptions: DevicePackOption[] = [],
   preservePackSelection = false,
-  buildToolchains?: DiscoveredBuildToolchains
+  buildToolchains: BuildToolchain[] = []
 ): SidebarSelection {
   const record = asRecord(value);
   const mcu = asRecord(record?.mcu);
@@ -314,20 +306,13 @@ export function sanitizeSidebarSelection(
   const requestedMcuToolchain = typeof mcu?.buildToolchain === 'string'
     ? mcu.buildToolchain.trim()
     : '';
-  const mcuToolchainList = buildToolchains?.mcu ?? [];
-  const mcuBuildToolchain = buildToolchains === undefined
+  // MCU offers only installed compiler families; the first one is the default
+  // until the user picks another.
+  const mcuBuildToolchain = buildToolchains.length === 0
     ? requestedMcuToolchain
-    : findBuildToolchain(buildToolchains, 'mcu', requestedMcuToolchain) !== undefined
+    : findBuildToolchain(buildToolchains, requestedMcuToolchain) !== undefined
       ? requestedMcuToolchain
-      : mcuToolchainList[0]?.id ?? '';
-  const requestedNativeToolchain = typeof native?.buildToolchain === 'string'
-    ? native.buildToolchain.trim()
-    : '';
-  const nativeBuildToolchain = buildToolchains === undefined
-    ? requestedNativeToolchain
-    : findBuildToolchain(buildToolchains, 'native', requestedNativeToolchain) === undefined
-      ? ''
-      : requestedNativeToolchain;
+      : buildToolchains[0].id;
   const requestedProbe = validProbe(flash?.probeId);
   const probeId = probeForBackend(backend, requestedProbe);
 
@@ -372,8 +357,7 @@ export function sanitizeSidebarSelection(
         : 11,
       cxxStandard: native?.cxxStandard === 14 || native?.cxxStandard === 20 || native?.cxxStandard === 23
         ? native.cxxStandard
-        : 17,
-      buildToolchain: nativeBuildToolchain
+        : 17
     },
     // Defaults to on: without the core headers a generated project cannot build.
     corePackInclude: typeof record?.corePackInclude === 'boolean'
@@ -663,23 +647,6 @@ function optionsForPackSelection(
 }
 
 /** Dropdown entries for one direction: an automatic choice plus the found toolchains. */
-function toolchainOptions(
-  toolchains: BuildToolchain[],
-  autoLabel: string,
-  autoDescription: string
-): SidebarOption[] {
-  return [
-    { value: '', label: autoLabel, description: autoDescription },
-    ...toolchains.map((toolchain) => ({
-      value: toolchain.id,
-      label: toolchain.label,
-      // CMake Kit style: the label names type/version/target; the hint stays a
-      // portable driver name because desktop projects never embed absolute paths.
-      description: toolchain.cCompiler,
-      detail: toolchain.cCompiler
-    }))
-  ];
-}
 
 export function buildSidebarState(
   workspaceName: string,
@@ -699,7 +666,7 @@ export function buildSidebarState(
   packCatalogNotice = '',
   corePackNotice = '',
   corePackVersions: SidebarOption[] = [],
-  buildToolchains?: DiscoveredBuildToolchains
+  buildToolchains: BuildToolchain[] = []
 ): SidebarBootstrapState {
   const profiles = listDeviceProfiles();
   const hits: LinuxToolchainHit[] = discoveredToolchains.map((hit) => ({
@@ -783,17 +750,12 @@ export function buildSidebarState(
     })),
     // MCU offers only the compiler families that are actually installed; an
     // empty list hides the row instead of showing an unusable dropdown.
-    mcuToolchains: (buildToolchains?.mcu ?? []).map((toolchain) => ({
+    mcuToolchains: buildToolchains.map((toolchain) => ({
       value: toolchain.id,
       label: toolchain.label,
       description: toolchain.binDir,
       detail: toolchain.cCompiler
     })),
-    nativeToolchains: toolchainOptions(
-      buildToolchains?.native ?? [],
-      '自动（CMake 检测）',
-      '让 CMake 在当前环境中挑选本机编译器'
-    ),
     selection: {
       ...selection,
       // The dropdown renders these values; a series or core pack version the
@@ -807,10 +769,6 @@ export function buildSidebarState(
           ? selection.mcu.corePackVersion
           : corePackVersions[0]?.value ?? '',
         buildToolchain: safeSelection.mcu.buildToolchain
-      },
-      native: {
-        ...selection.native,
-        buildToolchain: safeSelection.native.buildToolchain
       }
     }
   };

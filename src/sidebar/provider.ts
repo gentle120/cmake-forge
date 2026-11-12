@@ -47,11 +47,9 @@ import {
   type WorkspaceProjectScanOptions
 } from '../scanner/workspaceProjects';
 import {
-  discoverBuildToolchains,
   discoverMcuBuildToolchains,
   findBuildToolchain,
-  type BuildToolchain,
-  type DiscoveredBuildToolchains
+  type BuildToolchain
 } from '../env/buildToolchains';
 import { renderSidebarHtml } from './html';
 import { parseIncomingMessage, type SidebarIncomingMessage } from './messages';
@@ -78,8 +76,8 @@ export interface SidebarProviderDependencies {
   workflow: ProjectWorkflowHost;
   confirmOverwrite(files: string[]): Promise<boolean>;
   discoverToolchains(): ReturnType<typeof discoverLinuxToolchains>;
-  /** Compiler toolchains found on PATH; absent means "scan the real PATH". */
-  discoverBuildToolchains?(): DiscoveredBuildToolchains;
+  /** Installed MCU compiler families; absent means "scan the real machine". */
+  discoverMcuBuildToolchains?(): BuildToolchain[];
   discoverProjects(roots: string[], options?: WorkspaceProjectScanOptions): Promise<WorkspaceProject[]>;
   scanProject?(root: string, options?: { signal?: AbortSignal }): ReturnType<typeof scanProject>;
   /** Resolves the stored CMSIS pack path for an imported part, when available. */
@@ -154,7 +152,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private packCatalogRequest = 0;
   private lastBusyHintAt = 0;
   private pendingPosts: unknown[] = [];
-  private buildToolchainCache?: { at: number; value: DiscoveredBuildToolchains };
+  private buildToolchainCache?: { at: number; value: BuildToolchain[] };
   private readonly viewDisposables: vscode.Disposable[] = [];
 
   constructor(
@@ -232,34 +230,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
    * every selection change and each render would otherwise re-read the PATH
    * directories.
    */
-  private buildToolchains(): DiscoveredBuildToolchains {
+  private buildToolchains(): BuildToolchain[] {
     const now = Date.now();
     if (this.buildToolchainCache && now - this.buildToolchainCache.at < 10_000) {
       return this.buildToolchainCache.value;
     }
-    const value = this.dependencies.discoverBuildToolchains?.() ?? {
-      mcu: discoverMcuBuildToolchains(),
-      native: discoverBuildToolchains().native
-    };
+    const value = this.dependencies.discoverMcuBuildToolchains?.()
+      ?? discoverMcuBuildToolchains();
     this.buildToolchainCache = { at: now, value };
     return value;
   }
 
   private selectedMcuToolchain(): BuildToolchain | undefined {
-    const toolchains = this.buildToolchains().mcu;
-    return findBuildToolchain(
-      { mcu: toolchains, native: [] },
-      'mcu',
-      this.selectionValue.mcu.buildToolchain
-    ) ?? toolchains[0];
-  }
-
-  private selectedNativeToolchain(): BuildToolchain | undefined {
-    return findBuildToolchain(
-      this.buildToolchains(),
-      'native',
-      this.selectionValue.native.buildToolchain
-    );
+    const toolchains = this.buildToolchains();
+    return findBuildToolchain(toolchains, this.selectionValue.mcu.buildToolchain)
+      ?? toolchains[0];
   }
 
   /**
@@ -1109,22 +1094,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
               message: '工作区中没有找到 C/C++ 或汇编源文件。'
             };
           }
-          const nativeToolchain = this.selectedNativeToolchain();
+          // Desktop compilers are detected by CMake Tools / CMake itself; the
+          // generated project intentionally does not pin one.
           const structure = describeNativeProject(
             project,
             projectNameFromRoot(root),
             {
               targetType: this.selectionValue.native.targetType,
               cStandard: this.selectionValue.native.cStandard,
-              cxxStandard: this.selectionValue.native.cxxStandard,
-              ...(nativeToolchain === undefined ? {} : {
-                toolchain: {
-                  cCompiler: nativeToolchain.cCompiler,
-                  ...(nativeToolchain.cxxCompiler
-                    ? { cxxCompiler: nativeToolchain.cxxCompiler }
-                    : {})
-                }
-              })
+              cxxStandard: this.selectionValue.native.cxxStandard
             }
           );
           return generateNativeWorkflow(this.workflowHost(), structure);
