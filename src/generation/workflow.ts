@@ -66,7 +66,10 @@ export interface ProjectWorkflowHost {
   workspaceRoot(): string | undefined;
   scanWorkspace(root: string): Promise<ProjectDescription | undefined>;
   confirmOverwrite(existingFiles: string[]): Promise<boolean>;
-  updateSettings(settings: Record<string, string | boolean>, projectRoot?: string): Promise<void>;
+  updateSettings(
+    settings: Record<string, string | boolean | Record<string, string>>,
+    projectRoot?: string
+  ): Promise<void>;
 }
 
 export interface WorkflowResult {
@@ -817,7 +820,13 @@ export async function generateMcuWorkflow(
     join(root, 'cmake', effectiveProfile.toolchainFileName),
     effectiveProfile.mcuCompiler ?? `${effectiveProfile.toolchainPrefix}-gcc`
   );
-  await host.updateSettings(getWorkspaceSettings(), root);
+  const toolchainEnvironment = effectiveProfile.clangVariant === 'atfe'
+    && effectiveProfile.mcuCompilerPath
+    ? {
+        PATH: `${dirname(effectiveProfile.mcuCompilerPath)}${process.platform === 'win32' ? ';' : ':'}\${env:PATH}`
+      }
+    : undefined;
+  await host.updateSettings(getWorkspaceSettings(toolchainEnvironment), root);
   return {
     kind: 'mcu',
     ok: true,

@@ -9,8 +9,10 @@
   M3/SC300 `thumbv7m-none-eabi`、M4/M7 `thumbv7em-none-eabi`、
   M23 `thumbv8m.base-none-eabi`、M33/M35 `thumbv8m.main-none-eabi`；
   GCC 仍使用 `arm-none-eabi-gcc`。
-- ATfE 使用 `clang` + picolibc（`-nostartfiles -fuse-ld=lld`），STARM 使用
-  CubeMX 风格的 `starm-clang.cmake`，独立 LLVM 使用 `-nostdlib`。
+- ATfE 使用 `clang` + picolibc（`-nostartfiles -fuse-ld=lld`），不写绝对
+  `clang.exe`；生成 `.vscode/settings.json` 的 `cmake.environment.PATH` 前置
+  ATfE bin，避免 CMake Tools 解析到普通 LLVM。STARM 使用 CubeMX 风格的
+  `starm-clang.cmake`，独立 LLVM 使用 `-nostdlib`。
 - 生成时自动清理 `build/debug|release` 中与本次编译链不一致的
   `CMakeCache.txt`/`CMakeFiles`，避免切换后继续使用旧 `cl.exe` 或
   `arm-none-eabi-gcc`。

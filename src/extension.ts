@@ -131,7 +131,7 @@ async function scanWorkspace(root: string): Promise<ProjectDescription | undefin
 }
 
 async function updateWorkspaceSettings(
-  settings: Record<string, string | boolean>,
+  settings: Record<string, string | boolean | Record<string, string>>,
   projectRoot?: string
 ): Promise<void> {
   // In a multi-root workspace the settings belong to the folder that receives

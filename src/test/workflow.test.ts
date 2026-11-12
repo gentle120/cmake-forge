@@ -549,7 +549,14 @@ test('STARM clang workflow generates CubeMX-style toolchain and runtime', async 
 test('ATfE clang workflow generates picolibc toolchain and GNU runtime', async () => {
   await withWorkspace(async (root) => {
     await writeFile(join(root, 'main.c'), 'int main(void) { return 0; }\n');
-    const result = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), {
+    let capturedSettings: Record<string, string | boolean | Record<string, string>> | undefined;
+    const host = {
+      ...createHost(root),
+      updateSettings: async (settings: Record<string, string | boolean | Record<string, string>>) => {
+        capturedSettings = settings;
+      }
+    };
+    const result = await generateMcuWorkflow(host, fixtureDeviceProfile(), {
       toolchain: {
         family: 'clang',
         variant: 'atfe',
@@ -559,6 +566,9 @@ test('ATfE clang workflow generates picolibc toolchain and GNU runtime', async (
       }
     });
     assert.equal(result.ok, true);
+    assert.deepEqual(capturedSettings?.['cmake.environment'], {
+      PATH: 'D:/ATfE/bin;${env:PATH}'
+    });
     const toolchain = await readFile(join(root, 'cmake', 'atfe-clang.cmake'), 'utf8');
     assert.match(toolchain, /-nostartfiles -fuse-ld=lld/);
     assert.ok(existsSync(join(root, 'system', 'syscalls.c')));
