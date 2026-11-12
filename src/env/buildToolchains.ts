@@ -36,6 +36,10 @@ export interface BuildToolchain {
   /** Absolute objcopy/size paths when the GCC toolchain is not on PATH. */
   objcopy?: string;
   size?: string;
+  /** Compiler version when it can be read from the installation layout. */
+  version?: string;
+  /** Target triple for GCC/MinGW (`x86_64-w64-mingw32`). */
+  target?: string;
   /** True when `binDir` is a `PATH` entry, so command names are portable. */
   onPath: boolean;
   binDir: string;
@@ -449,6 +453,94 @@ function mcuPrefix(basename: string): string | undefined {
   return /^arm[a-z0-9]*-.*eabi-$/i.test(prefix) ? prefix : undefined;
 }
 
+
+/** Parent directory of a normalized forward-slash path. */
+function parentDirectory(directory: string): string {
+  const normalized = directory.replace(/\\/g, '/').replace(/\/+$/, '');
+  const slash = normalized.lastIndexOf('/');
+  return slash <= 0 ? normalized : normalized.slice(0, slash);
+}
+
+function numericChildren(
+  fileSystem: BuildToolchainFileSystem,
+  directory: string
+): string[] {
+  return readChildren(fileSystem, directory)
+    .filter((child) => /^\d+(\.\d+)*$/.test(child))
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+}
+
+/**
+ * Compiler identity the way CMake Tools labels a kit (`GCC 16.1.0
+ * (x86_64-w64-mingw32)`), read from the installation layout without executing
+ * the compiler:
+ *
+ * - MinGW keeps the version under `lib/gcc/<triple>/<version>`;
+ * - LLVM keeps `lib/clang/<major>`;
+ * - the target triple comes from a prefixed driver (`x86_64-w64-mingw32-gcc`)
+ *   or from `lib/gcc/<triple>`.
+ */
+function nativeCompilerIdentity(
+  fileSystem: BuildToolchainFileSystem,
+  binDir: string,
+  basename: string,
+  listing: DirectoryListing
+): { version?: string; target?: string } {
+  const root = parentDirectory(binDir);
+  const normalized = basename.toLowerCase();
+  if (normalized === 'gcc' || normalized.endsWith('-gcc')) {
+    let target = /^(.+)-gcc$/.exec(normalized)?.[1];
+    if (target === undefined) {
+      const prefixed = [...listing.names]
+        .map((name) => /^(.+)-gcc$/i.exec(name)?.[1])
+        .find((candidate) => candidate !== undefined && /-w64-mingw32$|-linux-gnu$|-apple-darwin$/.test(candidate));
+      target = prefixed?.toLowerCase();
+    }
+    const gccRoot = `${root}/lib/gcc`;
+    const gccTargets = target === undefined ? readChildren(fileSystem, gccRoot) : [target];
+    if (target === undefined && gccTargets.length === 1) {
+      target = gccTargets[0];
+    }
+    for (const candidate of gccTargets) {
+      const versions = numericChildren(fileSystem, `${gccRoot}/${candidate}`);
+      if (versions.length > 0) {
+        return { version: versions[versions.length - 1], target: candidate };
+      }
+    }
+    const libexecRoot = `${root}/libexec/gcc`;
+    const libexecTargets = target === undefined ? readChildren(fileSystem, libexecRoot) : [target];
+    for (const candidate of libexecTargets) {
+      const versions = numericChildren(fileSystem, `${libexecRoot}/${candidate}`);
+      if (versions.length > 0) {
+        return { version: versions[versions.length - 1], target: candidate };
+      }
+    }
+    // Windows LLVM-MinGW style: `lib/gcc/<version>` without a triple level.
+    for (const candidate of gccTargets) {
+      const versions = numericChildren(fileSystem, `${gccRoot}/${candidate}`);
+      if (versions.length > 0) {
+        return { version: versions[versions.length - 1], target };
+      }
+    }
+    return { target };
+  }
+  if (normalized === 'clang' || normalized.endsWith('-clang')) {
+    const versions = numericChildren(fileSystem, `${root}/lib/clang`);
+    return versions.length === 0 ? {} : { version: versions[versions.length - 1] };
+  }
+  return {};
+}
+
+function nativeCompilerLabel(
+  family: 'gcc' | 'clang',
+  identity: { version?: string; target?: string }
+): string {
+  const name = family === 'gcc' ? 'GCC' : 'Clang';
+  const version = identity.version === undefined ? '' : ` ${identity.version}`;
+  const target = identity.target === undefined ? '' : ` (${identity.target})`;
+  return `${name}${version}${target}`.trim();
+}
+
 function nativeCompiler(basename: string): { cCompiler: string; cxxCompiler: string } | undefined {
   if (basename === 'gcc') {
     return { cCompiler: 'gcc', cxxCompiler: 'g++' };
@@ -471,15 +563,6 @@ function mcuLabel(prefix: string): string {
   return vendor ? `ARM EABI (${vendor[1]})` : trimmed;
 }
 
-function nativeLabel(cCompiler: string): string {
-  if (cCompiler === 'gcc') {
-    return '本机 GCC';
-  }
-  if (cCompiler === 'clang') {
-    return '本机 Clang';
-  }
-  return cCompiler;
-}
 
 /**
  * Finds every usable compiler toolchain on `PATH`.
@@ -528,6 +611,7 @@ export function discoverBuildToolchains(
       if (host === undefined || seenNative.has(host.cCompiler)) {
         continue;
       }
+      const identity = nativeCompilerIdentity(fileSystem, directory, name, listing);
       seenNative.add(host.cCompiler);
       native.push({
         id: `native:${host.cCompiler.replace(/-gcc$/, '')}`,
@@ -538,7 +622,12 @@ export function discoverBuildToolchains(
         cCompilerPath: `${joinPath(directory, host.cCompiler)}.exe`,
         onPath: true,
         binDir: directory,
-        label: nativeLabel(host.cCompiler),
+        ...(identity.version === undefined ? {} : { version: identity.version }),
+        ...(identity.target === undefined ? {} : { target: identity.target }),
+        label: nativeCompilerLabel(
+          host.cCompiler === 'clang' || host.cCompiler.endsWith('-clang') ? 'clang' : 'gcc',
+          identity
+        ),
         detail: `${host.cCompiler} — ${directory}`
       });
     }

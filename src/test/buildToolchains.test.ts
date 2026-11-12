@@ -246,3 +246,33 @@ test('off-PATH GCC keeps absolute objcopy/size for builds without PATH setup', (
   assert.match(discovered[0].objcopy ?? '', /arm-none-eabi-objcopy\.exe$/);
   assert.match(discovered[0].size ?? '', /arm-none-eabi-size\.exe$/);
 });
+
+test('labels native compilers like CMake kits using the install layout', () => {
+  const discovered = discoverBuildToolchains(
+    { PATH: 'C:/mingw/bin;C:/llvm/bin' },
+    fileSystem({
+      'C:/mingw/bin': ['gcc.exe', 'g++.exe', 'x86_64-w64-mingw32-gcc.exe'],
+      'C:/mingw/lib/gcc': ['x86_64-w64-mingw32'],
+      'C:/mingw/lib/gcc/x86_64-w64-mingw32': ['16.1.0'],
+      'C:/llvm/bin': ['clang.exe', 'clang++.exe'],
+      'C:/llvm/lib/clang': ['22']
+    }),
+    'win32'
+  );
+
+  assert.equal(discovered.native[0].label, 'GCC 16.1.0 (x86_64-w64-mingw32)');
+  assert.equal(discovered.native[0].version, '16.1.0');
+  assert.equal(discovered.native[0].target, 'x86_64-w64-mingw32');
+  assert.equal(discovered.native[1].label, 'Clang 22');
+  assert.equal(discovered.native[1].version, '22');
+});
+
+test('falls back to a plain compiler name when the layout is unknown', () => {
+  const discovered = discoverBuildToolchains(
+    { PATH: 'C:/custom/bin' },
+    fileSystem({ 'C:/custom/bin': ['gcc.exe'] }),
+    'win32'
+  );
+
+  assert.equal(discovered.native[0].label, 'GCC');
+});
