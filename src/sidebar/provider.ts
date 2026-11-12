@@ -1191,6 +1191,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
             '未找到 fromelf：工程可以构建出 .elf，但不会生成 .hex/.bin。'
           );
         }
+        if (mcuToolchain?.variant === 'atfe' && !mcuToolchain.onPath) {
+          warnings.push(
+            `ATfE 工具链使用 clang 命令名，但 ${mcuToolchain.binDir} 不在 PATH 中；构建前请把该目录加入 PATH，否则可能解析到普通 LLVM clang。`
+          );
+        }
         if (mcuToolchain?.family === 'clang') {
           const starm = mcuToolchain.variant === 'starm';
           if (!mcuToolchain.objcopy || !mcuToolchain.size) {

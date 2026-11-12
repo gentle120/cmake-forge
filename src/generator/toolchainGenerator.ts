@@ -233,10 +233,13 @@ set(CMAKE_EXE_LINKER_FLAGS_INIT "\${TARGET_FLAGS} -lcrt0-hosted -z norelro -z no
  * keeps our vector/startup file while picolibc still supplies libc.
  */
 function atfeClangToolchainFile(profile: DeviceProfile): string {
-  const cCompiler = profile.mcuCompiler?.trim() || 'clang';
-  const cxxCompiler = profile.mcuCxxCompiler?.trim() || 'clang++';
-  const objcopy = profile.mcuObjcopy?.trim() || 'llvm-objcopy';
-  const size = profile.mcuSize?.trim() || 'llvm-size';
+  // Keep command names portable: the ATfE bin directory must be on PATH.
+  // Writing an absolute clang.exe path would make the generated project
+  // machine-specific and is exactly what the user asked to avoid.
+  const cCompiler = 'clang';
+  const cxxCompiler = 'clang++';
+  const objcopy = 'llvm-objcopy';
+  const size = 'llvm-size';
   const targetTriple = clangTargetTriple(profile);
   const targetFlags = profile.compilerFlags.join(' ');
   return `# Arm Toolchain for Embedded (ATfE) clang.

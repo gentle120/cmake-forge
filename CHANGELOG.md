@@ -1,57 +1,22 @@
 # Changelog
 
-## 1.0.6
-
-- clang 工具链按内核写目标三元组：Cortex-M0/M1 → `thumbv6m-none-eabi`、
-  M3/SC300 → `thumbv7m-none-eabi`、M4/M7 → `thumbv7em-none-eabi`、M23 →
-  `thumbv8m.base-none-eabi`、M33/M35 → `thumbv8m.main-none-eabi`。
-  这样 clang 配置不再出现容易和 GCC 前缀混淆的 `arm-none-eabi`；
-  GCC 仍使用 `arm-none-eabi-gcc`。
-- 保持 ATfE 绝对 clang 路径与旧 CMake 缓存清理；测试 456 项通过。
-
-## 1.0.5
-
-- 重新生成 MCU 工程时检查 `build/debug|release/CMakeCache.txt`：如果缓存里的
-  `CMAKE_C_COMPILER` 或 `CMAKE_TOOLCHAIN_FILE` 与本次选择的编译链不一致，自动
-  清除该配置的 cache 与 CMakeFiles，并提示重新 Configure。修复切换 ATfE/STARM/
-  GCC 后 CMake Tools 继续使用旧 `cl.exe`/`arm-none-eabi-gcc` 的问题。
-- ATfE 工具链改用绝对 `clang.exe` 路径并注明 `arm-none-eabi` 是目标三元组；
-  IntelliSense 名称区分 ATfE/STARM/LLVM。
-- 测试 456 项通过。
-
-## 1.0.4
-
-- ATfE 工具链始终写绝对 `clang.exe` 路径，避免 PATH 上另一个 LLVM 抢先匹配；
-  工具链文件增加注释说明 `arm-none-eabi` 是目标三元组、不是 GCC 编译器。
-- IntelliSense 配置名区分 ATfE / STARM / LLVM clang。
-- 修复生成工程仍使用旧 `build/CMakeCache.txt` 时的误导：重新生成后需删除 build
-  再配置；测试 455 项通过。
-
-## 1.0.3
-
-- 支持 **Arm Toolchain for Embedded (ATfE)**：检测 `ATfE-<version>` 安装目录
-  （含 `lib/clang-runtimes`），按 `--target=arm-none-eabi`、picolibc、
-  `-nostartfiles -fuse-ld=lld` 生成 `cmake/atfe-clang.cmake`；保留项目启动文件、
-  syscalls 与 `__libc_init_array` shim。
-- clang 检测优先级：ATfE → STM32CubeIDE STARM → 独立 LLVM clang。
-- 用 ATfE 23.1.0 实测：普通 C、C++、含 `core_cm3.h` 的 CMSIS 工程均可构建，
-  生成 elf/hex/bin。
-- 测试 455 项通过。
-
 ## 1.0.2
 
-- MCU 的 clang 选项优先使用 STM32CubeIDE 的 **STARM clang**，并按 CubeMX
-  `cmake/starm-clang.cmake` 生成 picolibc 配置（`STARM_PICOLIBC`、
-  `-lcrt0-hosted -z norelro -z noexecstack`、`starm-objcopy/starm-size`），
-  工具链文件名为 `cmake/starm-clang.cmake`。
-- 支持 Arm Toolchain for Embedded (ATfE)：自动识别其 `clang` + picolibc
-  布局，使用 `--target=arm-none-eabi`、`-nostartfiles`、`-fuse-ld=lld`，并保留
-  项目自带的启动文件与 GNU 运行时；检测优先级 ATfE → STARM → LLVM。
-- STARM/LLVM 的 CMSIS 头选择修正：STARM 使用 GNU 头（CubeMX 的 CMSIS 没有
-  `cmsis_clang.h`），LLVM 同时保留 GNU 头作为旧 Pack 回退。
-- 自动扫描 STM32CubeIDE/CubeMX 的 STARM 安装目录，并在 UI/生成结果中区分
-  STARM 与 LLVM clang。
-- 测试 455 项通过。
+- MCU 编译链固定 armgcc / armclang / clang 三种；clang 自动选择 ATfE、
+  STARM、独立 LLVM，工具链使用命令名（不写机器绝对路径），需把对应
+  `bin` 加入 PATH。
+- clang 目标三元组按内核生成：Cortex-M0/M1 `thumbv6m-none-eabi`、
+  M3/SC300 `thumbv7m-none-eabi`、M4/M7 `thumbv7em-none-eabi`、
+  M23 `thumbv8m.base-none-eabi`、M33/M35 `thumbv8m.main-none-eabi`；
+  GCC 仍使用 `arm-none-eabi-gcc`。
+- ATfE 使用 `clang` + picolibc（`-nostartfiles -fuse-ld=lld`），STARM 使用
+  CubeMX 风格的 `starm-clang.cmake`，独立 LLVM 使用 `-nostdlib`。
+- 生成时自动清理 `build/debug|release` 中与本次编译链不一致的
+  `CMakeCache.txt`/`CMakeFiles`，避免切换后继续使用旧 `cl.exe` 或
+  `arm-none-eabi-gcc`。
+- 桌面方向使用 CMake Tools Kit 与 IntelliSense 配置提供器；C/C++ 扩展改为
+  推荐安装，兼容 VS Code 1.85（Node 18）。
+- 测试 456 项通过。
 
 ## 1.0.1
 
