@@ -312,3 +312,21 @@ test('LLVM clang CMake links with LLD and no C runtime', () => {
   assert.doesNotMatch(cmake, /CMAKE_FROMELF/);
   assert.doesNotMatch(cmake, /system\/syscalls\.c/);
 });
+
+test('STARM clang CMake links picolibc and keeps the GNU runtime stubs', () => {
+  const profile = {
+    ...fixtureDeviceProfile(),
+    toolchainFamily: 'clang' as const,
+    clangVariant: 'starm' as const,
+    linkerFileName: 'STM32F103C8T6.ld',
+    mcuCompiler: 'starm-clang'
+  };
+  const cmake = generateCMakeLists('starm_tool', {
+    sources: ['main.c'],
+    includeDirs: [],
+    defines: []
+  }, profile);
+  assert.doesNotMatch(cmake, /"-nostdlib"/);
+  assert.doesNotMatch(cmake, /clang_runtime\.c/);
+  assert.match(cmake, /system\/syscalls\.c/);
+});

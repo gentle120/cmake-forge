@@ -93,6 +93,8 @@ export interface McuToolchainSelection {
   /** Absolute objcopy/size paths (GCC off PATH). */
   objcopy?: string;
   size?: string;
+  /** Clang distribution selected by the scanner. */
+  variant?: 'llvm' | 'starm';
 }
 
 export interface McuWorkflowOptions {
@@ -356,7 +358,10 @@ function createMcuFiles(
     })
   }];
 
-  if (profile.toolchainFamily !== 'armclang' && profile.toolchainFamily !== 'clang') {
+  const starmClang = profile.toolchainFamily === 'clang' && profile.clangVariant === 'starm';
+  const gnuRuntime = profile.toolchainFamily !== 'armclang'
+    && (profile.toolchainFamily !== 'clang' || starmClang);
+  if (gnuRuntime) {
     if (!hasSource(runtimeSourceNames[0])) {
       files.push({
         path: join(root, runtimeSourceNames[0]),
@@ -370,7 +375,7 @@ function createMcuFiles(
       });
     }
   }
-  if (profile.toolchainFamily === 'clang' && !hasSource(clangRuntimeFileName)) {
+  if (profile.toolchainFamily === 'clang' && !starmClang && !hasSource(clangRuntimeFileName)) {
     files.push({
       path: join(root, clangRuntimeFileName),
       content: generateClangRuntime()
@@ -576,6 +581,10 @@ export async function generateMcuWorkflow(
     ...(selected?.fromelf ? { mcuFromelf: selected.fromelf } : {}),
     ...(selected?.objcopy ? { mcuObjcopy: selected.objcopy } : {}),
     ...(selected?.size ? { mcuSize: selected.size } : {}),
+    ...(family === 'clang' && selected?.variant ? { clangVariant: selected.variant } : {}),
+    ...(family === 'clang' && selected?.variant === 'starm'
+      ? { toolchainFileName: 'starm-clang.cmake' }
+      : {}),
     // armclang links with a scatter file, not a GNU ld script.
     ...(family === 'armclang' ? { linkerFileName: `${profile.part}.sct` } : {})
   };
@@ -591,7 +600,11 @@ export async function generateMcuWorkflow(
         root,
         coreProjectIncludeDir,
         effectiveProfile.core,
-        effectiveProfile.toolchainFamily ?? 'gcc'
+        // STARM clang defines __GNUC__ and CubeMX's CMSIS picks cmsis_gcc.h;
+        // upstream LLVM clang uses the dedicated cmsis_clang.h set.
+        effectiveProfile.toolchainFamily === 'clang' && effectiveProfile.clangVariant === 'starm'
+          ? 'gcc'
+          : effectiveProfile.toolchainFamily ?? 'gcc'
       )
     : [];
   // The guard must look at the project *without* the generator-owned CMSIS

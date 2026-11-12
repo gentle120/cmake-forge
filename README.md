@@ -21,9 +21,11 @@ cmake --build --preset debug
 - 编译链固定三种，扫描只决定默认项和“已检测/未检测”提示，未检测到也可选择：
   - **armgcc**：GNU 工具链 + `.ld` + GNU 启动文件；
   - **armclang**（Keil / Arm Compiler 6）：armclang + `.sct` + fromelf；
-  - **LLVM clang**：clang + `.ld` + LLD + `-nostdlib` + `clang_runtime.c`。
-- LLVM clang 需要 `lld` 且不提供标准 C 运行时；armclang 使用 Arm C 库，`printf`
-  等函数需自行 retarget。
+  - **clang**：优先使用 STM32CubeIDE 的 **STARM clang**（与 CubeMX
+    `starm-clang.cmake` 一致：picolibc、`-lcrt0-hosted`、`.ld`）；没有 STARM 时
+    使用 LLVM clang（LLD + `-nostdlib` + `clang_runtime.c`）。
+- LLVM clang 需要 `lld` 且不提供标准 C 运行时；STARM clang 自带 picolibc。
+  armclang 使用 Arm C 库，`printf` 等函数需自行 retarget。
 - 可选 `flash.py`（J-Link / ST-Link / DapLink）与 Cortex-Debug 配置。
 
 ## Linux / SoC

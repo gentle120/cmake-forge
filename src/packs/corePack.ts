@@ -307,7 +307,9 @@ async function neededCoreHeaders(
       const excluded = compilerFamily === 'armclang'
         ? /(^|\/)(cmsis_(gcc|clang|iccarm)[^/]*\.h|a-profile\/|r-profile\/)/i
         : compilerFamily === 'clang'
-          ? /(^|\/)(cmsis_(gcc|armclang|iccarm)[^/]*\.h|a-profile\/|r-profile\/)/i
+          // STARM clang defines __GNUC__ and CubeMX CMSIS selects cmsis_gcc.h;
+          // keep GNU headers as a fallback for older packs without cmsis_clang.h.
+          ? /(^|\/)(cmsis_(armclang|iccarm)[^/]*\.h|a-profile\/|r-profile\/)/i
           : /(^|\/)(cmsis_(armclang|clang|iccarm)[^/]*\.h|a-profile\/|r-profile\/)/i;
       if (excluded.test(included)) {
         continue;

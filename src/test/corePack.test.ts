@@ -337,6 +337,7 @@ test('core header closure keeps the selected compiler family', async () => {
     assert.deepEqual(clangNames, [
       'cmsis_clang.h',
       'cmsis_compiler.h',
+      'cmsis_gcc.h',
       'cmsis_version.h',
       'core_cm3.h'
     ]);

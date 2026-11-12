@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.2
+
+- MCU 的 clang 选项优先使用 STM32CubeIDE 的 **STARM clang**，并按 CubeMX
+  `cmake/starm-clang.cmake` 生成 picolibc 配置（`STARM_PICOLIBC`、
+  `-lcrt0-hosted -z norelro -z noexecstack`、`starm-objcopy/starm-size`），
+  工具链文件名为 `cmake/starm-clang.cmake`；没有 STARM 时回退 LLVM clang。
+- STARM/LLVM 的 CMSIS 头选择修正：STARM 使用 GNU 头（CubeMX 的 CMSIS 没有
+  `cmsis_clang.h`），LLVM 同时保留 GNU 头作为旧 Pack 回退。
+- 自动扫描 STM32CubeIDE/CubeMX 的 STARM 安装目录，并在 UI/生成结果中区分
+  STARM 与 LLVM clang。
+- 测试 451 项通过。
+
 ## 1.0.1
 
 - MCU 编译链固定提供 armgcc / armclang / LLVM clang 三种：扫描只决定默认项与
@@ -7,6 +19,9 @@
 - 新增 LLVM clang（`--target=arm-none-eabi`、LLD、`-nostdlib`）支持，并生成
   `system/clang_runtime.c` 让 C++ 静态构造函数可运行；C++ 编译去掉
   `-ffreestanding` 避免 `main` 被改名。
+- clang 优先使用 STM32CubeIDE 的 STARM clang：按 CubeMX 的
+  `cmake/starm-clang.cmake` 生成 picolibc（`-lcrt0-hosted -z norelro`）配置，
+  没有 STARM 时回退到 LLVM clang。
 - 修复含空格路径、armclang/LLVM C++、fromelf 缺失、跨家族 runtime 等构建问题。
 - 桌面方向改用 CMake Tools Kit 选择编译器，并用 CMake Tools 的 IntelliSense
   配置提供器；C/C++ 扩展改为推荐安装，VS Code 1.85（Node 18）兼容。

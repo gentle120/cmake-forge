@@ -34,6 +34,8 @@ export function generateCMakeLists(
   );
   const gccFamily = profile.toolchainFamily !== 'armclang' && profile.toolchainFamily !== 'clang';
   const clangFamily = profile.toolchainFamily === 'clang';
+  const starmClang = clangFamily && profile.clangVariant === 'starm';
+  const gnuRuntimeFamily = gccFamily || starmClang;
   const clangRuntimeBasename = clangRuntimeFileName.split('/').pop()?.toLowerCase();
   const sources = project.sources.filter((source) => {
     const name = (source.split('/').pop() ?? '').toLowerCase();
@@ -43,13 +45,13 @@ export function generateCMakeLists(
     // A regenerated armclang project may still contain the newlib stubs from an
     // earlier GCC generation; they must not be compiled into an Arm C library
     // image.
-    if (!gccFamily && runtimeBasenames.has(name)) return false;
+    if (!gnuRuntimeFamily && runtimeBasenames.has(name)) return false;
     return !(name.startsWith('startup') && /\.s$/.test(name));
   });
   sources.push(profile.gnuStartupFileName);
   // Arm Compiler 6 uses its own C library retargeting and does not need the
   // newlib syscall stubs; adding them would fail on <sys/stat.h>.
-  if (gccFamily) {
+  if (gnuRuntimeFamily) {
     for (const runtimeSourceName of runtimeSourceNames) {
       const runtimeBasename = runtimeSourceName.split('/').pop()?.toLowerCase();
       if (!sources.some((source) => source.split('/').pop()?.toLowerCase() === runtimeBasename)) {
@@ -57,7 +59,8 @@ export function generateCMakeLists(
       }
     }
   }
-  if (clangFamily && !sources.some((source) => source.split('/').pop()?.toLowerCase() === clangRuntimeBasename)) {
+  if (clangFamily && !starmClang
+    && !sources.some((source) => source.split('/').pop()?.toLowerCase() === clangRuntimeBasename)) {
     sources.push(clangRuntimeFileName);
   }
   // The copied device system source is generated, so it is not in the scan.
@@ -106,7 +109,14 @@ export function generateCMakeLists(
         '    "--map"',
         '    "--entry=Reset_Handler"'
       ].join('\n')
-    : clangFamily
+    : starmClang
+      ? [
+          `    "-T\${CMAKE_SOURCE_DIR}/${profile.linkerFileName}"`,
+          `    "-Wl,-Map=\${CMAKE_BINARY_DIR}/${projectName}.map"`,
+          '    "-Wl,--gc-sections"',
+          '    "-Wl,--print-memory-usage"'
+        ].join('\n')
+      : clangFamily
       ? [
           '    "-nostdlib"',
           '    "-fuse-ld=lld"',

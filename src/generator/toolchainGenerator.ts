@@ -156,12 +156,68 @@ set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 `;
 }
 
+/**
+ * STM32CubeMX's STARM clang toolchain (`cmake/starm-clang.cmake`).
+ *
+ * ST's clang distribution ships picolibc (`-lcrt0-hosted -z norelro`), unlike a
+ * standalone LLVM install. CubeMX selects `STARM_PICOLIBC`; copying that setup
+ * keeps CubeMX-generated HAL code linkable.
+ */
+function starmClangToolchainFile(profile: DeviceProfile): string {
+  const cCompiler = profile.mcuCompiler?.trim() || 'starm-clang';
+  const cxxCompiler = profile.mcuCxxCompiler?.trim() || 'starm-clang++';
+  const objcopy = profile.mcuObjcopy?.trim() || 'starm-objcopy';
+  const size = profile.mcuSize?.trim() || 'starm-size';
+  const targetFlags = profile.compilerFlags.join(' ');
+  return `set(CMAKE_SYSTEM_NAME Generic)
+set(CMAKE_SYSTEM_PROCESSOR arm)
+
+set(CMAKE_C_COMPILER_ID Clang)
+set(CMAKE_CXX_COMPILER_ID Clang)
+
+set(CMAKE_C_COMPILER "${cCompiler}")
+set(CMAKE_CXX_COMPILER "${cxxCompiler}")
+set(CMAKE_ASM_COMPILER "${cCompiler}")
+set(CMAKE_LINKER "${cCompiler}")
+set(CMAKE_OBJCOPY "${objcopy}" CACHE FILEPATH "objcopy executable")
+set(CMAKE_SIZE "${size}" CACHE FILEPATH "size executable")
+set(MCU_TOOLCHAIN_FAMILY clang CACHE STRING "Compiler family")
+set(CMAKE_EXECUTABLE_SUFFIX ".elf")
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
+# Same choice as CubeMX: STARM clang + picolibc, no external GNU runtime.
+set(STARM_TOOLCHAIN_CONFIG "STARM_PICOLIBC")
+set(TARGET_FLAGS "${targetFlags}")
+
+set(CMAKE_C_FLAGS_INIT "\${TARGET_FLAGS} -Wall -fdata-sections -ffunction-sections -ftls-model=local-exec -fstack-usage")
+set(CMAKE_ASM_FLAGS_INIT "\${TARGET_FLAGS} -x assembler-with-cpp -MP")
+
+set(CMAKE_C_FLAGS_DEBUG "-Og -g3")
+set(CMAKE_C_FLAGS_RELEASE "-Oz -g0")
+set(CMAKE_C_FLAGS_MINSIZEREL "-Oz -g0")
+set(CMAKE_C_FLAGS_RELWITHDEBINFO "-Og -g3")
+
+set(CMAKE_CXX_FLAGS_DEBUG "-Og -g3")
+set(CMAKE_CXX_FLAGS_RELEASE "-Oz -g0")
+set(CMAKE_CXX_FLAGS_MINSIZEREL "-Oz -g0")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Og -g3")
+set(CMAKE_CXX_FLAGS_INIT "\${TARGET_FLAGS} -Wall -fdata-sections -ffunction-sections -fno-rtti -fno-exceptions -fno-threadsafe-statics")
+
+# This mirrors CubeMX's starm-clang.cmake: picolibc is linked through the
+# linker flags. The linker-script path itself stays in target_link_options so
+# CMake quotes a project path containing spaces.
+set(CMAKE_EXE_LINKER_FLAGS_INIT "\${TARGET_FLAGS} -lcrt0-hosted -z norelro -z noexecstack")
+`;
+}
+
 export function generateToolchainFile(profile: DeviceProfile): string {
   if (profile.toolchainFamily === 'armclang') {
     return armclangToolchainFile(profile);
   }
   if (profile.toolchainFamily === 'clang') {
-    return clangToolchainFile(profile);
+    return profile.clangVariant === 'starm'
+      ? starmClangToolchainFile(profile)
+      : clangToolchainFile(profile);
   }
   return gccToolchainFile(profile);
 }

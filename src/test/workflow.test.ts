@@ -523,3 +523,25 @@ test('LLVM clang workflow writes a GNU linker script and no C runtime', async ()
     assert.match(cpp, /LLVM clang|clang-arm/);
   });
 });
+
+test('STARM clang workflow generates CubeMX-style toolchain and runtime', async () => {
+  await withWorkspace(async (root) => {
+    await writeFile(join(root, 'main.c'), 'int main(void) { return 0; }\n');
+    const result = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), {
+      toolchain: {
+        family: 'clang',
+        variant: 'starm',
+        cCompiler: 'starm-clang',
+        cxxCompiler: 'starm-clang++',
+        cCompilerPath: 'C:/ST/starm-clang.exe'
+      }
+    });
+    assert.equal(result.ok, true);
+    assert.ok(existsSync(join(root, 'system', 'syscalls.c')));
+    assert.ok(existsSync(join(root, 'system', 'sysmem.c')));
+    assert.equal(existsSync(join(root, 'system', 'clang_runtime.c')), false);
+    const toolchain = await readFile(join(root, 'cmake', 'starm-clang.cmake'), 'utf8');
+    assert.match(toolchain, /STARM_TOOLCHAIN_CONFIG "STARM_PICOLIBC"/);
+    assert.match(toolchain, /-lcrt0-hosted/);
+  });
+});

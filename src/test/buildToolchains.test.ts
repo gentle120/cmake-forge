@@ -227,3 +227,27 @@ test('finds LLVM clang for the third MCU family', () => {
   assert.equal(clang.linker, 'ld.lld');
   assert.match(clang.label, /LLVM clang/);
 });
+
+test('finds STM32CubeIDE STARM clang and prefers it over generic clang', () => {
+  const plugin = 'C:/ST/STM32CubeIDE_1.16.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.starm-clang.win32_1.0.0/tools/bin';
+  const discovered = discoverMcuBuildToolchains(
+    { PATH: `${plugin};C:/llvm/bin`, SystemDrive: 'C:' },
+    fileSystem({
+      'C:/ST': ['STM32CubeIDE_1.16.0'],
+      'C:/ST/STM32CubeIDE_1.16.0': ['STM32CubeIDE'],
+      'C:/ST/STM32CubeIDE_1.16.0/STM32CubeIDE': ['plugins'],
+      'C:/ST/STM32CubeIDE_1.16.0/STM32CubeIDE/plugins': ['com.st.stm32cube.ide.mcu.externaltools.starm-clang.win32_1.0.0'],
+      'C:/ST/STM32CubeIDE_1.16.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.starm-clang.win32_1.0.0': ['tools'],
+      'C:/ST/STM32CubeIDE_1.16.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.starm-clang.win32_1.0.0/tools': ['bin'],
+      [plugin]: ['starm-clang.exe', 'starm-clang++.exe', 'starm-objcopy.exe', 'starm-size.exe'],
+      'C:/llvm/bin': ['clang.exe', 'clang++.exe']
+    }),
+    'win32'
+  );
+  const clang = toolById(discovered, 'mcu:clang');
+  assert.equal(clang.variant, 'starm');
+  assert.equal(clang.cCompiler, 'starm-clang');
+  assert.equal(clang.cxxCompiler, 'starm-clang++');
+  assert.match(clang.label, /STARM clang/);
+  assert.match(clang.binDir, /starm-clang/);
+});

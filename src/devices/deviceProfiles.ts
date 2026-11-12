@@ -26,6 +26,8 @@ export interface DeviceProfile {
    * sets it from the sidebar selection. Absent means GCC.
    */
   toolchainFamily?: 'gcc' | 'armclang' | 'clang';
+  /** Clang distribution: generic LLVM or ST's STARM (CubeMX). */
+  clangVariant?: 'llvm' | 'starm';
   /** Compiler command (PATH name or absolute path) for armclang / off-PATH GCC. */
   mcuCompiler?: string;
   mcuCxxCompiler?: string;

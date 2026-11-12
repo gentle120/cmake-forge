@@ -1198,7 +1198,8 @@ function mcuToolchainSelection(
     ...(toolchain.cCompilerPath ? { cCompilerPath: toolchain.cCompilerPath } : {}),
     ...(toolchain.fromelf ? { fromelf: toolchain.fromelf } : {}),
     ...(toolchain.objcopy ? { objcopy: toolchain.objcopy } : {}),
-    ...(toolchain.size ? { size: toolchain.size } : {})
+    ...(toolchain.size ? { size: toolchain.size } : {}),
+    ...(toolchain.variant ? { variant: toolchain.variant } : {})
   };
 }
 

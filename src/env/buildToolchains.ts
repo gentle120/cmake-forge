@@ -17,6 +17,8 @@ import { readdirSync } from 'node:fs';
 
 export type BuildToolchainDirection = 'mcu';
 export type McuToolchainFamily = 'gcc' | 'armclang' | 'clang';
+/** STM32CubeMX/STM32CubeIDE uses ST's `starm-clang` distribution. */
+export type McuClangVariant = 'llvm' | 'starm';
 
 export interface BuildToolchain {
   /** Stable selection id: `mcu:gcc`, `mcu:armclang`, `mcu:clang`. */
@@ -39,8 +41,10 @@ export interface BuildToolchain {
   /** Absolute objcopy/size paths when the GCC toolchain is not on PATH. */
   objcopy?: string;
   size?: string;
-  /** LLD executable for the LLVM clang family. */
+  /** LLD executable for the generic LLVM clang family. */
   linker?: string;
+  /** Which clang distribution this entry describes. */
+  variant?: McuClangVariant;
   /** True when `binDir` is a `PATH` entry, so command names are portable. */
   onPath: boolean;
   binDir: string;
@@ -124,6 +128,8 @@ interface CompilerSearchRoots {
   gccDirs: string[];
   /** Candidate directories containing LLVM clang. */
   clangDirs: string[];
+  /** Candidate directories containing STM32CubeIDE's starm-clang. */
+  starmDirs: string[];
 }
 
 function pushDirectory(list: string[], directory: string | undefined): void {
@@ -155,10 +161,12 @@ function defaultSearchRoots(
   const armclangDirs: string[] = [];
   const gccDirs: string[] = [];
   const clangDirs: string[] = [];
+  const starmDirs: string[] = [];
   const hints = environmentHintDirectories(environment, platform);
   gccDirs.push(...hints);
   armclangDirs.push(...hints);
   clangDirs.push(...hints);
+  starmDirs.push(...hints);
 
   if (platform !== 'win32') {
     // POSIX installs are usually on PATH, but standalone Arm Compiler and
@@ -179,7 +187,7 @@ function defaultSearchRoots(
         pushDirectory(clangDirs, `${root}/${child}/bin`);
       }
     }
-    return { armclangDirs, gccDirs, clangDirs };
+    return { armclangDirs, gccDirs, clangDirs, starmDirs };
   }
 
   const systemDrive = environment.SystemDrive?.replace(/^([A-Za-z]):.*$/, '$1:') ?? 'C:';
@@ -192,6 +200,14 @@ function defaultSearchRoots(
   }
 
   for (const drive of drives) {
+    // Portable installs often sit directly on a drive (D:/STM32CubeIDE_..., D:/STM32CubeMX).
+    for (const child of readChildren(fileSystem, `${drive}/`)) {
+      if (/STM32CubeIDE|STM32CubeMX|STM32CubeCLT|STMicroelectronics|STARM/i.test(child)) {
+        for (const directory of allBinDirectories(fileSystem, `${drive}/${child}`, 8)) {
+          pushDirectory(starmDirs, directory);
+        }
+      }
+    }
     pushDirectory(armclangDirs, `${drive}/Keil_v5/ARM/ARMCLANG/bin`);
     pushDirectory(armclangDirs, `${drive}/Keil/ARM/ARMCLANG/bin`);
     pushDirectory(clangDirs, `${drive}/LLVM/bin`);
@@ -207,6 +223,21 @@ function defaultSearchRoots(
     for (const child of readChildren(fileSystem, cltRoot)) {
       if (/^STM32CubeCLT_/i.test(child)) {
         pushDirectory(gccDirs, `${cltRoot}/${child}/GNU-tools-for-STM32/bin`);
+      }
+    }
+  }
+
+  // STM32CubeIDE ships STARM clang inside its plugins directory; CubeMX can also
+  // keep it below a portable ST root. Walk only these narrow roots.
+  for (const drive of drives) {
+    for (const root of [
+      `${drive}/ST`,
+      `${drive}/STMicroelectronics`,
+      `${drive}/Program Files/STMicroelectronics`,
+      `${drive}/Program Files (x86)/STMicroelectronics`
+    ]) {
+      for (const directory of allBinDirectories(fileSystem, root, 8)) {
+        pushDirectory(starmDirs, directory);
       }
     }
   }
@@ -233,6 +264,11 @@ function defaultSearchRoots(
         pushDirectory(clangDirs, joinPath(root, `${child}/bin`));
         for (const version of readChildren(fileSystem, joinPath(root, child))) {
           pushDirectory(clangDirs, joinPath(root, `${child}/${version}/bin`));
+        }
+      }
+      if (/STM32CubeIDE|STM32CubeMX|STM32CubeCLT|STMicroelectronics/i.test(child)) {
+        for (const directory of allBinDirectories(fileSystem, joinPath(root, child), 8)) {
+          pushDirectory(starmDirs, directory);
         }
       }
       if (/^Arm$/i.test(child)) {
@@ -266,7 +302,7 @@ function defaultSearchRoots(
       pushDirectory(clangDirs, directory);
     }
   }
-  return { armclangDirs, gccDirs, clangDirs };
+  return { armclangDirs, gccDirs, clangDirs, starmDirs };
 }
 
 
@@ -334,6 +370,33 @@ function binDirectoriesBelow(
       if (/^(toolchain|@xpack|packages|gcc|arm|bin|content|\.content|versions?|\d)/i.test(child)) {
         walk(`${directory}/${child}`, depth + 1);
       }
+    }
+  };
+  walk(root, 0);
+  return found;
+}
+
+/** Every `bin` directory below a root, for trees like STM32CubeIDE's plugins. */
+function allBinDirectories(
+  fileSystem: BuildToolchainFileSystem,
+  root: string,
+  maxDepth: number
+): string[] {
+  const found: string[] = [];
+  let visited = 0;
+  const walk = (directory: string, depth: number): void => {
+    if (visited++ > 4000) {
+      return;
+    }
+    const children = readChildren(fileSystem, directory);
+    if (children.includes('bin') || children.includes('Bin')) {
+      pushDirectory(found, `${directory}/bin`);
+    }
+    if (depth >= maxDepth) {
+      return;
+    }
+    for (const child of children) {
+      walk(`${directory}/${child}`, depth + 1);
     }
   };
   walk(root, 0);
@@ -412,25 +475,34 @@ function mcuClangToolchain(
   cxxPath: string | undefined,
   objcopyPath: string | undefined,
   sizePath: string | undefined,
-  linkerPath: string | undefined
+  linkerPath: string | undefined,
+  variant: McuClangVariant
 ): BuildToolchain {
+  const starm = variant === 'starm';
+  const cName = starm ? 'starm-clang' : 'clang';
+  const cxxName = starm ? 'starm-clang++' : 'clang++';
   return {
     id: 'mcu:clang',
     direction: 'mcu',
     family: 'clang',
     prefix: '',
-    cCompiler: onPath ? 'clang' : compilerPath,
+    variant,
+    cCompiler: onPath ? cName : compilerPath,
     ...(cxxPath === undefined
       ? {}
-      : { cxxCompiler: onPath ? 'clang++' : cxxPath }),
+      : { cxxCompiler: onPath ? cxxName : cxxPath }),
     cCompilerPath: compilerPath,
-    ...(objcopyPath === undefined ? {} : { objcopy: onPath ? 'llvm-objcopy' : objcopyPath }),
-    ...(sizePath === undefined ? {} : { size: onPath ? 'llvm-size' : sizePath }),
+    ...(objcopyPath === undefined
+      ? {}
+      : { objcopy: onPath ? (starm ? 'starm-objcopy' : 'llvm-objcopy') : objcopyPath }),
+    ...(sizePath === undefined
+      ? {}
+      : { size: onPath ? (starm ? 'starm-size' : 'llvm-size') : sizePath }),
     ...(linkerPath === undefined ? {} : { linker: onPath ? 'ld.lld' : linkerPath }),
     detected: true,
     onPath,
     binDir: directory,
-    label: 'LLVM clang (arm-none-eabi)',
+    label: starm ? 'STARM clang (STM32CubeMX)' : 'LLVM clang (arm-none-eabi)',
     detail: directory
   };
 }
@@ -454,6 +526,7 @@ function missingMcuToolchain(
     detected: false,
     onPath: false,
     binDir: '',
+    ...(family === 'clang' ? { variant: 'llvm' as const } : {}),
     label,
     detail: '未检测到：生成后请把编译器加入 PATH，或安装对应工具链'
   };
@@ -513,26 +586,49 @@ export function discoverMcuBuildToolchains(
   }
 
   let clang: BuildToolchain | undefined;
-  for (const directory of [...pathDirs, ...roots.clangDirs]) {
-    const compilerPath = probeCompiler(fileSystem, directory, 'clang');
+  // STM32CubeIDE/CubeMX clang is ST's STARM distribution: it links picolibc and
+  // is what CubeMX's `cmake/starm-clang.cmake` expects. Prefer it over a host
+  // LLVM clang when both are installed.
+  for (const directory of [...pathDirs, ...roots.starmDirs]) {
+    const compilerPath = probeCompiler(fileSystem, directory, 'starm-clang');
     if (compilerPath === undefined) {
       continue;
     }
-    const cxxPath = probeCompiler(fileSystem, directory, 'clang++');
-    const objcopyPath = probeCompiler(fileSystem, directory, 'llvm-objcopy');
-    const sizePath = probeCompiler(fileSystem, directory, 'llvm-size');
-    const linkerPath = probeCompiler(fileSystem, directory, 'ld.lld')
-      ?? probeCompiler(fileSystem, directory, 'lld');
     clang = mcuClangToolchain(
       directory,
       directoryOnPath(directory, pathDirs),
       compilerPath,
-      cxxPath,
-      objcopyPath,
-      sizePath,
-      linkerPath
+      probeCompiler(fileSystem, directory, 'starm-clang++'),
+      probeCompiler(fileSystem, directory, 'starm-objcopy'),
+      probeCompiler(fileSystem, directory, 'starm-size'),
+      undefined,
+      'starm'
     );
     break;
+  }
+  if (clang === undefined) {
+    for (const directory of [...pathDirs, ...roots.clangDirs]) {
+      const compilerPath = probeCompiler(fileSystem, directory, 'clang');
+      if (compilerPath === undefined) {
+        continue;
+      }
+      const cxxPath = probeCompiler(fileSystem, directory, 'clang++');
+      const objcopyPath = probeCompiler(fileSystem, directory, 'llvm-objcopy');
+      const sizePath = probeCompiler(fileSystem, directory, 'llvm-size');
+      const linkerPath = probeCompiler(fileSystem, directory, 'ld.lld')
+        ?? probeCompiler(fileSystem, directory, 'lld');
+      clang = mcuClangToolchain(
+        directory,
+        directoryOnPath(directory, pathDirs),
+        compilerPath,
+        cxxPath,
+        objcopyPath,
+        sizePath,
+        linkerPath,
+        'llvm'
+      );
+      break;
+    }
   }
 
   return [

@@ -95,3 +95,22 @@ test('LLVM clang toolchain targets arm-none-eabi without a C runtime', () => {
   // out of the C++ flags so startup's `bl main` resolves.
   assert.doesNotMatch(toolchain, /CMAKE_CXX_FLAGS_INIT[^\n]*-ffreestanding/);
 });
+
+test('STARM clang toolchain mirrors STM32CubeMX picolibc configuration', () => {
+  const toolchain = generateToolchainFile(fixtureDeviceProfile({
+    toolchainFamily: 'clang',
+    clangVariant: 'starm',
+    mcuCompiler: 'starm-clang',
+    mcuCxxCompiler: 'starm-clang++',
+    mcuObjcopy: 'starm-objcopy',
+    mcuSize: 'starm-size'
+  }));
+  assert.match(toolchain, /set\(CMAKE_C_COMPILER "starm-clang"\)/);
+  assert.match(toolchain, /set\(CMAKE_C_COMPILER_ID Clang\)/);
+  assert.match(toolchain, /set\(STARM_TOOLCHAIN_CONFIG "STARM_PICOLIBC"\)/);
+  assert.match(toolchain, /-ftls-model=local-exec/);
+  assert.match(toolchain, /-lcrt0-hosted -z norelro -z noexecstack/);
+  assert.match(toolchain, /starm-objcopy/);
+  assert.doesNotMatch(toolchain, /-nostdlib/);
+  assert.doesNotMatch(toolchain, /--target=arm-none-eabi/);
+});

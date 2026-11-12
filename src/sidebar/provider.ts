@@ -1167,7 +1167,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
             ...(mcuToolchain.cCompilerPath ? { cCompilerPath: mcuToolchain.cCompilerPath } : {}),
             ...(mcuToolchain.fromelf ? { fromelf: mcuToolchain.fromelf } : {}),
             ...(mcuToolchain.objcopy ? { objcopy: mcuToolchain.objcopy } : {}),
-            ...(mcuToolchain.size ? { size: mcuToolchain.size } : {})
+            ...(mcuToolchain.size ? { size: mcuToolchain.size } : {}),
+            ...(mcuToolchain.variant ? { variant: mcuToolchain.variant } : {})
           },
           corePack: this.dependencies.corePackForGeneration
             ? await this.dependencies.corePackForGeneration(
@@ -1190,15 +1191,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
             '未找到 fromelf：工程可以构建出 .elf，但不会生成 .hex/.bin。'
           );
         }
-        if (mcuToolchain?.family === 'clang' && (!mcuToolchain.objcopy || !mcuToolchain.size)) {
-          warnings.push(
-            '未找到 llvm-objcopy/llvm-size：工程可以构建出 .elf，但不会生成 .hex/.bin。'
-          );
-        }
-        if (mcuToolchain?.family === 'clang' && !mcuToolchain.linker) {
-          warnings.push(
-            '未找到 LLD（ld.lld/lld）：LLVM clang 工程需要 lld 才能链接。'
-          );
+        if (mcuToolchain?.family === 'clang') {
+          const starm = mcuToolchain.variant === 'starm';
+          if (!mcuToolchain.objcopy || !mcuToolchain.size) {
+            warnings.push(
+              starm
+                ? '未找到 starm-objcopy/starm-size：工程可以构建出 .elf，但不会生成 .hex/.bin。'
+                : '未找到 llvm-objcopy/llvm-size：工程可以构建出 .elf，但不会生成 .hex/.bin。'
+            );
+          }
+          if (!starm && !mcuToolchain.linker) {
+            warnings.push(
+              '未找到 LLD（ld.lld/lld）：LLVM clang 工程需要 lld 才能链接。'
+            );
+          }
         }
         // An empty device-file set is legitimate for a Pack without a declared
         // device header, but it also silently produces a project without real
