@@ -115,7 +115,7 @@ test('aborts project discovery when the signal is already aborted', async () => 
   );
 });
 
-test('auto-selects a sole project and clears a stale multi-project choice', () => {
+test('auto-selects the first project and replaces a stale choice', () => {
   const single = [{ root: 'C:/work/app', relativePath: 'app', label: 'work/app', markers: ['cmake' as const] }];
   assert.equal(reconcileProjectRoot(single, ''), 'C:/work/app');
   assert.equal(reconcileProjectRoot(single, 'C:/stale'), 'C:/work/app');
@@ -125,5 +125,5 @@ test('auto-selects a sole project and clears a stale multi-project choice', () =
     { root: 'C:/work/b', relativePath: 'b', label: 'work/b', markers: ['source' as const] }
   ];
   assert.equal(reconcileProjectRoot(multiple, 'C:/work/b'), 'C:/work/b');
-  assert.equal(reconcileProjectRoot(multiple, 'C:/stale'), '');
+  assert.equal(reconcileProjectRoot(multiple, 'C:/stale'), 'C:/work/a');
 });

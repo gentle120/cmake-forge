@@ -9,6 +9,11 @@ function gccCompiler(profile: DeviceProfile, tool: 'gcc' | 'g++'): string {
   return `${profile.toolchainPrefix}-${tool}`;
 }
 
+/** Quotes a compiler command/path for `set(...)`; paths with spaces must stay one value. */
+function cmakeQuoted(value: string): string {
+  return `"${value.replace(/"/g, '\\"')}"`;
+}
+
 function gccToolchainFile(profile: DeviceProfile): string {
   const prefix = profile.toolchainPrefix;
   const targetFlags = profile.compilerFlags.join(' ');
@@ -17,11 +22,11 @@ function gccToolchainFile(profile: DeviceProfile): string {
   return `set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 
-set(CMAKE_C_COMPILER ${gccCompiler(profile, 'gcc')})
-set(CMAKE_CXX_COMPILER ${gccCompiler(profile, 'g++')})
-set(CMAKE_ASM_COMPILER ${gccCompiler(profile, 'gcc')})
-set(CMAKE_OBJCOPY "${objcopy}" CACHE FILEPATH "objcopy executable")
-set(CMAKE_SIZE "${size}" CACHE FILEPATH "size executable")
+set(CMAKE_C_COMPILER ${cmakeQuoted(gccCompiler(profile, 'gcc'))})
+set(CMAKE_CXX_COMPILER ${cmakeQuoted(gccCompiler(profile, 'g++'))})
+set(CMAKE_ASM_COMPILER ${cmakeQuoted(gccCompiler(profile, 'gcc'))})
+set(CMAKE_OBJCOPY ${cmakeQuoted(objcopy)} CACHE FILEPATH "objcopy executable")
+set(CMAKE_SIZE ${cmakeQuoted(size)} CACHE FILEPATH "size executable")
 set(MCU_TOOLCHAIN_FAMILY gcc CACHE STRING "Compiler family")
 
 set(TARGET_FLAGS "${targetFlags}")
@@ -42,8 +47,9 @@ set(CMAKE_CXX_FLAGS_MINSIZEREL "-Os -g0")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-Og -g3")
 set(CMAKE_CXX_FLAGS_INIT "\${TARGET_FLAGS} -Wall -fdata-sections -ffunction-sections -fstack-usage -fno-rtti -fno-exceptions -fno-threadsafe-statics")
 
-# Link with the same architecture and the generated MCU memory layout.
-set(CMAKE_EXE_LINKER_FLAGS_INIT "\${TARGET_FLAGS} -T\${CMAKE_SOURCE_DIR}/${profile.linkerFileName} --specs=nano.specs -Wl,-Map=\${CMAKE_BINARY_DIR}/\${CMAKE_PROJECT_NAME}.map -Wl,--gc-sections -Wl,--print-memory-usage")
+# Link flags are declared with target_link_options in CMakeLists.txt so CMake
+# quotes paths containing spaces; only the architecture flags stay here.
+set(CMAKE_EXE_LINKER_FLAGS_INIT "\${TARGET_FLAGS}")
 
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 `;
@@ -69,6 +75,7 @@ set(CMAKE_C_COMPILER "${cCompiler}")
 set(CMAKE_CXX_COMPILER "${cxxCompiler}")
 set(CMAKE_ASM_COMPILER "${cCompiler}")
 set(CMAKE_C_COMPILER_TARGET arm-arm-none-eabi)
+set(CMAKE_CXX_COMPILER_TARGET arm-arm-none-eabi)
 set(CMAKE_ASM_COMPILER_TARGET arm-arm-none-eabi)
 set(CMAKE_FROMELF "${fromelf}" CACHE FILEPATH "fromelf executable")
 set(MCU_TOOLCHAIN_FAMILY armclang CACHE STRING "Compiler family")
@@ -92,9 +99,8 @@ set(CMAKE_CXX_FLAGS_MINSIZEREL "-Oz -g0")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O1 -g")
 set(CMAKE_CXX_FLAGS_INIT "\${TARGET_FLAGS} -Wall -fdata-sections -ffunction-sections -fno-rtti -fno-exceptions")
 
-# armlink options: scatter file, map, entry point. Unused sections are removed
-# by default, so no --gc-sections equivalent is needed.
-set(CMAKE_EXE_LINKER_FLAGS_INIT "--scatter=\${CMAKE_SOURCE_DIR}/${profile.linkerFileName} --map --entry=Reset_Handler")
+# The scatter/map/entry flags are declared with target_link_options in
+# CMakeLists.txt so CMake quotes a project path containing spaces.
 
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 `;

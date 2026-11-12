@@ -365,11 +365,11 @@ def find_jlink(explicit):
     return None
 
 
-def run_jlink(jlink, command_file):
+def run_jlink(jlink, jlink_args, command_file):
     print("---- J-Link output ----")
     process = None
     try:
-        process = subprocess.Popen([jlink, "-CommanderScript", command_file])
+        process = subprocess.Popen([jlink, *jlink_args, "-CommanderScript", command_file])
         returncode = process.wait(timeout=120)
     except subprocess.TimeoutExpired:
         if process is not None and process.poll() is None:
@@ -411,19 +411,20 @@ def main():
     if Path(firmware).suffix.lower() not in FIRMWARE_SUFFIXES:
         sys.exit("Error: J-Link flashes ELF or HEX files; convert BIN files first.")
 
-    commands = ["loadfile " + firmware]
+    # J-Link Commander treats the rest of the line as the file name, so a
+    # project under a path with spaces must be quoted.
+    commands = [f'loadfile "{firmware.replace(chr(92), "/")}"']
     if args.reset:
         commands.extend(["r", "g"])
     commands.append("qc")
 
-    command = [
-        jlink,
+    jlink_args = [
         "-device", args.device,
         "-if", "SWD",
         "-speed", str(args.speed),
         "-autoconnect", "1",
-        "-CommanderScript", "<command file>",
     ]
+    command = [jlink, *jlink_args, "-CommanderScript", "<command file>"]
 
     print("=" * 60)
     print("J-Link:", jlink)
@@ -442,7 +443,7 @@ def main():
     with tempfile.NamedTemporaryFile("w", suffix=".jlink", delete=False) as handle:
         handle.write("\\n".join(commands) + "\\n")
         command_file = handle.name
-    returncode = run_jlink(jlink, command_file)
+    returncode = run_jlink(jlink, jlink_args, command_file)
     if returncode != 0:
         print("Flash failed (J-Link exit code %d)" % returncode)
         sys.exit(returncode)

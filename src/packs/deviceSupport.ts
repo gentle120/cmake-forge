@@ -11,8 +11,9 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { isSafeEntryName } from './corePack';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { readDirectoryEntries } from './packFs';
 import { readZipEntries } from './zipReader';
 
@@ -45,6 +46,11 @@ const excludedSupportPath = /(^|\/)(examples?|documentation|docs|boards?|middlew
  * read back later.
  */
 export function isDeviceSupportEntry(name: string): boolean {
+  // Archive entries are attacker-controlled: a `Device/../../x.h` name must
+  // never become a filesystem path.
+  if (!isSafeEntryName(name)) {
+    return false;
+  }
   const lower = name.replace(/\\/g, '/').toLowerCase();
   if (!lower.endsWith('.h') && !lower.endsWith('.c')) {
     return false;
@@ -80,18 +86,34 @@ export async function writeDeviceSupportSnapshot(
   entries: Array<{ name: string; data: Buffer }>
 ): Promise<void> {
   const directory = deviceSnapshotDir(storageRoot, packFile);
-  await rm(directory, { recursive: true, force: true });
   const selected = entries.filter((entry) => isDeviceSupportEntry(entry.name));
-  for (const entry of selected) {
-    const target = join(directory, entry.name);
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, entry.data);
+  // Build the snapshot beside the old one and rename it into place; a failed
+  // write must not leave a half-populated snapshot that generation then copies.
+  const temporaryDirectory = `${directory}.tmp-${process.pid}-${Date.now()}`;
+  const snapshotRoot = resolve(temporaryDirectory);
+  await rm(temporaryDirectory, { recursive: true, force: true });
+  try {
+    for (const entry of selected) {
+      const target = resolve(snapshotRoot, entry.name);
+      // Defense in depth: even if the name filter changes, never write outside
+      // the snapshot directory.
+      if (!target.startsWith(`${snapshotRoot}${sep}`)) {
+        continue;
+      }
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, entry.data);
+    }
+    await mkdir(temporaryDirectory, { recursive: true });
+    await writeFile(
+      join(temporaryDirectory, snapshotMarkerName),
+      `${JSON.stringify({ version: snapshotMarkerVersion })}\n`
+    );
+    await rm(directory, { recursive: true, force: true });
+    await rename(temporaryDirectory, directory);
+  } catch (error) {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+    throw error;
   }
-  await mkdir(directory, { recursive: true });
-  await writeFile(
-    join(directory, snapshotMarkerName),
-    `${JSON.stringify({ version: snapshotMarkerVersion })}\n`
-  );
 }
 
 /** True when the snapshot was produced by the current filter. */

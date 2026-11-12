@@ -20,10 +20,13 @@ test('generates an arm-none-eabi toolchain file', () => {
   assert.match(toolchain, /CMAKE_C_FLAGS_RELEASE "-Os -g0"/);
   assert.match(toolchain, /CMAKE_CXX_FLAGS_INIT.*fno-rtti.*fno-exceptions.*fno-threadsafe-statics/);
   assert.match(toolchain, /CMAKE_EXE_LINKER_FLAGS_INIT.*TARGET_FLAGS/);
-  assert.match(toolchain, /--specs=nano\.specs/);
+  // Link flags live in CMakeLists.txt (target_link_options) so CMake quotes
+  // paths with spaces; the toolchain keeps only architecture flags.
+  assert.doesNotMatch(toolchain, /-T\$\{CMAKE_SOURCE_DIR\}/);
+  assert.match(toolchain, /CMAKE_EXE_LINKER_FLAGS_INIT/);
   assert.doesNotMatch(toolchain, /--specs=nosys\.specs/);
-  assert.match(toolchain, /STM32F103C8T6\.ld/);
-  assert.match(toolchain, /-Wl,-Map=.*CMAKE_PROJECT_NAME.*-Wl,--gc-sections/);
+  assert.doesNotMatch(toolchain, /STM32F103C8T6\.ld/);
+  assert.doesNotMatch(toolchain, /-Wl,-Map=/);
 });
 
 test('generates hard-float Cortex-M4 compiler and linker flags', () => {
@@ -45,4 +48,31 @@ test('keeps Cortex-M3 profiles free of floating-point ABI flags', () => {
   const toolchain = generateToolchainFile(fixtureDeviceProfile());
 
   assert.doesNotMatch(toolchain, /-mfpu=|-mfloat-abi=/);
+});
+
+test('quotes compiler and artifact paths so spaces survive CMake', () => {
+  const toolchain = generateToolchainFile(fixtureDeviceProfile({
+    mcuCompiler: 'C:/Program Files (x86)/Arm GNU Toolchain arm-none-eabi/13.2/bin/arm-none-eabi-gcc.exe',
+    mcuCxxCompiler: 'C:/Program Files (x86)/Arm GNU Toolchain arm-none-eabi/13.2/bin/arm-none-eabi-g++.exe',
+    mcuObjcopy: 'C:/Program Files (x86)/Arm GNU Toolchain arm-none-eabi/13.2/bin/arm-none-eabi-objcopy.exe',
+    mcuSize: 'C:/Program Files (x86)/Arm GNU Toolchain arm-none-eabi/13.2/bin/arm-none-eabi-size.exe'
+  }));
+
+  assert.match(toolchain, /set\(CMAKE_C_COMPILER "C:\/Program Files \(x86\)\/Arm GNU Toolchain/);
+  assert.match(toolchain, /set\(CMAKE_CXX_COMPILER "C:\/Program Files/);
+  assert.match(toolchain, /set\(CMAKE_OBJCOPY "C:\/Program Files/);
+});
+
+test('armclang toolchain sets the C++ target and quotes the compiler', () => {
+  const toolchain = generateToolchainFile(fixtureDeviceProfile({
+    toolchainFamily: 'armclang',
+    linkerFileName: 'STM32F103C8T6.sct',
+    mcuCompiler: 'D:/Keil_v5/ARM/ARMCLANG/bin/armclang.exe',
+    mcuCxxCompiler: 'D:/Keil_v5/ARM/ARMCLANG/bin/armclang.exe',
+    mcuFromelf: 'D:/Keil_v5/ARM/ARMCLANG/bin/fromelf.exe'
+  }));
+  assert.match(toolchain, /set\(CMAKE_C_COMPILER "D:\/Keil_v5/);
+  assert.match(toolchain, /set\(CMAKE_CXX_COMPILER_TARGET arm-arm-none-eabi\)/);
+  assert.match(toolchain, /set\(CMAKE_FROMELF "D:\/Keil_v5/);
+  assert.doesNotMatch(toolchain, /--scatter=/);
 });

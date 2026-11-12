@@ -193,5 +193,7 @@ export function reconcileProjectRoot(projects: WorkspaceProject[], storedRoot: s
   if (storedRoot && projects.some((project) => posixPath(project.root) === posixPath(storedRoot))) {
     return storedRoot;
   }
-  return projects.length === 1 ? projects[0].root : '';
+  // The dropdown can only show one entry: selecting the first discovered
+  // project is better than displaying it while generation uses an empty root.
+  return projects[0]?.root ?? '';
 }

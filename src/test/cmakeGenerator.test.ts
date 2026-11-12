@@ -24,7 +24,8 @@ test('generates a CMake project for GD32F103C8T6', () => {
   assert.doesNotMatch(cmake, /^\s+VECT_TAB_OFFSET\s*$/m);
   assert.match(cmake, /MCU_PROJECT_ROOT/);
   assert.doesNotMatch(cmake, /target_compile_options/);
-  assert.doesNotMatch(cmake, /target_link_options/);
+  assert.match(cmake, /target_link_options\(/);
+  assert.match(cmake, /"-T\$\{CMAKE_SOURCE_DIR\}\/GD32F103C8T6\.ld"/);
   assert.doesNotMatch(cmake, /gd32-gcc-compat|COMPILE_LANGUAGE:C,CXX.*-include/);
   assert.match(cmake, /CMAKE_OBJCOPY.*-O ihex/s);
 });
@@ -275,4 +276,20 @@ test('gcc profiles keep the newlib runtime sources and objcopy commands', () => 
   assert.match(cmake, /CMAKE_OBJCOPY/);
   assert.doesNotMatch(cmake, /CMAKE_FROMELF/);
   assert.match(cmake, /system\/syscalls\.c/);
+});
+
+test('armclang CMake lists the scatter file and C++ target', () => {
+  const profile = {
+    ...fixtureDeviceProfile(),
+    toolchainFamily: 'armclang' as const,
+    linkerFileName: 'STM32F103C8T6.sct',
+    mcuCompiler: 'D:/Keil_v5/ARM/ARMCLANG/bin/armclang.exe'
+  };
+  const cmake = generateCMakeLists('ac6', {
+    sources: ['main.c'],
+    includeDirs: [],
+    defines: []
+  }, profile);
+  assert.match(cmake, /"--scatter=\$\{CMAKE_SOURCE_DIR\}\/STM32F103C8T6\.sct"/);
+  assert.match(cmake, /"--entry=Reset_Handler"/);
 });

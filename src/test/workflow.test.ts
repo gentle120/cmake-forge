@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { fixtureDeviceProfile, registerFixtureVendors } from './support/fixtureDevice';
+import { fixtureDeviceProfile, gd32F103Profile, registerFixtureVendors } from './support/fixtureDevice';
 
 registerFixtureVendors();
 import {
@@ -51,8 +51,8 @@ test('MCU workflow honours the selected compiler toolchain prefix', async () => 
     const toolchainFile = result.files.find((file) => /-toolchain\.cmake$/.test(file));
     assert.ok(toolchainFile);
     const toolchain = await readFile(join(root, toolchainFile), 'utf8');
-    assert.match(toolchain, /CMAKE_C_COMPILER arm-zephyr-eabi-gcc/);
-    assert.match(toolchain, /CMAKE_ASM_COMPILER arm-zephyr-eabi-gcc/);
+    assert.match(toolchain, /CMAKE_C_COMPILER "arm-zephyr-eabi-gcc"/);
+    assert.match(toolchain, /CMAKE_ASM_COMPILER "arm-zephyr-eabi-gcc"/);
     // IntelliSense must point at the same compiler, not the device default.
     const cpp = await readFile(join(root, '.vscode', 'c_cpp_properties.json'), 'utf8');
     assert.match(cpp, /arm-zephyr-eabi-gcc/);
@@ -370,8 +370,11 @@ test('reuses a device system source the project already builds instead of copyin
     const result = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), { deviceSupport });
 
     assert.equal(result.ok, true);
-    assert.equal(result.files.some((file) => file.startsWith('CMSIS/Device')), false);
-    assert.equal(existsSync(join(root, 'CMSIS', 'Device')), false);
+    // The header is reused when the project has it; the missing system source is
+    // still copied so the vendor SystemInit does not silently stay weak.
+    assert.equal(result.files.some((file) => file.startsWith('CMSIS/Device/Include')), true);
+    assert.equal(result.files.some((file) => file.startsWith('CMSIS/Device/Source')), false);
+    assert.equal(existsSync(join(root, 'CMSIS', 'Device', 'Source')), false);
     assert.ok(result.warnings?.some((warning) => /SystemInit/.test(warning)));
     const cmake = await readFile(join(root, 'CMakeLists.txt'), 'utf8');
     assert.doesNotMatch(cmake, /CMSIS\/Device\/Source/);
@@ -470,5 +473,27 @@ test('Linux workflow writes the configured sysroot and remembers it', async () =
     const second = await generateLinuxWorkflow(createHost(root), createLinuxToolchain('arm'));
     assert.equal(second.ok, true);
     assert.match(await readFile(toolchainPath, 'utf8'), /CMAKE_SYSROOT/);
+  });
+});
+
+test('switching the device removes the previous startup, linker, and toolchain', async () => {
+  await withWorkspace(async (root) => {
+    await writeFile(join(root, 'main.c'), 'int main(void) { return 0; }\n');
+    const first = await generateMcuWorkflow(createHost(root), gd32F103Profile(), {});
+    assert.equal(first.ok, true);
+    assert.ok(existsSync(join(root, 'GD32F103C8T6.ld')));
+    assert.ok(existsSync(join(root, 'startup_gd32f10x_md.S')));
+
+    const second = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), {});
+    assert.equal(second.ok, true);
+    assert.ok(existsSync(join(root, 'STM32F103C8T6.ld')));
+    assert.ok(existsSync(join(root, 'startup_stm32f103xb.S')));
+    assert.equal(existsSync(join(root, 'GD32F103C8T6.ld')), false);
+    assert.equal(existsSync(join(root, 'startup_gd32f10x_md.S')), false);
+    assert.equal(existsSync(join(root, 'cmake', 'gd32f10x-toolchain.cmake')), false);
+    assert.ok(existsSync(join(root, 'cmake', 'stm32f1-toolchain.cmake')));
+    // Device-independent newlib stubs stay so the regenerated project keeps
+    // its runtime sources.
+    assert.ok(existsSync(join(root, 'system', 'syscalls.c')));
   });
 });

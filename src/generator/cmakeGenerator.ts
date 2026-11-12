@@ -92,6 +92,21 @@ export function generateCMakeLists(
     ...externalIncludes
   ].join('\n');
 
+  const armclang = profile.toolchainFamily === 'armclang';
+  const linkOptionBlock = armclang
+    ? [
+        `    "--scatter=\${CMAKE_SOURCE_DIR}/${profile.linkerFileName}"`,
+        '    "--map"',
+        '    "--entry=Reset_Handler"'
+      ].join('\n')
+    : [
+        `    "-T\${CMAKE_SOURCE_DIR}/${profile.linkerFileName}"`,
+        '    "--specs=nano.specs"',
+        `    "-Wl,-Map=\${CMAKE_BINARY_DIR}/${projectName}.map"`,
+        '    "-Wl,--gc-sections"',
+        '    "-Wl,--print-memory-usage"'
+      ].join('\n');
+
   // Artifact generation differs per compiler family: armclang ships `fromelf`
   // while GCC uses objcopy/size. Emitting only the selected family's block keeps
   // the generated CMakeLists free of dead toolchain names.
@@ -151,6 +166,13 @@ ${includeBlock}
 
 target_compile_definitions(${projectName} PRIVATE
 ${defineBlock}
+)
+
+# Linker flags live here, not in the toolchain: CMake quotes each option when
+# the project path contains spaces, which a raw CMAKE_EXE_LINKER_FLAGS_INIT
+# string cannot do.
+target_link_options(${projectName} PRIVATE
+${linkOptionBlock}
 )
 
 ${userCodeSection()}

@@ -1,5 +1,5 @@
 import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { DeviceProfile } from '../devices/deviceProfiles';
 import type { FlashProbeProfile } from '../flash/probeProfiles';
 import type { FlashTargetProfile } from '../flash/targets/targetProfiles';
@@ -60,7 +60,7 @@ export interface ProjectWorkflowHost {
   workspaceRoot(): string | undefined;
   scanWorkspace(root: string): Promise<ProjectDescription | undefined>;
   confirmOverwrite(existingFiles: string[]): Promise<boolean>;
-  updateSettings(settings: Record<string, string | boolean>): Promise<void>;
+  updateSettings(settings: Record<string, string | boolean>, projectRoot?: string): Promise<void>;
 }
 
 export interface WorkflowResult {
@@ -190,15 +190,88 @@ async function findObsoleteCopies(
     if (keep.has(normalized)) {
       continue;
     }
+    const basenameLower = normalized.split('/').pop() ?? '';
+    // Device-independent newlib stubs are never made obsolete by a Pack change.
+    if (basenameLower === 'syscalls.c' || basenameLower === 'sysmem.c') {
+      continue;
+    }
     if (!managedPrefixesLower.some((prefix) => normalized.startsWith(prefix))) {
       continue;
     }
     const absolute = join(root, relative);
+    const rootResolved = resolve(root);
+    const resolved = resolve(absolute);
+    if (resolved !== rootResolved && !resolved.startsWith(`${rootResolved}${sep}`)) {
+      continue;
+    }
     if (await exists(absolute)) {
       obsolete.push(absolute);
     }
   }
   return obsolete;
+}
+
+/** Generated paths that belong to a project and can safely be cleaned up. */
+function isManagedGeneratedPath(relative: string): boolean {
+  const lower = relative.replace(/\\/g, '/').toLowerCase();
+  const name = lower.split('/').pop() ?? '';
+  // The newlib stubs are device-independent and are regenerated only when the
+  // scan cannot see them; deleting a still-referenced copy would leave the new
+  // project without syscalls. Keep them across device switches.
+  if (name === 'syscalls.c' || name === 'sysmem.c') {
+    return false;
+  }
+  if (['cmake/', 'system/', 'cmsis/', '.vscode/'].some((prefix) => lower.startsWith(prefix))) {
+    return true;
+  }
+  return name === 'cmakelists.txt'
+    || name === 'cmakepresets.json'
+    || name.startsWith('startup_')
+    || name.endsWith('.ld')
+    || name.endsWith('.sct');
+}
+
+/**
+ * Generator-owned files recorded by the previous `.mcu-cmake.json` that this
+ * generation no longer writes.
+ *
+ * Switching the device leaves the old startup/linker/toolchain behind and the
+ * file list would otherwise grow forever (two linker scripts for one project).
+ * Only files from the recorded `generatedFiles` list inside directories the
+ * generator owns are candidates, so user sources are never touched.
+ */
+async function findStaleGeneratedFiles(
+  root: string,
+  configPath: string,
+  keepRelatives: string[]
+): Promise<string[]> {
+  let recorded: string[] = [];
+  try {
+    const parsed = JSON.parse(await readFile(configPath, 'utf8')) as { generatedFiles?: unknown };
+    recorded = Array.isArray(parsed.generatedFiles)
+      ? parsed.generatedFiles.filter((value): value is string => typeof value === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+  const keep = new Set(keepRelatives.map((relative) => relative.replace(/\\/g, '/').toLowerCase()));
+  const stale: string[] = [];
+  for (const relative of recorded) {
+    const normalized = relative.replace(/\\/g, '/');
+    const lower = normalized.toLowerCase();
+    if (keep.has(lower) || !isManagedGeneratedPath(normalized)) {
+      continue;
+    }
+    if (normalized.startsWith('/') || /^[a-z]:/i.test(normalized)
+      || normalized.split('/').some((segment) => segment === '..' || segment === '')) {
+      continue;
+    }
+    const absolute = join(root, normalized);
+    if (await exists(absolute)) {
+      stale.push(absolute);
+    }
+  }
+  return stale;
 }
 
 /**
@@ -371,8 +444,14 @@ async function deviceSupportWithoutProjectCopies(
     return !/^(rte_components|.*_libopt|.*_rcu|.*_rcc)\.h$/.test(name);
   };
 
+  // Decide per file: a project that already has the device header can still
+  // need the vendor's `system_<stem>.c`; suppressing the whole snapshot would
+  // silently fall back to the weak `SystemInit` from the startup.
+  const kept: DeviceSupportFile[] = [];
+  const reused: string[] = [];
   for (const file of files) {
     if (!isPrimarySupportFile(file.relative)) {
+      kept.push(file);
       continue;
     }
     const name = basename(file.relative).toLowerCase();
@@ -380,10 +459,12 @@ async function deviceSupportWithoutProjectCopies(
       ? sourceNames.has(name)
       : await headerProvided(file.relative);
     if (provided) {
-      return { files: [], reused: files.map((entry) => entry.relative) };
+      reused.push(file.relative);
+    } else {
+      kept.push(file);
     }
   }
-  return { files, reused: [] };
+  return { files: kept, reused };
 }
 
 /**
@@ -534,6 +615,18 @@ export async function generateMcuWorkflow(
     })
   };
 
+  // Files recorded by the previous generation that are no longer part of this
+  // one (device switch drops the old startup/linker/toolchain). They are
+  // removed only after the same overwrite confirmation as changed files.
+  const keepGenerated = new Set([
+    ...generatedFiles.map((file) => toWorkspacePath(root, file.path)),
+    toWorkspacePath(root, cppPropertiesFile.path),
+    toWorkspacePath(root, settingsPath),
+    ...corePlan.map((entry) => toWorkspacePath(root, entry.target)),
+    ...deviceSupport.map((file) => file.relative)
+  ].map((relative) => relative.toLowerCase()));
+  const staleGeneratedFiles = await findStaleGeneratedFiles(root, configPath, [...keepGenerated]);
+
   // Regenerating an unchanged project must not ask for confirmation, so only
   // files whose content actually differs are offered for overwrite.
   const changedFiles = await filesNeedingOverwrite([...generatedFiles, cppPropertiesFile]);
@@ -580,12 +673,13 @@ export async function generateMcuWorkflow(
     [...corePlan.map((entry) => entry.relative), ...deviceSupport.map((file) => file.relative)],
     managedPrefixes
   );
-  const overwrittenFiles = [
+  const overwrittenFiles = [...new Set([
     ...changedFiles,
     ...changedCorePlan.map((entry) => entry.target),
     ...changedDeviceFiles.map((file) => join(root, file.relative)),
-    ...obsoleteCopies
-  ];
+    ...obsoleteCopies,
+    ...staleGeneratedFiles
+  ])];
   if (overwrittenFiles.length > 0 && !(await host.confirmOverwrite(overwrittenFiles))) {
     return {
       kind: 'mcu',
@@ -594,21 +688,6 @@ export async function generateMcuWorkflow(
       files: [],
       message: '已取消覆盖。'
     };
-  }
-  // Files the current Pack or core version no longer ships are removed after the
-  // same confirmation: the copy directories are owned by the generator.
-  for (const obsolete of obsoleteCopies) {
-    await rm(obsolete, { force: true });
-  }
-
-  // The two compiler families use different linker inputs (`part.ld` for GCC,
-  // `part.sct` for armclang); a stale one from the other family is removed so
-  // the project has one authoritative memory layout.
-  const otherLinker = effectiveProfile.toolchainFamily === 'armclang'
-    ? `${profile.part}.ld`
-    : `${profile.part}.sct`;
-  if (otherLinker !== effectiveProfile.linkerFileName) {
-    await rm(join(root, otherLinker), { force: true });
   }
   await mkdir(join(root, 'cmake'), { recursive: true });
   await mkdir(join(root, 'system'), { recursive: true });
@@ -645,7 +724,16 @@ export async function generateMcuWorkflow(
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, file.content);
   }
-  await host.updateSettings(getWorkspaceSettings());
+  // Remove obsolete files only after the replacement project is on disk: a
+  // failed write must not leave the user with a build that lost its device
+  // startup or its linker script.
+  for (const obsolete of obsoleteCopies) {
+    await rm(obsolete, { force: true });
+  }
+  for (const stale of staleGeneratedFiles) {
+    await rm(stale, { force: true });
+  }
+  await host.updateSettings(getWorkspaceSettings(), root);
   return {
     kind: 'mcu',
     ok: true,
@@ -785,7 +873,7 @@ export async function generateLinuxWorkflow(
   await mkdir(join(root, 'cmake'), { recursive: true });
   await mkdir(join(root, '.vscode'), { recursive: true });
   await writeGeneratedFiles([...generatedFiles, configFile, cppPropertiesFile]);
-  await host.updateSettings(getLinuxWorkspaceSettings());
+  await host.updateSettings(getLinuxWorkspaceSettings(), root);
   return {
     kind: 'linux',
     ok: true,
@@ -872,7 +960,7 @@ export async function generateNativeWorkflow(
   };
   await mkdir(join(root, '.vscode'), { recursive: true });
   await writeGeneratedFiles([...generatedFiles, configFile, cppPropertiesFile]);
-  await host.updateSettings(getNativeWorkspaceSettings());
+  await host.updateSettings(getNativeWorkspaceSettings(), root);
   return {
     kind: 'native',
     ok: true,

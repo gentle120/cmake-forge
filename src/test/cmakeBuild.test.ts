@@ -157,13 +157,15 @@ async function buildCoreVariant(core: string): Promise<void> {
     await writeFile(join(root, profile.linkerFileName), generateLinkerScript(profile));
     await mkdir(join(root, 'cmake'), { recursive: true });
     await writeFile(join(root, 'cmake', profile.toolchainFileName), generateToolchainFile(profile));
+    await mkdir(join(root, 'system'), { recursive: true });
+    await writeFile(join(root, 'system', 'syscalls.c'), generateSyscalls());
+    await writeFile(join(root, 'system', 'sysmem.c'), generateSysmem());
     await writeFile(join(root, 'main.c'), 'void SystemInit(void) {}\nint main(void) { return 0; }\n');
-    await writeFile(join(root, 'CMakeLists.txt'), `cmake_minimum_required(VERSION 3.22)
-project(firmware C ASM)
-add_executable(firmware)
-target_sources(firmware PRIVATE main.c ${profile.gnuStartupFileName})
-set_target_properties(firmware PROPERTIES SUFFIX ".elf")
-`);
+    await writeFile(join(root, 'CMakeLists.txt'), generateCMakeLists('firmware', {
+      sources: ['main.c', profile.gnuStartupFileName],
+      includeDirs: [],
+      defines: []
+    }, profile));
     const buildDir = join(root, 'build');
     await execFileAsync('cmake', [
       '-S', root,

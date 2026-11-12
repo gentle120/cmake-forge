@@ -15,6 +15,10 @@ const EOCD_MAX_SCAN = 22 + 0xffff;
 const STORED_METHOD = 0;
 const DEFLATE_METHOD = 8;
 const ZIP64_EXTRA_ID = 0x0001;
+// A Pack is data, not a decompression target: cap the work a malicious or
+// corrupt archive can force the extension host to do.
+const MAX_ENTRY_COUNT = 100_000;
+const MAX_UNCOMPRESSED_ENTRY_BYTES = 512 * 1024 * 1024;
 const ZIP64_EOCD_SIGNATURE = 0x06064b50;
 const ZIP64_LOCATOR_SIGNATURE = 0x07064b50;
 
@@ -46,6 +50,9 @@ export function readZipEntries(
     directoryOffset = zip64.directoryOffset;
     directorySize = zip64.directorySize;
   }
+  if (entryCount > MAX_ENTRY_COUNT) {
+    throw new Error('Invalid ZIP archive: too many entries');
+  }
   if (directoryOffset + directorySize > buffer.length) {
     throw new Error('Invalid ZIP archive: central directory out of range');
   }
@@ -58,7 +65,7 @@ export function readZipEntries(
     const flags = buffer.readUInt16LE(cursor + 8);
     const method = buffer.readUInt16LE(cursor + 10);
     const expectedCrc = buffer.readUInt32LE(cursor + 16);
-    const uncompressedSize = buffer.readUInt32LE(cursor + 24);
+    let uncompressedSize = buffer.readUInt32LE(cursor + 24);
     let compressedSize = buffer.readUInt32LE(cursor + 20);
     const nameLength = buffer.readUInt16LE(cursor + 28);
     const extraLength = buffer.readUInt16LE(cursor + 30);
@@ -80,6 +87,7 @@ export function readZipEntries(
           let offset = dataStart;
           const end = Math.min(extra.length, dataStart + dataSize);
           if (uncompressedSize === 0xffffffff && offset + 8 <= end) {
+            uncompressedSize = Number(extra.readBigUInt64LE(offset));
             offset += 8;
           }
           if (compressedSize === 0xffffffff && offset + 8 <= end) {
@@ -107,7 +115,15 @@ export function readZipEntries(
       }
       entries.push({
         name,
-        data: readEntryData(buffer, name, localHeaderOffset, method, compressedSize, expectedCrc)
+        data: readEntryData(
+          buffer,
+          name,
+          localHeaderOffset,
+          method,
+          compressedSize,
+          uncompressedSize,
+          expectedCrc
+        )
       });
     }
     cursor += 46 + nameLength + extraLength + commentLength;
@@ -159,8 +175,12 @@ function readEntryData(
   localHeaderOffset: number,
   method: number,
   compressedSize: number,
+  uncompressedSize: number,
   expectedCrc: number
 ): Buffer {
+  if (uncompressedSize > MAX_UNCOMPRESSED_ENTRY_BYTES) {
+    throw new Error(`Invalid ZIP archive: entry ${name} is too large`);
+  }
   if (localHeaderOffset + 30 > buffer.length || buffer.readUInt32LE(localHeaderOffset) !== LOCAL_HEADER_SIGNATURE) {
     throw new Error(`Invalid ZIP archive: local header signature mismatch for ${name}`);
   }
@@ -177,6 +197,9 @@ function readEntryData(
     : method === DEFLATE_METHOD
       ? inflateEntry(raw, name)
       : unsupportedMethod(method, name);
+  if (data.length !== uncompressedSize) {
+    throw new Error(`Invalid ZIP archive: size mismatch for ${name}`);
+  }
   // A payload that inflates but does not match its recorded CRC is corrupt;
   // parsing it as XML would fail later with a misleading error.
   if (crc32(data) !== expectedCrc) {
@@ -187,7 +210,9 @@ function readEntryData(
 
 function inflateEntry(raw: Buffer, name: string): Buffer {
   try {
-    return inflateRawSync(raw);
+    // `maxOutputLength` stops a deflate bomb before it allocates the expansion;
+    // the central directory's declared size is checked separately.
+    return inflateRawSync(raw, { maxOutputLength: MAX_UNCOMPRESSED_ENTRY_BYTES });
   } catch {
     throw new Error(`Invalid ZIP archive: failed to inflate entry ${name}`);
   }

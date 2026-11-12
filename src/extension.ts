@@ -72,7 +72,7 @@ import {
   listFlashBackendProfiles,
   type FlashBackendId
 } from './flash/backendProfiles';
-import type { FlashExecutablePaths } from './generator/flashScriptGenerator';
+import type { FlashDeviceContext, FlashExecutablePaths } from './generator/flashScriptGenerator';
 import {
   getFlashTargetProfile,
   listFlashTargetProfiles,
@@ -130,15 +130,23 @@ async function scanWorkspace(root: string): Promise<ProjectDescription | undefin
   }
 }
 
-async function updateWorkspaceSettings(settings: Record<string, string | boolean>): Promise<void> {
+async function updateWorkspaceSettings(
+  settings: Record<string, string | boolean>,
+  projectRoot?: string
+): Promise<void> {
+  // In a multi-root workspace the settings belong to the folder that receives
+  // the generated project, not to the .code-workspace file.
+  const folder = projectRoot
+    ? vscode.workspace.getWorkspaceFolder(vscode.Uri.file(projectRoot))
+    : undefined;
   for (const [key, value] of Object.entries(settings)) {
     const separator = key.indexOf('.');
     const section = key.slice(0, separator);
     const setting = key.slice(separator + 1);
-    await vscode.workspace.getConfiguration(section).update(
+    await vscode.workspace.getConfiguration(section, folder?.uri).update(
       setting,
       value,
-      vscode.ConfigurationTarget.Workspace
+      folder ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace
     );
   }
 }
@@ -158,9 +166,9 @@ function createWorkflowHost(fixedRoot?: string): ProjectWorkflowHost {
       );
       return action === '覆盖';
     },
-    updateSettings: async (settings) => {
+    updateSettings: async (settings, root) => {
       try {
-        await updateWorkspaceSettings(settings);
+        await updateWorkspaceSettings(settings, root);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         vscode.window.showWarningMessage(`CMake Tools / IntelliSense 设置未更新：${message}`);
@@ -1195,6 +1203,15 @@ function mcuToolchainSelection(
 }
 
 
+/** Device context for the flash/debug generators, keyed to the selected part. */
+function flashDeviceForProfile(profile: DeviceProfile): FlashDeviceContext {
+  return {
+    part: profile.part,
+    core: profile.core,
+    packFile: packFileByPart.get(profile.part)
+  };
+}
+
 async function generateDebugConfigurationOnly(): Promise<void> {
   const root = await selectWorkspaceProject();
   if (!root) {
@@ -1202,6 +1219,10 @@ async function generateDebugConfigurationOnly(): Promise<void> {
     return;
   }
   if (!(await ensureCortexDebugInstalled())) {
+    return;
+  }
+  const profile = await selectDeviceProfile();
+  if (!profile) {
     return;
   }
   const target = await selectFlashTarget();
@@ -1222,7 +1243,7 @@ async function generateDebugConfigurationOnly(): Promise<void> {
     probe,
     getOpenOcdPath(),
     backend,
-    undefined,
+    flashDeviceForProfile(profile),
     {
       toolchainPrefix: selectedMcuBuildToolchain()?.prefix,
       toolchainFamily: selectedMcuBuildToolchain()?.family
@@ -1234,6 +1255,10 @@ async function generateFlashScriptOnly(): Promise<void> {
   const root = await selectWorkspaceProject();
   if (!root) {
     vscode.window.showErrorMessage('请先打开一个 MCU 工程目录。');
+    return;
+  }
+  const profile = await selectDeviceProfile();
+  if (!profile) {
     return;
   }
   const target = await selectFlashTarget();
@@ -1254,7 +1279,7 @@ async function generateFlashScriptOnly(): Promise<void> {
     probe,
     getOpenOcdPath(),
     backend,
-    undefined,
+    flashDeviceForProfile(profile),
     executablePaths()
   ));
 }
@@ -1414,12 +1439,24 @@ export function activate(context: vscode.ExtensionContext): void {
     activatePack: (vendor, packId, version) => activateDevicePack(vendor, packId, version)
   });
   activeSidebar = sidebarProvider;
-  void loadImportedProfiles(packStorageRoot).then(async (profiles) => {
-    await syncPackFileIndex();
-    if (profiles.length > 0) {
+  void loadImportedProfiles(packStorageRoot)
+    .then(async (profiles) => {
+      await syncPackFileIndex();
+      if (profiles.length > 0) {
+        sidebarProvider.refresh();
+      }
+    })
+    // A corrupt `packs.json` must not become an unhandled rejection that
+    // silently leaves every imported Pack missing; report it once and keep the
+    // rest of the extension (catalog downloads, built-in vendors) usable.
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      logLine(`[packs] 导入记录读取失败：${message}`);
+      void vscode.window.showWarningMessage(
+        `已导入的 Pack 记录无法读取：${message}。修复或删除 ${packStorageRoot}/packs.json 后重新加载窗口。`
+      );
       sidebarProvider.refresh();
-    }
-  });
+    });
   context.subscriptions.push(
     vscode.commands.registerCommand('cmakeForge.generateMcu', () => generateProject()),
     vscode.commands.registerCommand('cmakeForge.generateLinux', () => generateLinuxProject()),

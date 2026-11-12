@@ -50,7 +50,7 @@ const manifestRelativePath = 'cores/index.json';
 const emptyManifest: CorePackManifest = { version: 1, packs: [] };
 
 /** True for a relative archive path that cannot escape the directory it is written to. */
-function isSafeEntryName(name: string): boolean {
+export function isSafeEntryName(name: string): boolean {
   if (name.length === 0 || name.includes('\0')) {
     return false;
   }
@@ -409,11 +409,21 @@ export async function installCorePack(
 
   // A reinstall replaces the previous copy of the same version rather than
   // merging into it, so a pack upgrade cannot leave stale headers behind.
-  await rm(absoluteDirectory, { recursive: true, force: true });
-  for (const header of parsed.headers) {
-    const target = join(absoluteDirectory, header.name);
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, header.data);
+  // Build the new tree beside the old one and rename it into place: a failed
+  // write must not destroy the headers the current projects still build with.
+  const temporaryDirectory = `${absoluteDirectory}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+    for (const header of parsed.headers) {
+      const target = join(temporaryDirectory, header.name);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, header.data);
+    }
+    await rm(absoluteDirectory, { recursive: true, force: true });
+    await rename(temporaryDirectory, absoluteDirectory);
+  } catch (error) {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+    throw error;
   }
 
   const record: CorePackRecord = {

@@ -1383,6 +1383,25 @@ test('sidebar treats an empty workspace root as a selectable target', async () =
   }
 });
 
+test('scanWorkspace always answers even when no project root is selected', async () => {
+  const harness = startProvider({}, { discoverProjects: async () => [] });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    harness.receive({ type: 'scanWorkspace' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const result = [...harness.messages].reverse()
+      .find((message) => message.type === 'operationFinished')?.result as
+        { ok?: boolean; message?: string } | undefined;
+    // A webview that marked the scan busy must always receive a terminal
+    // message, otherwise every control stays disabled.
+    assert.ok(result, 'scanWorkspace must post operationFinished');
+    assert.equal(result?.ok, false);
+    assert.match(result?.message ?? '', /工程|选择/);
+  } finally {
+    harness.dispose();
+  }
+});
+
 test('sidebar reports source scan cancellation before the filesystem scan unwinds', async () => {
   const root = 'C:/workspace';
   const selection = {

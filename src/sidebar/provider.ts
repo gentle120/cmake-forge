@@ -153,6 +153,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private lastBusyHintAt = 0;
   private pendingPosts: unknown[] = [];
   private buildToolchainCache?: { at: number; value: BuildToolchain[] };
+  /** True while the OpenOCD path is the setting default, not a per-workspace override. */
+  private openOcdPathIsDefault = true;
   private readonly viewDisposables: vscode.Disposable[] = [];
 
   constructor(
@@ -169,14 +171,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     // The sidebar default is the bare command `openocd`; when the user configured
     // an absolute OpenOCD path in the settings, that path is what the generated
     // launch.json must pass as `serverpath` (a bare name is only found on PATH).
-    if (this.selectionValue.flash.openocdPath === 'openocd') {
-      const configured = this.configuredOpenOcdPath();
-      if (configured !== 'openocd') {
-        this.selectionValue = {
-          ...this.selectionValue,
-          flash: { ...this.selectionValue.flash, openocdPath: configured }
-        };
-      }
+    // The setting stays authoritative: only an explicit per-workspace override
+    // is persisted; otherwise the displayed path follows the setting.
+    this.openOcdPathIsDefault = this.selectionValue.flash.openocdPath === 'openocd';
+    if (this.openOcdPathIsDefault) {
+      this.selectionValue = {
+        ...this.selectionValue,
+        flash: {
+          ...this.selectionValue.flash,
+          openocdPath: this.configuredOpenOcdPath()
+        }
+      };
     }
     this.pendingPackId = this.selectionValue.mcu.packId;
   }
@@ -189,7 +194,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     };
     const nonce = randomBytes(16).toString('base64');
     view.webview.html = renderSidebarHtml(view.webview, this.context.extensionUri, nonce);
-    this.flushPendingPosts();
+    // Messages sent before the webview's message listener exists are dropped;
+    // flush them once the webview has announced itself with `ready`.
     this.postState();
 
     const messageDisposable = view.webview.onDidReceiveMessage((value) => {
@@ -274,6 +280,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   }
 
   refresh(): void {
+    if (this.openOcdPathIsDefault) {
+      const configured = this.configuredOpenOcdPath();
+      if (this.selectionValue.flash.openocdPath !== configured) {
+        this.selectionValue = {
+          ...this.selectionValue,
+          flash: { ...this.selectionValue.flash, openocdPath: configured }
+        };
+      }
+    }
     // One state post after the refresh, not one before and several after: the
     // webview re-renders the whole panel per message, so duplicate posts are
     // visible as flicker.
@@ -362,7 +377,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
 
   private async saveSelection(value: unknown): Promise<void> {
     const previous = this.selectionValue;
-    const requested = sanitizeSidebarSelection(
+    let requested = sanitizeSidebarSelection(
       value,
       previous,
       this.packOptions,
@@ -395,9 +410,26 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           this.buildToolchains()
         )
       : requested;
+    // Keep the setting as the default instead of persisting its current value:
+    // otherwise a later settings change or window reload keeps the stale path.
+    const configuredOpenOcd = this.configuredOpenOcdPath();
+    this.openOcdPathIsDefault = requested.flash.openocdPath === 'openocd'
+      || requested.flash.openocdPath === configuredOpenOcd;
+    if (this.openOcdPathIsDefault) {
+      requested = {
+        ...requested,
+        flash: { ...requested.flash, openocdPath: 'openocd' }
+      };
+      this.selectionValue = {
+        ...this.selectionValue,
+        flash: { ...this.selectionValue.flash, openocdPath: configuredOpenOcd }
+      };
+    } else {
+      this.selectionValue = requested;
+    }
     const vendorChanged = this.selectionValue.mcu.vendor !== previous.mcu.vendor;
     const seriesChanged = this.selectionValue.mcu.series !== previous.mcu.series;
-    await this.context.workspaceState.update(selectionKey, this.selectionValue);
+    await this.context.workspaceState.update(selectionKey, requested);
     if (vendorChanged) {
       this.pendingPackId = this.selectionValue.mcu.packId;
       this.packOptions = [];
@@ -443,6 +475,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
 
   private async refreshPackCatalog(vendor: string, autoActivate = false): Promise<void> {
     const request = ++this.packCatalogRequest;
+    // Keep the last good catalog for this vendor: a transient index/network
+    // failure must not replace a usable list with an empty one.
+    const previousOptions = this.packOptions;
     this.packOptions = [];
     this.post({
       type: 'packCatalogLoading',
@@ -545,7 +580,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         vendor,
         packs: options.packs,
         versions: options.versions,
-        notice: this.packCatalogNotice
+        notice: this.packCatalogNotice,
+        pendingPackId: this.pendingPackId
       });
       this.postState();
     } catch (error) {
@@ -553,7 +589,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         return;
       }
       this.packCatalogNotice = error instanceof Error ? error.message : String(error);
-      this.packOptions = this.packOptions.filter((option) =>
+      this.packOptions = previousOptions.filter((option) =>
         option.vendorId === vendor && option.origin !== 'downloadable'
       );
       const options = this.optionsForCatalog();
@@ -562,7 +598,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         vendor,
         packs: options.packs,
         versions: options.versions,
-        notice: this.packCatalogNotice
+        notice: this.packCatalogNotice,
+        pendingPackId: this.pendingPackId
       });
       this.postState();
     }
@@ -699,7 +736,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         vendor: activatedVendor,
         packs: options.packs,
         versions: options.versions,
-        notice: this.packCatalogNotice
+        notice: this.packCatalogNotice,
+        pendingPackId: this.pendingPackId
       });
       this.postState();
       this.post({
@@ -948,6 +986,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       return;
     }
     if (message.type === 'ready') {
+      this.flushPendingPosts();
       // The core-pack status drives the version dropdown, so it must be loaded
       // with the first state instead of waiting for an unrelated refresh.
       void this.refreshCorePackNotice().then(() => this.postState());
@@ -1137,21 +1176,29 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
             : undefined,
           deviceSupport
         });
+        const warnings = [...(result.warnings ?? [])];
+        // A project generated with the device-profile default prefix when no
+        // compiler was found would silently fail at configure time; say so.
+        if (mcuToolchain === undefined) {
+          warnings.push(
+            '未检测到 armgcc 或 armclang：已按器件默认的 arm-none-eabi 前缀生成，安装编译链后重新生成即可。'
+          );
+        } else if (mcuToolchain.family === 'armclang' && !mcuToolchain.fromelf) {
+          warnings.push(
+            '未找到 fromelf：工程可以构建出 .elf，但不会生成 .hex/.bin。'
+          );
+        }
         // An empty device-file set is legitimate for a Pack without a declared
         // device header, but it also silently produces a project without real
         // `SystemInit`; name it so the sidebar explains instead of leaving the
         // user to compare directories.
         if (deviceSupport.length === 0 && this.dependencies.deviceSupportFilesForPart) {
           showLog();
-          return {
-            ...result,
-            warnings: [
-              ...(result.warnings ?? []),
-              '未复制器件头/system 文件：该 Pack 没有可用的器件头，或扩展尚未重新加载。打开「输出 → CMake Forge」可看到具体原因。'
-            ]
-          };
+          warnings.push(
+            '未复制器件头/system 文件：该 Pack 没有可用的器件头，或扩展尚未重新加载。打开「输出 → CMake Forge」可看到具体原因。'
+          );
         }
-        return result;
+        return warnings.length > 0 ? { ...result, warnings } : result;
       });
       return;
     }
@@ -1216,16 +1263,26 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private async scan(): Promise<void> {
     const root = this.projectRoot();
     if (!root) {
+      // The webview already marked the scan busy before sending the message;
+      // returning without operationFinished leaves every control disabled.
       this.post({
-        type: 'notification',
-        level: 'info',
-        message: this.discoveringProjects
-          ? '正在发现工程，请稍候。'
-          : '请先选择目标工程。'
+        type: 'operationFinished',
+        result: {
+          ok: false,
+          cancelled: this.discoveringProjects,
+          message: this.discoveringProjects
+            ? '正在发现工程，请稍候。'
+            : '请先选择目标工程。',
+          files: []
+        }
       });
       return;
     }
     if (this.busy) {
+      this.post({
+        type: 'operationFinished',
+        result: { ok: false, message: '正在处理上一个操作，请稍候。', files: [] }
+      });
       return;
     }
     const controller = new AbortController();

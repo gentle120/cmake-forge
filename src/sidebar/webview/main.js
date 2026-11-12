@@ -843,6 +843,9 @@
       if (!state || message.vendor !== state.selection.mcu.vendor) return;
       state.packs = Array.isArray(message.packs) ? message.packs : [];
       state.versions = Array.isArray(message.versions) ? message.versions : [];
+      if (typeof message.pendingPackId === 'string' && message.pendingPackId) {
+        state.pendingPackId = message.pendingPackId;
+      }
       state.pendingPackId = state.pendingPackId || state.selection.mcu.packId;
       state.packCatalogLoading = message.type === 'packCatalogLoading';
       if (message.type === 'packCatalogState') {

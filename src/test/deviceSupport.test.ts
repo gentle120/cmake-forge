@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -235,6 +236,25 @@ test('does not enable the RCU component when the Pack has no such header', async
     assert.ok(rte, 'RTE stub should still be generated');
     // Enabling a component whose header is missing would break the build.
     assert.doesNotMatch(rte!.content.toString('utf8'), /RTE_DEVICE_STDPERIPHERALS_RCU/);
+  } finally {
+    await rm(storageRoot, { recursive: true, force: true });
+  }
+});
+
+test('never writes an archive entry outside the snapshot directory', async () => {
+  const storageRoot = await mkdtemp(join(tmpdir(), 'cmake-embedded-slip-'));
+  try {
+    const packFile = 'packs/evil/evil.pack';
+    assert.equal(isDeviceSupportEntry('Device/../../escaped.h'), false);
+    await writeDeviceSupportSnapshot(storageRoot, packFile, [
+      { name: 'Device/Include/ok.h', data: Buffer.from('#define OK 1\n') },
+      { name: 'Device/../../escaped.h', data: Buffer.from('pwned') }
+    ]);
+    const snapshot = deviceSnapshotDir(storageRoot, packFile);
+    assert.equal(existsSync(join(snapshot, '..', '..', 'escaped.h')), false);
+    assert.equal(existsSync(join(storageRoot, 'escaped.h')), false);
+    const names = await readdir(snapshot, { recursive: true });
+    assert.ok(names.some((name) => name.endsWith('ok.h')));
   } finally {
     await rm(storageRoot, { recursive: true, force: true });
   }

@@ -113,7 +113,9 @@ test('generates a J-Link flash script for an imported part', { skip: !hasPython 
   assert.match(script, /JLINK_DEVICE = "Cortex-M0"/);
   assert.match(script, /"-device", args.device/);
   assert.match(script, /"-if", "SWD"/);
-  assert.match(script, /"loadfile " \+ firmware/);
+  assert.match(script, /loadfile "/);
+  assert.match(script, /run_jlink\(jlink, jlink_args, command_file\)/);
+  assert.match(script, /"-device", args.device/);
   await assertPythonSyntax(script);
 });
 

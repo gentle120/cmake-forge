@@ -416,7 +416,11 @@ function packDeviceToProfile(device: PackDeviceCandidate, vendorId: string, vend
 const FPU_CAPABLE_CORES = new Set(['cortex-m4', 'cortex-m7', 'cortex-m33', 'cortex-m35p', 'cortex-m52', 'cortex-m55', 'cortex-m85']);
 
 function compilerFlagsFor(core: string, fpu: string): string[] {
-  const flags = [`-mcpu=${core}`, '-mthumb'];
+  // GCC (and armclang) have no `-mcpu=sc000/sc300`; these legacy SecurCore
+  // parts are architecturally ARMv6-M / ARMv7-M, so build them with the
+  // equivalent Cortex-M core flag while keeping the vendor core header.
+  const gccCore = core === 'sc000' ? 'cortex-m0' : core === 'sc300' ? 'cortex-m3' : core;
+  const flags = [`-mcpu=${gccCore}`, '-mthumb'];
   if (!FPU_CAPABLE_CORES.has(core) || fpu.length === 0 || fpu.toUpperCase() === 'NO_FPU') {
     return flags;
   }
