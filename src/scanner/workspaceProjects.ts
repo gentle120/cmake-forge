@@ -29,6 +29,7 @@ export class WorkspaceProjectsCancelledError extends Error {
 }
 
 const keilContainers = new Set(['mdk-arm', 'mdk', 'project', 'projects']);
+const maxProjectScanDepth = 64;
 const iarContainers = new Set(['ewarm', 'iar', 'project', 'projects']);
 
 function posixPath(value: string): string {
@@ -88,7 +89,10 @@ async function discoverRoot(
 ): Promise<void> {
   const sourceDirectories = new Set<string>();
   const found = new Map<string, Set<WorkspaceProjectMarker>>();
-  const walk = async (directory: string): Promise<void> => {
+  const walk = async (directory: string, depth = 0): Promise<void> => {
+    if (depth > maxProjectScanDepth) {
+      return;
+    }
     const entries = await directoryEntries(directory, signal);
     for (const entry of entries) {
       if (signal?.aborted) {
@@ -97,7 +101,7 @@ async function discoverRoot(
       const path = join(directory, entry.name);
       if (entry.isDirectory) {
         if (!ignoredDirectories.has(entry.name) && !entry.name.startsWith('cmake-build-')) {
-          await walk(path);
+          await walk(path, depth + 1);
         }
         continue;
       }

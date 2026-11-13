@@ -527,7 +527,14 @@ test('LLVM clang workflow writes a GNU linker script and no C runtime', async ()
 test('STARM clang workflow generates CubeMX-style toolchain and runtime', async () => {
   await withWorkspace(async (root) => {
     await writeFile(join(root, 'main.c'), 'int main(void) { return 0; }\n');
-    const result = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), {
+    let capturedSettings: Record<string, string | boolean | Record<string, string>> | undefined;
+    const host = {
+      ...createHost(root),
+      updateSettings: async (settings: Record<string, string | boolean | Record<string, string>>) => {
+        capturedSettings = settings;
+      }
+    };
+    const result = await generateMcuWorkflow(host, fixtureDeviceProfile(), {
       toolchain: {
         family: 'clang',
         variant: 'starm',
@@ -537,6 +544,9 @@ test('STARM clang workflow generates CubeMX-style toolchain and runtime', async 
       }
     });
     assert.equal(result.ok, true);
+    assert.deepEqual(capturedSettings?.['cmake.environment'], {
+      PATH: 'C:/ST;${env:PATH}'
+    });
     assert.ok(existsSync(join(root, 'system', 'syscalls.c')));
     assert.ok(existsSync(join(root, 'system', 'sysmem.c')));
     assert.equal(existsSync(join(root, 'system', 'clang_runtime.c')), false);
@@ -573,6 +583,50 @@ test('ATfE clang workflow generates picolibc toolchain and GNU runtime', async (
     assert.match(toolchain, /-nostartfiles -fuse-ld=lld/);
     assert.ok(existsSync(join(root, 'system', 'syscalls.c')));
     assert.ok(existsSync(join(root, 'system', 'clang_runtime.c')));
+  });
+});
+
+test('MCU workflow clears a cache from a different clang install', async () => {
+  await withWorkspace(async (root) => {
+    await mkdir(join(root, 'build', 'debug'), { recursive: true });
+    await writeFile(join(root, 'build', 'debug', 'CMakeCache.txt'), [
+      'CMAKE_C_COMPILER:FILEPATH=D:/tools/llvm/bin/clang.exe'
+    ].join('\n'));
+    const result = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), {
+      toolchain: {
+        family: 'clang',
+        variant: 'atfe',
+        cCompiler: 'clang',
+        cCompilerPath: 'D:/ATfE/bin/clang.exe'
+      }
+    });
+    assert.equal(result.ok, true);
+    assert.equal(existsSync(join(root, 'build', 'debug', 'CMakeCache.txt')), false);
+    assert.ok((result.warnings ?? []).some((warning) => warning.includes('旧编译器缓存')));
+  });
+});
+
+test('MCU workflow clears a command-name cache resolved to another clang install', async () => {
+  await withWorkspace(async (root) => {
+    await mkdir(join(root, 'build', 'debug', 'CMakeFiles', '3.30'), { recursive: true });
+    await writeFile(join(root, 'build', 'debug', 'CMakeCache.txt'), [
+      'CMAKE_C_COMPILER:FILEPATH=clang'
+    ].join('\n'));
+    await writeFile(
+      join(root, 'build', 'debug', 'CMakeFiles', '3.30', 'CMakeCCompiler.cmake'),
+      'set(CMAKE_C_COMPILER "D:/tools/llvm/bin/clang.exe")\n'
+    );
+    const result = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), {
+      toolchain: {
+        family: 'clang',
+        variant: 'atfe',
+        cCompiler: 'clang',
+        cCompilerPath: 'D:/ATfE/bin/clang.exe'
+      }
+    });
+    assert.equal(result.ok, true);
+    assert.equal(existsSync(join(root, 'build', 'debug', 'CMakeCache.txt')), false);
+    assert.ok((result.warnings ?? []).some((warning) => warning.includes('旧编译器缓存')));
   });
 });
 

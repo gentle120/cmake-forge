@@ -160,6 +160,40 @@ test('a configured mirror is preferred over the CDN', async () => {
   assert.equal(requests[0].url, mirrorPack);
 });
 
+test('rejects a declared archive that exceeds the size limit', async () => {
+  const mirrorPack = 'https://mirror.example.com/packs/Keil.STM32F1xx_DFP.2.4.1.pack';
+  const tooLarge = String(512 * 1024 * 1024 + 1);
+  const oversized = {
+    body: new Uint8Array([1]),
+    headers: { 'content-length': tooLarge }
+  };
+  const { fetcher } = fetcherFor({
+    [mirrorPack]: oversized,
+    [keilCdn]: oversized,
+    [keilPack]: oversized
+  });
+
+  await assert.rejects(
+    downloadPack(fetcher, keilPack, { mirror: 'https://mirror.example.com/packs' }),
+    /归档过大/
+  );
+});
+
+test('rejects a ranged response that declares an oversized body', async () => {
+  const body = new Uint8Array(64);
+  const response = {
+    status: 206,
+    body,
+    headers: {
+      'content-range': 'bytes 0-63/64',
+      'content-length': String(512 * 1024 * 1024 + 1)
+    }
+  };
+  const { fetcher } = fetcherFor({ [keilCdn]: response, [keilPack]: response });
+
+  await assert.rejects(downloadPack(fetcher, keilPack), /响应过大/);
+});
+
 test('a host that ignores Range still yields the whole archive', async () => {
   // A plain 200 response is the whole archive, not just the requested chunk.
   const body = new Uint8Array(10).fill(4);

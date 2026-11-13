@@ -200,7 +200,15 @@ def resolve_config(scripts_root, config):
 
 
 def tcl_quote(value):
-    return chr(34) + value.replace(chr(92), "/").replace(chr(34), chr(92) + chr(34)) + chr(34)
+    # OpenOCD parses its commands as Tcl. Escape Tcl's own substitutions as
+    # well as the surrounding quote, otherwise a project path containing $, [
+    # or ] breaks the generated program command.
+    escaped = value.replace(chr(92), "/")
+    escaped = escaped.replace(chr(34), chr(92) + chr(34))
+    escaped = escaped.replace(chr(36), chr(92) + chr(36))
+    escaped = escaped.replace(chr(91), chr(92) + chr(91))
+    escaped = escaped.replace(chr(93), chr(92) + chr(93))
+    return chr(34) + escaped + chr(34)
 
 
 def build_program_command(firmware, verify, reset):
@@ -412,7 +420,11 @@ def main():
         sys.exit("Error: J-Link flashes ELF or HEX files; convert BIN files first.")
 
     # J-Link Commander treats the rest of the line as the file name, so a
-    # project under a path with spaces must be quoted.
+    # project under a path with spaces must be quoted. Commander has no escape
+    # for a quote inside a quoted path; fail clearly instead of writing a
+    # command that silently loads the wrong file.
+    if chr(34) in firmware:
+        sys.exit("Error: firmware path cannot contain a double quote.")
     commands = [f'loadfile "{firmware.replace(chr(92), "/")}"']
     if args.reset:
         commands.extend(["r", "g"])

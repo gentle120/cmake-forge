@@ -23,9 +23,23 @@ export const deviceIncludeDir = 'CMSIS/Device/Include';
 /** Project-relative directory that receives the copied `system_*.c` sources. */
 export const deviceSourceDir = 'CMSIS/Device/Source';
 
-/** Path of a snapshot file relative to the extension storage root. */
+/**
+ * Path of a snapshot file relative to the extension storage root.
+ *
+ * `packFile` normally comes from the imported-pack store and is a relative
+ * `packs/<vendor>/<file>` path, but legacy or hand-edited stores could carry
+ * `..` segments. Neutralise those instead of letting a snapshot escape the
+ * extension storage directory.
+ */
 export function deviceSnapshotDir(storageRoot: string, packFile: string): string {
-  return join(storageRoot, `${packFile.replace(/\\/g, '/')}.device`);
+  const safeFile = packFile
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .split('/')
+    .filter((segment) => segment.length > 0 && segment !== '.')
+    .map((segment) => segment === '..' ? '_.._' : segment.replace(/:/g, '_'))
+    .join('/');
+  return join(storageRoot, `${safeFile}.device`);
 }
 
 /**

@@ -25,6 +25,8 @@ export class ScanCancelledError extends Error {
 }
 
 const protectedDefines = new Set(['USE_HAL_DRIVER']);
+/** Deep trees and recursive symlinks must not stall a workspace scan forever. */
+const maxScanDepth = 64;
 
 function toProjectPath(root: string, filePath: string): string {
   return relative(root, filePath).split(sep).join('/');
@@ -78,10 +80,17 @@ async function readDirectoryEntries(
   options: ScanOptions
 ): Promise<DirentEntry[]> {
   throwIfScanCancelled(options);
-  const entries = await readdir(directory, { withFileTypes: true });
-  throwIfScanCancelled(options);
-  return (entries as DirentEntry[])
-    .sort((left, right) => left.name.localeCompare(right.name));
+  try {
+    const entries = await readdir(directory, { withFileTypes: true });
+    throwIfScanCancelled(options);
+    return (entries as DirentEntry[])
+      .sort((left, right) => left.name.localeCompare(right.name));
+  } catch (error) {
+    throwIfScanCancelled(options);
+    // A single unreadable directory (permissions, a broken junction, a
+    // transient network error) must not abort the whole workspace scan.
+    return [];
+  }
 }
 
 async function walk(
@@ -90,9 +99,13 @@ async function walk(
   sources: string[],
   includeDirs: Set<string>,
   defines: Set<string>,
-  options: ScanOptions
+  options: ScanOptions,
+  depth = 0
 ): Promise<void> {
   throwIfScanCancelled(options);
+  if (depth > maxScanDepth) {
+    return;
+  }
   options.onDirectory?.(directory);
   throwIfScanCancelled(options);
   const entries = await readDirectoryEntries(directory, options);
@@ -101,7 +114,7 @@ async function walk(
     throwIfScanCancelled(options);
     if (entry.isDirectory()) {
       if (!ignoredDirectories.has(entry.name) && !entry.name.startsWith('cmake-build-')) {
-        await walk(root, join(directory, entry.name), sources, includeDirs, defines, options);
+        await walk(root, join(directory, entry.name), sources, includeDirs, defines, options, depth + 1);
       }
       continue;
     }
@@ -118,11 +131,12 @@ async function walk(
     let content: string;
     try {
       content = await readFile(filePath, { encoding: 'utf8', signal: options.signal });
-    } catch (error) {
+    } catch {
       if (options.signal?.aborted) {
         throw new ScanCancelledError();
       }
-      throw error;
+      // Skip an unreadable file; its directory is still a valid include path.
+      continue;
     }
     const includeGuard = headerExtensions.has(extension) ? findIncludeGuard(content) : undefined;
     const definePattern = /^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\b/gm;

@@ -306,8 +306,8 @@ export function sanitizeSidebarSelection(
   const requestedMcuToolchain = typeof mcu?.buildToolchain === 'string'
     ? mcu.buildToolchain.trim()
     : '';
-  // MCU offers only installed compiler families; the first one is the default
-  // until the user picks another.
+  // All three MCU compiler families stay selectable; prefer the first installed
+  // one as the default, then fall back to the first fixed entry.
   const mcuBuildToolchain = buildToolchains.length === 0
     ? requestedMcuToolchain
     : findBuildToolchain(buildToolchains, requestedMcuToolchain) !== undefined
@@ -748,10 +748,9 @@ export function buildSidebarState(
       description: choice.description,
       detail: choice.detail
     })),
-    // MCU offers only the compiler families that are actually installed; an
-    // empty list hides the row instead of showing an unusable dropdown.
     // All three families stay selectable; the scan only fills the path and
-    // marks which one is installed on this machine.
+    // marks which one is installed on this machine. A missing compiler still
+    // generates a portable name-based toolchain the user can build after install.
     mcuToolchains: buildToolchains.map((toolchain) => ({
       value: toolchain.id,
       label: toolchain.label,

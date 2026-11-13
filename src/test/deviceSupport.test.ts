@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import test from 'node:test';
 import {
   annotateDeviceHeaders,
@@ -34,6 +34,13 @@ test('selects device headers and system sources but not examples or CMSIS compon
   assert.equal(isDeviceSupportEntry('CMSIS/Driver/Include/Driver_GPIO.h'), false);
   assert.equal(isDeviceSupportEntry('Device/StdPeriph_Driver/inc/stm32f10x_gpio.h'), false);
   assert.equal(isDeviceSupportEntry('Device/Source/startup_gd32f10x.s'), false);
+});
+
+test('keeps a malicious legacy pack path inside the storage root', () => {
+  const storageRoot = resolve('storage');
+  const snapshot = resolve(deviceSnapshotDir(storageRoot, '../../outside.pack'));
+  assert.equal(snapshot === storageRoot || snapshot.startsWith(`${storageRoot}${sep}`), true);
+  assert.equal(relative(storageRoot, snapshot).split(/[\\/]/).includes('..'), false);
 });
 
 test('loads the device header and its system files from the import snapshot', async () => {

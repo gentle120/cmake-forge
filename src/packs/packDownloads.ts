@@ -85,11 +85,30 @@ function declaredLength(response: FetchResponse): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+/**
+ * Rejects a response whose declared body is larger than the caller can accept.
+ * Checking `content-length` before `arrayBuffer()` matters: otherwise a broken
+ * server can make the extension allocate an unbounded buffer first and only then
+ * fail a post-hoc size check.
+ */
+function assertDeclaredBodySize(response: FetchResponse, maxBytes: number): void {
+  const declared = declaredLength(response);
+  if (declared !== undefined && declared > maxBytes) {
+    throw new Error(`Pack 归档响应过大（${declared} 字节），已超过 ${maxBytes} 字节上限。`);
+  }
+}
+
 /** Parses `bytes <start>-<end>/<total>` and returns the archive size. */
 function rangedTotal(response: FetchResponse): number | undefined {
   const match = /\/(\d+)\s*$/.exec(headerValue(response, 'content-range'));
   const value = match ? Number(match[1]) : Number.NaN;
   return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function assertArchiveSize(size: number): void {
+  if (size > maxArchiveBytes) {
+    throw new Error(`Pack 归档过大（${size} 字节），已超过 ${maxArchiveBytes} 字节上限。`);
+  }
 }
 
 function assertOk(response: FetchResponse, url: string): void {
@@ -139,10 +158,16 @@ async function readBody(
   options: DownloadOptions,
   totalBytes: number | undefined
 ): Promise<Buffer> {
+  if (totalBytes !== undefined) {
+    assertArchiveSize(totalBytes);
+  }
   let received = 0;
   let lastReport = 0;
   const onChunk = (bytes: number): void => {
     received += bytes;
+    if (received > maxArchiveBytes) {
+      throw new Error(`Pack 归档过大（超过 ${maxArchiveBytes} 字节上限），已停止下载。`);
+    }
     const now = Date.now();
     if (now - lastReport >= reportIntervalMs) {
       lastReport = now;
@@ -155,6 +180,7 @@ async function readBody(
   const body = response.body;
   if (!body) {
     const buffer = Buffer.from(await guard(response.arrayBuffer(), options.signal));
+    assertArchiveSize(buffer.length);
     onChunk(buffer.length);
     options.onProgress?.(totalBytes === undefined
       ? { receivedBytes: buffer.length }
@@ -172,6 +198,9 @@ async function readBody(
         break;
       }
       if (value && value.length > 0) {
+        if (received + value.length > maxArchiveBytes) {
+          throw new Error(`Pack 归档过大（超过 ${maxArchiveBytes} 字节上限），已停止下载。`);
+        }
         parts.push(Buffer.from(value));
         onChunk(value.length);
       }
@@ -256,6 +285,7 @@ async function downloadRanged(
           if (response.status !== 206) {
             throw new Error(`Ranged download rejected for ${url}: HTTP ${response.status}`);
           }
+          assertDeclaredBodySize(response, range.end - range.start + 1);
           const body = Buffer.from(await guard(response.arrayBuffer(), options.signal));
           if (body.length !== range.end - range.start + 1) {
             throw new Error(`Short ranged response for ${url}`);
@@ -325,7 +355,10 @@ async function downloadFrom(
       // A partial body with no declared size cannot be completed safely.
       throw new Error(`Ranged response without a total size for ${url}`);
     }
+    assertArchiveSize(total);
+    assertDeclaredBodySize(first, total);
     const head = Buffer.from(await guard(first.arrayBuffer(), options.signal));
+    assertArchiveSize(head.length);
     if (head.length > total) {
       throw new Error(`Ranged response exceeded the declared size for ${url}`);
     }
@@ -342,6 +375,7 @@ async function downloadFrom(
         headers: { Range: `bytes=${head.length}-${total - 1}` }
       });
       assertOk(fetched, url);
+      assertDeclaredBodySize(fetched, total - head.length);
       const rest = Buffer.from(await guard(fetched.arrayBuffer(), options.signal));
       if (head.length + rest.length !== total) {
         throw new Error(`Incomplete download for ${url}`);

@@ -543,14 +543,72 @@ async function missingUmbrellaIncludes(
  * and CMake Tools keeps reporting "cl.exe"/"arm-none-eabi-gcc". Drop only the
  * stale cache state so the next configure starts from the generated toolchain.
  */
+function normalizedPath(value: string): string {
+  return resolve(value).replace(/\\/g, '/').toLowerCase();
+}
+
+/** CMake cache stores absolute paths, while command-name compilers are selected by PATH. */
+function cachedCompilerMatches(
+  cachedCompiler: string,
+  expectedCompiler: string,
+  expectedCompilerPath: string | undefined
+): boolean {
+  const cached = cachedCompiler.trim().replace(/^"|"$/g, '');
+  const expected = expectedCompiler.trim().replace(/^"|"$/g, '');
+  const cachedIsPath = isAbsolute(cached) || /[\\/]/.test(cached);
+  const expectedIsPath = isAbsolute(expected) || /[\\/]/.test(expected);
+  const cachedName = basename(cached).toLowerCase().replace(/\.exe$/, '');
+  const expectedName = basename(expected).toLowerCase().replace(/\.exe$/, '');
+  if (!cachedIsPath) {
+    return cachedName === expectedName;
+  }
+  if (expectedCompilerPath) {
+    return normalizedPath(cached) === normalizedPath(expectedCompilerPath);
+  }
+  return expectedIsPath ? normalizedPath(cached) === normalizedPath(expected) : cachedName === expectedName;
+}
+
+/**
+ * CMake records the resolved compiler path in CMakeFiles/<version>/CMakeCCompiler.cmake,
+ * not only as the command name in CMakeCache.txt. Reading it catches a cache
+ * created when `clang` resolved through PATH to a different LLVM/ATfE install.
+ */
+async function resolvedCachedCompiler(buildDir: string): Promise<string | undefined> {
+  let versions: string[];
+  try {
+    versions = await readdir(join(buildDir, 'CMakeFiles'));
+  } catch {
+    return undefined;
+  }
+  for (const version of versions) {
+    if (!/^\d+(?:\.\d+)*/.test(version)) {
+      continue;
+    }
+    for (const file of ['CMakeCCompiler.cmake', 'CMakeCXXCompiler.cmake']) {
+      let content: string;
+      try {
+        content = await readFile(join(buildDir, 'CMakeFiles', version, file), 'utf8');
+      } catch {
+        continue;
+      }
+      const match = /^set\(CMAKE_C(?:(?:XX)?)_COMPILER\s+"?([^"\r\n)]+)"?\)/m
+        .exec(content);
+      if (match?.[1]?.trim()) {
+        return match[1].trim();
+      }
+    }
+  }
+  return undefined;
+}
+
 async function clearStaleMcuBuildCaches(
   root: string,
   toolchainPath: string,
-  expectedCompiler: string
+  expectedCompiler: string,
+  expectedCompilerPath?: string
 ): Promise<string[]> {
   const cleared: string[] = [];
-  const expectedToolchain = resolve(toolchainPath).replace(/\\/g, '/').toLowerCase();
-  const expectedBasename = basename(expectedCompiler).toLowerCase();
+  const expectedToolchain = normalizedPath(toolchainPath);
   for (const configuration of ['debug', 'release']) {
     const buildDir = join(root, 'build', configuration);
     const cachePath = join(buildDir, 'CMakeCache.txt');
@@ -572,8 +630,14 @@ async function clearStaleMcuBuildCaches(
       .toLowerCase();
     const toolchainChanged = cachedToolchain !== undefined
       && resolve(cachedToolchain).replace(/\\/g, '/').toLowerCase() !== expectedToolchain;
-    const compilerChanged = cachedCompiler !== undefined
-      && basename(cachedCompiler).toLowerCase() !== expectedBasename;
+    const resolvedCompiler = expectedCompilerPath
+      ? await resolvedCachedCompiler(buildDir)
+      : undefined;
+    const compilerChanged = (cachedCompiler !== undefined
+      && !cachedCompilerMatches(cachedCompiler, expectedCompiler, expectedCompilerPath))
+      || (resolvedCompiler !== undefined
+        && expectedCompilerPath !== undefined
+        && normalizedPath(resolvedCompiler) !== normalizedPath(expectedCompilerPath));
     if (!toolchainChanged && !compilerChanged) {
       continue;
     }
@@ -818,9 +882,14 @@ export async function generateMcuWorkflow(
   const clearedBuildCaches = await clearStaleMcuBuildCaches(
     root,
     join(root, 'cmake', effectiveProfile.toolchainFileName),
-    effectiveProfile.mcuCompiler ?? `${effectiveProfile.toolchainPrefix}-gcc`
+    effectiveProfile.mcuCompiler ?? `${effectiveProfile.toolchainPrefix}-gcc`,
+    effectiveProfile.mcuCompilerPath
   );
-  const toolchainEnvironment = effectiveProfile.clangVariant === 'atfe'
+  // ATfE and STARM toolchain files name their compilers (`clang`,
+  // `starm-clang`) instead of writing an absolute path, so their bin directory
+  // must be on CMake's PATH even when discovery found an off-PATH install.
+  const toolchainEnvironment = (effectiveProfile.clangVariant === 'atfe'
+    || effectiveProfile.clangVariant === 'starm')
     && effectiveProfile.mcuCompilerPath
     ? {
         PATH: `${dirname(effectiveProfile.mcuCompilerPath)}${process.platform === 'win32' ? ';' : ':'}\${env:PATH}`

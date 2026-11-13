@@ -1193,7 +1193,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         }
         if (mcuToolchain?.variant === 'atfe' && !mcuToolchain.onPath) {
           warnings.push(
-            `ATfE 工具链使用 clang 命令名，但 ${mcuToolchain.binDir} 不在 PATH 中；构建前请把该目录加入 PATH，否则可能解析到普通 LLVM clang。`
+            `ATfE 工具链不在 PATH；生成时会通过 cmake.environment 前置 ${mcuToolchain.binDir}。若 CMake Tools 或其他终端仍未解析到它，请把该目录加入 PATH。`
           );
         }
         if (mcuToolchain?.family === 'clang') {

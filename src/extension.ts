@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { join, resolve } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import {
   devicePackSourceForPart,
   getDeviceProfile,
@@ -130,6 +130,187 @@ async function scanWorkspace(root: string): Promise<ProjectDescription | undefin
   }
 }
 
+interface ManagedEnvironment {
+  /** Full PATH value written by this extension. */
+  managedPath: string;
+  /** Prefix this extension prepended; used to remove it after user edits. */
+  managedPrefix?: string;
+  /** A user PATH that was preserved after the generated toolchain directory. */
+  userPath?: string;
+}
+
+const MANAGED_ENVIRONMENT_KEY = 'cmakeForge.managedEnvironmentPaths';
+let workspaceStateMemento: vscode.Memento | undefined;
+let managedEnvironmentLoaded = false;
+const managedEnvironments = new Map<string, ManagedEnvironment>();
+
+function managedEnvironmentRootKey(projectRoot?: string): string {
+  return (projectRoot ? resolve(projectRoot) : '').replace(/\\/g, '/').toLowerCase();
+}
+
+async function loadManagedEnvironments(): Promise<void> {
+  if (managedEnvironmentLoaded) {
+    return;
+  }
+  managedEnvironmentLoaded = true;
+  if (!workspaceStateMemento) {
+    return;
+  }
+  const stored = workspaceStateMemento.get<Record<string, ManagedEnvironment>>(MANAGED_ENVIRONMENT_KEY);
+  for (const [key, value] of Object.entries(stored ?? {})) {
+    if (value && typeof value.managedPath === 'string') {
+      managedEnvironments.set(key, value);
+    }
+  }
+}
+
+async function saveManagedEnvironments(): Promise<void> {
+  if (!workspaceStateMemento) {
+    return;
+  }
+  const stored: Record<string, ManagedEnvironment> = {};
+  for (const [key, value] of managedEnvironments) {
+    stored[key] = value;
+  }
+  await workspaceStateMemento.update(MANAGED_ENVIRONMENT_KEY, stored);
+}
+
+function environmentRecord(value: unknown): Record<string, string> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const entries = Object.entries(value).filter((entry): entry is [string, string] => (
+    typeof entry[1] === 'string'
+  ));
+  return Object.fromEntries(entries);
+}
+
+function desiredPathPrefix(path: string | undefined): string | undefined {
+  if (!path) {
+    return undefined;
+  }
+  const suffix = `${delimiter}\${env:PATH}`;
+  if (path.endsWith(suffix)) {
+    const prefix = path.slice(0, -suffix.length);
+    // Strip any path separators left before the `${env:PATH}` suffix.
+    let end = prefix.length;
+    while (end > 0 && (prefix[end - 1] === ';' || prefix[end - 1] === ':')) {
+      end -= 1;
+    }
+    return prefix.slice(0, end) || undefined;
+  }
+  return path || undefined;
+}
+
+/**
+ * Recognises the PATH shape written by CMake Forge 1.0.2 and earlier, which
+ * stored `<ATfE bin>;${env:PATH}` without recording that it owned the prefix.
+ * Those entries would otherwise survive a switch back to GCC / desktop use.
+ */
+function legacyManagedPrefix(path: string | undefined): string | undefined {
+  if (!path || !path.endsWith(`${delimiter}\${env:PATH}`)) {
+    return undefined;
+  }
+  const prefix = desiredPathPrefix(path);
+  return prefix && /atfe|arm_clang|arm-toolchain/i.test(prefix) ? prefix : undefined;
+}
+
+async function updateManagedEnvironment(
+  environment: Record<string, string>,
+  folder: vscode.WorkspaceFolder | undefined,
+  target: vscode.ConfigurationTarget,
+  rootKey: string
+): Promise<void> {
+  const configuration = vscode.workspace.getConfiguration('cmake', folder?.uri);
+  const existing = environmentRecord(configuration.get<Record<string, string>>('environment'));
+  const previous = managedEnvironments.get(rootKey);
+  const desiredPath = environment.PATH;
+  const prefix = desiredPathPrefix(desiredPath);
+  // Preserve a PATH the user configured separately (for example CC or a custom
+  // SDK bin directory) instead of replacing the whole cmake.environment object.
+  let userPath: string | undefined;
+  if (existing?.PATH) {
+    if (existing.PATH === previous?.managedPath) {
+      userPath = previous.userPath;
+    } else if (legacyManagedPrefix(existing.PATH)) {
+      // The old release wrote this prefix but did not record it. Drop the stale
+      // ATfE directory instead of nesting it in front of the new one.
+      userPath = undefined;
+    } else if (previous?.managedPrefix
+      && existing.PATH.startsWith(`${previous.managedPrefix}${delimiter}`)) {
+      // The user edited PATH after generation. Keep only the part they added,
+      // otherwise regenerating would nest the old ATfE prefix in front of the new one.
+      userPath = existing.PATH.slice(previous.managedPrefix.length + 1) || undefined;
+    } else {
+      userPath = existing.PATH;
+    }
+  } else {
+    userPath = previous?.userPath;
+  }
+  const mergedPath = desiredPath === undefined
+    ? existing?.PATH
+    : (prefix && userPath ? `${prefix}${delimiter}${userPath}` : desiredPath);
+  const merged: Record<string, string> = {
+    ...(existing ?? {}),
+    ...environment,
+    ...(mergedPath === undefined ? {} : { PATH: mergedPath })
+  };
+  if (mergedPath === undefined) {
+    delete merged.PATH;
+  }
+  await configuration.update('environment', Object.keys(merged).length > 0 ? merged : undefined, target);
+  if (mergedPath === undefined) {
+    managedEnvironments.delete(rootKey);
+  } else {
+    managedEnvironments.set(rootKey, {
+      managedPath: mergedPath,
+      ...(prefix ? { managedPrefix: prefix } : {}),
+      ...(userPath && mergedPath !== userPath ? { userPath } : {})
+    });
+  }
+}
+
+async function clearManagedEnvironment(
+  folder: vscode.WorkspaceFolder | undefined,
+  target: vscode.ConfigurationTarget,
+  rootKey: string
+): Promise<boolean> {
+  const previous = managedEnvironments.get(rootKey);
+  const configuration = vscode.workspace.getConfiguration('cmake', folder?.uri);
+  const existing = environmentRecord(configuration.get<Record<string, string>>('environment'));
+  if (!previous) {
+    // Migration path: remove a prefix left behind by a release that did not
+    // persist managed state, while keeping unrelated user environment vars.
+    const legacy = legacyManagedPrefix(existing?.PATH);
+    if (!legacy || !existing) {
+      return false;
+    }
+    const next = { ...existing };
+    delete next.PATH;
+    await configuration.update('environment', Object.keys(next).length > 0 ? next : undefined, target);
+    return true;
+  }
+  const next = { ...existing };
+  if (existing?.PATH === previous.managedPath) {
+    if (previous.userPath) {
+      next.PATH = previous.userPath;
+    } else {
+      delete next.PATH;
+    }
+  } else if (existing?.PATH && previous.managedPrefix
+    && existing.PATH.startsWith(`${previous.managedPrefix}${delimiter}`)) {
+    // The user edited PATH after generation; remove only our prefix and keep
+    // everything they added.
+    next.PATH = existing.PATH.slice(previous.managedPrefix.length + 1) || '${env:PATH}';
+  }
+  if (next.PATH !== existing?.PATH) {
+    await configuration.update('environment', Object.keys(next).length > 0 ? next : undefined, target);
+  }
+  managedEnvironments.delete(rootKey);
+  await saveManagedEnvironments();
+  return true;
+}
+
 async function updateWorkspaceSettings(
   settings: Record<string, string | boolean | Record<string, string>>,
   projectRoot?: string
@@ -139,15 +320,24 @@ async function updateWorkspaceSettings(
   const folder = projectRoot
     ? vscode.workspace.getWorkspaceFolder(vscode.Uri.file(projectRoot))
     : undefined;
+  const target = folder ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace;
+  const rootKey = managedEnvironmentRootKey(projectRoot);
+  await loadManagedEnvironments();
+  const environment = environmentRecord(settings['cmake.environment']);
   for (const [key, value] of Object.entries(settings)) {
+    if (key === 'cmake.environment') {
+      continue;
+    }
     const separator = key.indexOf('.');
     const section = key.slice(0, separator);
     const setting = key.slice(separator + 1);
-    await vscode.workspace.getConfiguration(section, folder?.uri).update(
-      setting,
-      value,
-      folder ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace
-    );
+    await vscode.workspace.getConfiguration(section, folder?.uri).update(setting, value, target);
+  }
+  if (environment) {
+    await updateManagedEnvironment(environment, folder, target, rootKey);
+    await saveManagedEnvironments();
+  } else {
+    await clearManagedEnvironment(folder, target, rootKey);
   }
 }
 
@@ -1406,6 +1596,7 @@ async function generateNativeProject(): Promise<void> {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  workspaceStateMemento = context.workspaceState;
   const host = createWorkflowHost();
   packStorageRoot = context.globalStorageUri.fsPath;
   const sidebarProvider = new SidebarProvider(context, {

@@ -18,7 +18,15 @@
   `arm-none-eabi-gcc`。
 - 桌面方向使用 CMake Tools Kit 与 IntelliSense 配置提供器；C/C++ 扩展改为
   推荐安装，兼容 VS Code 1.85（Node 18）。
-- 测试 456 项通过。
+- 修复切换 ATfE/STARM 时旧 `cmake.environment.PATH` 残留、覆盖用户已有
+  `cmake.environment` 以及旧缓存仍解析到另一个 `clang` 的问题；切换回
+  GCC/桌面/Linux 时只移除本扩展写入的 PATH。
+- 修复编译器扫描在普通机器上同步遍历所有盘符导致激活卡顿（本机约 11 秒
+  降至约 0.1 秒），并保留对 PATH 外 ATfE / STARM / Keil 的识别。
+- 下载 `.pack` 时校验声明与实际 body 大小；扫描工作区跳过无权限目录/文件并
+  限制递归深度；设备快照目录过滤 legacy `..`；OpenOCD/J-Link 脚本正确转义
+  含 `$`、`[`、`]`、`"` 的路径。
+- 测试 462 项通过。
 
 ## 1.0.1
 

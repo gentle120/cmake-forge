@@ -60,6 +60,33 @@ const defaultFileSystem: BuildToolchainFileSystem = {
   readDir: (path) => readdirSync(path)
 };
 
+/**
+ * Discovery probes the same directories from several roots (drive tools,
+ * Program Files, PATH hints). Cache the raw listings for one discovery pass so
+ * a large installation tree is not read repeatedly, and remember failed
+ * directories so a missing/network drive is not probed again.
+ */
+function cachedFileSystem(fileSystem: BuildToolchainFileSystem): BuildToolchainFileSystem {
+  const cache = new Map<string, string[]>();
+  return {
+    readDir(path: string): string[] {
+      const key = normalizedDirectory(path);
+      const cached = cache.get(key);
+      if (cached !== undefined) {
+        return cached;
+      }
+      try {
+        const entries = fileSystem.readDir(path);
+        cache.set(key, entries);
+        return entries;
+      } catch {
+        cache.set(key, []);
+        return [];
+      }
+    }
+  };
+}
+
 const executableExtensions = ['.exe', ''];
 
 function normalizedDirectory(directory: string): string {
@@ -160,6 +187,9 @@ function defaultSearchRoots(
   fileSystem: BuildToolchainFileSystem,
   platform: NodeJS.Platform
 ): CompilerSearchRoots {
+  // Shared by every targeted walk below, so searching all drives cannot turn
+  // into an unbounded directory walk on a machine with large data drives.
+  const budget = { remaining: 6000 };
   const armclangDirs: string[] = [];
   const gccDirs: string[] = [];
   const clangDirs: string[] = [];
@@ -220,19 +250,23 @@ function defaultSearchRoots(
       `${drive}/Desktop/tools/toolchain`,
       `${drive}/Desktop/Tools`
     ]) {
-      for (const directory of allBinDirectories(fileSystem, container, 4)) {
+      for (const directory of targetedBinDirectories(fileSystem, container, 5, budget)) {
         pushDirectory(atfeDirs, directory);
+        pushDirectory(gccDirs, directory);
+        pushDirectory(clangDirs, directory);
+        pushDirectory(armclangDirs, directory);
+        pushDirectory(starmDirs, directory);
       }
     }
     // Portable installs often sit directly on a drive (D:/STM32CubeIDE_..., D:/STM32CubeMX).
     for (const child of readChildren(fileSystem, `${drive}/`)) {
       if (/ATfE|Arm Toolchain for Embedded|arm-toolchain/i.test(child)) {
-        for (const directory of allBinDirectories(fileSystem, `${drive}/${child}`, 4)) {
+        for (const directory of targetedBinDirectories(fileSystem, `${drive}/${child}`, 5, budget)) {
           pushDirectory(atfeDirs, directory);
         }
       }
       if (/STM32CubeIDE|STM32CubeMX|STM32CubeCLT|STMicroelectronics|STARM/i.test(child)) {
-        for (const directory of allBinDirectories(fileSystem, `${drive}/${child}`, 8)) {
+        for (const directory of targetedBinDirectories(fileSystem, `${drive}/${child}`, 7, budget)) {
           pushDirectory(starmDirs, directory);
         }
       }
@@ -265,7 +299,7 @@ function defaultSearchRoots(
       `${drive}/Program Files/STMicroelectronics`,
       `${drive}/Program Files (x86)/STMicroelectronics`
     ]) {
-      for (const directory of allBinDirectories(fileSystem, root, 8)) {
+      for (const directory of targetedBinDirectories(fileSystem, root, 7, budget)) {
         pushDirectory(starmDirs, directory);
       }
     }
@@ -296,12 +330,12 @@ function defaultSearchRoots(
         }
       }
       if (/ATfE|Arm Toolchain for Embedded|arm-toolchain/i.test(child)) {
-        for (const directory of allBinDirectories(fileSystem, joinPath(root, child), 4)) {
+        for (const directory of targetedBinDirectories(fileSystem, joinPath(root, child), 5, budget)) {
           pushDirectory(atfeDirs, directory);
         }
       }
       if (/STM32CubeIDE|STM32CubeMX|STM32CubeCLT|STMicroelectronics/i.test(child)) {
-        for (const directory of allBinDirectories(fileSystem, joinPath(root, child), 8)) {
+        for (const directory of targetedBinDirectories(fileSystem, joinPath(root, child), 7, budget)) {
           pushDirectory(starmDirs, directory);
         }
       }
@@ -338,7 +372,6 @@ function defaultSearchRoots(
   }
   return { armclangDirs, gccDirs, clangDirs, starmDirs, atfeDirs };
 }
-
 
 /** Home directories from the environment (Windows and POSIX). */
 function homeDirectories(environment: NodeJS.ProcessEnv): string[] {
@@ -411,15 +444,24 @@ function binDirectoriesBelow(
 }
 
 /** Every `bin` directory below a root, for trees like STM32CubeIDE's plugins. */
-function allBinDirectories(
+const toolchainDirectoryName = /toolchain|tools?|plugins|arm|llvm|gcc|clang|keil|mdk|stm32|atfe|compiler|embedded|sdk/i;
+
+/**
+ * Finds `bin` directories below a broad install root while only descending into
+ * children whose names look toolchain-related. A plain depth-limited walk over
+ * `D:/Desktop/tools` or `Program Files` reads thousands of unrelated folders
+ * before it reaches the compiler, which made activation block for seconds on
+ * ordinary machines.
+ */
+function targetedBinDirectories(
   fileSystem: BuildToolchainFileSystem,
   root: string,
-  maxDepth: number
+  maxDepth: number,
+  budget: { remaining: number }
 ): string[] {
   const found: string[] = [];
-  let visited = 0;
   const walk = (directory: string, depth: number): void => {
-    if (visited++ > 4000) {
+    if (budget.remaining-- <= 0) {
       return;
     }
     const children = readChildren(fileSystem, directory);
@@ -430,12 +472,19 @@ function allBinDirectories(
       return;
     }
     for (const child of children) {
+      if (!toolchainDirectoryName.test(child)) {
+        continue;
+      }
+      if (child === 'bin' || child === 'Bin') {
+        continue;
+      }
       walk(`${directory}/${child}`, depth + 1);
     }
   };
   walk(root, 0);
   return found;
 }
+
 
 function pathDirectories(
   environment: NodeJS.ProcessEnv,
@@ -529,27 +578,29 @@ function mcuClangToolchain(
   const atfe = variant === 'atfe';
   const cName = starm ? 'starm-clang' : 'clang';
   const cxxName = starm ? 'starm-clang++' : 'clang++';
+  // ATfE and STARM toolchain files name their compilers instead of embedding a
+  // path; the workflow prepends their bin directory through cmake.environment.
+  // Off-PATH generic LLVM clang has no such toolchain wrapper, so it keeps the
+  // absolute path it needs to build.
+  const namedCommands = atfe || starm;
   return {
     id: 'mcu:clang',
     direction: 'mcu',
     family: 'clang',
     prefix: '',
     variant,
-    // ATfE's compiler is also called `clang`; using the bare command could pick
-    // a different LLVM install earlier on PATH (without picolibc). Keep its
-    // absolute path so the generated toolchain is unambiguous.
-    cCompiler: atfe || !onPath ? compilerPath : cName,
+    cCompiler: namedCommands || onPath ? cName : compilerPath,
     ...(cxxPath === undefined
       ? {}
-      : { cxxCompiler: atfe || !onPath ? cxxPath : cxxName }),
+      : { cxxCompiler: namedCommands || onPath ? cxxName : cxxPath }),
     cCompilerPath: compilerPath,
     ...(objcopyPath === undefined
       ? {}
-      : { objcopy: atfe || !onPath ? objcopyPath : (starm ? 'starm-objcopy' : 'llvm-objcopy') }),
+      : { objcopy: namedCommands ? (starm ? 'starm-objcopy' : 'llvm-objcopy') : (!onPath ? objcopyPath : 'llvm-objcopy') }),
     ...(sizePath === undefined
       ? {}
-      : { size: atfe || !onPath ? sizePath : (starm ? 'starm-size' : 'llvm-size') }),
-    ...(linkerPath === undefined ? {} : { linker: onPath ? 'ld.lld' : linkerPath }),
+      : { size: namedCommands ? (starm ? 'starm-size' : 'llvm-size') : (!onPath ? sizePath : 'llvm-size') }),
+    ...(linkerPath === undefined ? {} : { linker: namedCommands || onPath ? 'ld.lld' : linkerPath }),
     detected: true,
     onPath,
     binDir: directory,
@@ -597,6 +648,7 @@ export function discoverMcuBuildToolchains(
   fileSystem: BuildToolchainFileSystem = defaultFileSystem,
   platform: NodeJS.Platform = process.platform
 ): BuildToolchain[] {
+  fileSystem = cachedFileSystem(fileSystem);
   const pathDirs = pathDirectories(environment, platform);
   const roots = defaultSearchRoots(environment, fileSystem, platform);
   const gccCandidates = [...pathDirs, ...roots.gccDirs];
