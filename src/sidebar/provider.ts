@@ -184,6 +184,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private flashDetection?: SidebarFlashDetection;
   private flashController?: AbortController;
   private chipDetectionRunning = false;
+  /** Project root the cached chip label belongs to; a new root invalidates it. */
+  private chipDetectionRoot?: string;
   private packOptions: DevicePackOption[] = [];
   private vendorOptions?: Array<{ value: string; label: string; description?: string }>;
   private pendingPackId: string;
@@ -853,6 +855,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     return this.selectionValue.projectRoot || undefined;
   }
 
+  /**
+   * The chip label only counts while it belongs to the open project: carrying
+   * it across a folder switch would let an old target survive a new chip.
+   */
+  private detectedChipLabel(): string {
+    const root = this.projectRoot();
+    return root !== undefined && this.chipDetectionRoot === root
+      ? this.flashDetection?.chipLabel ?? ''
+      : '';
+  }
+
+  /** OpenOCD flashes with the algorithm named by the target config. */
+  private requiresDetectedTarget(backend: string): boolean {
+    return backend === 'openocd' && this.detectedChipLabel() === '';
+  }
+
   private async confirmOverwrite(files: string[]): Promise<boolean> {
     return this.dependencies.confirmOverwrite(files);
   }
@@ -1014,14 +1032,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     }
     const selection = this.selectionValue.flash;
     const probe = getFlashProbeProfile(selection.probeId);
-    let targetLabel = selection.targetId;
-    try {
-      targetLabel = getFlashTargetProfile(selection.targetId).label;
-    } catch {
-      // An unknown persisted target id is repaired by sanitize; keep the raw id
-      // instead of failing the whole state for a label.
+    // A target only means something once the probe has read the chip it belongs
+    // to: a leftover id from another project would otherwise claim a match with
+    // silicon it never saw, and the user has no control left to correct it.
+    const chipLabel = this.detectedChipLabel();
+    let targetLabel = '自动（点「检测探针」确定）';
+    if (chipLabel !== '') {
+      targetLabel = selection.targetId;
+      try {
+        targetLabel = getFlashTargetProfile(selection.targetId).label;
+      } catch {
+        // An unknown persisted target id is repaired by sanitize; keep the raw id
+        // instead of failing the whole state for a label.
+      }
     }
-    const chipLabel = this.flashDetection?.chipLabel ?? '';
     let firmwarePath = '';
     let firmwareLabel = '';
     let firmwareDetail = '';
@@ -1077,6 +1101,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         blockedReason = discovered.reason || '没有找到可烧录的 ELF：先构建工程，或用「选择…」指定固件。';
       }
     }
+    // OpenOCD picks its flash algorithm from the target config, so flashing
+    // without a chip-derived target is how the wrong bank gets erased. J-Link
+    // and pyOCD take a part name instead and stay usable before detection.
+    const needsTarget = selection.backend === 'openocd';
+    const needsChip = needsTarget && chipLabel === '';
     this.flashDetection = {
       firmwarePath,
       firmwareLabel,
@@ -1084,8 +1113,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       targetLabel,
       probeLabel: probe.label,
       chipLabel,
-      available: firmwarePath !== '',
-      blockedReason
+      available: firmwarePath !== '' && !needsChip,
+      blockedReason: blockedReason
+        || (firmwarePath !== '' && needsChip
+          ? '先点「检测探针」读取芯片型号：OpenOCD 的烧录目标由它决定。'
+          : '')
     };
   }
 
@@ -1129,6 +1161,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     }
     const probe = getFlashProbeProfile(this.selectionValue.flash.probeId);
     lines.push(`探针  ${probe.label} · ${probe.interfaceConfig}`);
+    this.chipDetectionRoot = this.projectRoot();
     await this.context.workspaceState.update(selectionKey, this.selectionValue);
     return lines;
   }
@@ -1403,6 +1436,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.post({ type: 'operationFinished', result: { ok: false, message, files: [] } });
+      return;
+    }
+    if (this.requiresDetectedTarget(flash.backend)) {
+      this.post({
+        type: 'operationFinished',
+        result: {
+          ok: false,
+          message: '先点「检测探针」读取芯片型号：OpenOCD 的烧录目标由它决定。',
+          files: []
+        }
+      });
       return;
     }
     const verify = request.verify ?? this.selectionValue.flash.verify !== false;
@@ -1833,6 +1877,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     if (message.type === 'generateFlashScript') {
       await this.runGeneration('正在生成 flash.py', async () => {
         const flash = this.flashGenerationOptions();
+        if (this.requiresDetectedTarget(flash.backend)) {
+          throw new Error('先点「检测探针」读取芯片型号：烧录目标由它决定，生成前需要先确定目标。');
+        }
         const result = await generateFlashWorkflow(
           this.workflowHost(),
           flash.target,
@@ -1853,6 +1900,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     }
     if (message.type === 'generateDebugConfiguration') {
       await this.runGeneration('正在生成调试配置', async () => {
+        const detected = this.flashGenerationOptions();
+        if (this.requiresDetectedTarget(detected.backend)) {
+          throw new Error('先点「检测探针」读取芯片型号：调试配置里的烧录目标由它决定。');
+        }
         if (this.dependencies.ensureCortexDebugInstalled
           && !(await this.dependencies.ensureCortexDebugInstalled())) {
           return {

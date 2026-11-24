@@ -10,7 +10,7 @@ This file is a compact relay ledger, not a history log. Stable facts belong in `
 ## Current Batch
 
 - Objective: 让烧录与调试对齐参考工程的操作面——探针检测 MCU 型号（CPUID + DBGMCU IDCODE）、可手选工作区 ELF、OpenOCD 后端直连烧录不再经过 `flash.py`，检测/烧录都带阶段进度与失败诊断。
-- Follow-up（2026-11-24）: 去掉「后端细节」面板；检测成功把芯片/目标/探针写进「烧录输出」；target 由 DEV_ID 推导（`src/flash/chipTargets.ts`）；构建目录为空时回退到工作区最新 ELF。`npm test` 510 项（501 通过 / 9 个固件用例跳过）。
+- Follow-up（2026-11-24）: 去掉「后端细节」面板；检测成功把芯片/目标/探针写进「烧录输出」；target 由 DEV_ID 推导（`src/flash/chipTargets.ts`）；构建目录为空时回退到工作区最新 ELF。检测结果按工程失效：换工程后目标行回到「自动」，检测成功前 OpenOCD 烧录与配置生成提示先检测，不再沿用上一份 target。`npm test` 510 项（501 通过 / 9 个固件用例跳过）。
 - Status: `done` — `src/flash/openocdDirect.ts`（OpenOCD 参数构造、CPUID/DBGMCU 标识解析、逐探针探测）+ `flashRunner.runTool`（通用子进程与阶段解析）+ 侧栏「检测探针 / 选择… / 烧录」接线 + 契约 L72 修订；`npm test` 504/504 通过，真实进程用 stub 验证（真实探针与 OpenOCD 未在本机安装，待用户侧验收）。
 
 ## Next Batch

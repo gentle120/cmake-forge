@@ -63,7 +63,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - 仅切换侧栏模式（mcu/linux/native）的保存按消息保留模式；MCU 字段重算不改写模式。
 - 侧栏调试器列表仅提供当前烧录后端支持的探针；切换后端时不保留不兼容探针。
 - 固件的来源顺序是「手选 > `build/<preset>` 最新产物 > 工作区其余位置最新的 ELF」；手选路径不存在时烧录禁用并说明原因，构建目录为空时回退到工作区扫描。
-- 探针探测成功会把当前探针改成探测成功的接口；烧录 target 由读到的 DBGMCU DEV_ID 推导（`src/flash/chipTargets.ts`），DEV_ID 未收录时保留当前目标而不是按内核猜。检测结果（芯片/目标/探针）写进「烧录输出」，侧栏不提供 target 手选或后端细节面板。
+- 探针探测成功会把当前探针改成探测成功的接口；烧录 target 由读到的 DBGMCU DEV_ID 推导（`src/flash/chipTargets.ts`），DEV_ID 未收录时保留当前目标而不是按内核猜。检测结果（芯片/目标/探针）写进「烧录输出」，侧栏不提供 target 手选或后端细节面板。检测结果只对当前工程有效：切换工程或重新打开窗口后，目标行显示「自动」，在本次检测成功前不复用上一份 target，也不允许 OpenOCD 后端烧录或生成（会提示先「检测探针」）；J-Link/pyOCD 用器件名而非 target 配置，不受此限制。
 
 ## Performance And Resources
 
