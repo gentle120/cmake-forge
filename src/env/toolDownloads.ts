@@ -10,9 +10,11 @@
 
 import { spawn } from 'node:child_process';
 import {
+  appendFileSync,
   createWriteStream,
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   renameSync,
   rmSync,
@@ -20,20 +22,39 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 
-/** Newest Arm release whose Windows zip is published for both architectures. */
-export const ARM_GCC_VERSION = '15.2.rel1';
+/**
+ * Arm's own CDN is the canonical source but is very slow from mainland China,
+ * and no university mirror carries the zip. GitHub is fast there, so the
+ * primary source is the same GCC 15.2.1 built for Windows by xpack and fetched
+ * through a public GitHub proxy; the official Arm archive stays as a fallback.
+ */
+export const GITHUB_PROXY = 'https://gh-proxy.com/';
+
+export const ARM_GCC_VERSION = '15.2.1-1.1';
 export const ARM_GCC_URL =
-  `https://developer.arm.com/-/media/Files/downloads/gnu/${ARM_GCC_VERSION}/binrel/`
-  + `arm-gnu-toolchain-${ARM_GCC_VERSION}-mingw-w64-x86_64-arm-none-eabi.zip`;
+  `${GITHUB_PROXY}https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/`
+  + `v${ARM_GCC_VERSION}/xpack-arm-none-eabi-gcc-${ARM_GCC_VERSION}-win32-x64.zip`;
+export const ARM_GCC_OFFICIAL_URL =
+  'https://developer.arm.com/-/media/Files/downloads/gnu/15.2.rel1/binrel/'
+  + 'arm-gnu-toolchain-15.2.rel1-mingw-w64-x86_64-arm-none-eabi.zip';
+export const ARM_GCC_SOURCES = [ARM_GCC_URL, ARM_GCC_OFFICIAL_URL];
 
 export const OPENOCD_VERSION = '0.12.0-7';
 export const OPENOCD_URL =
-  `https://github.com/xpack-dev-tools/openocd-xpack/releases/download/v${OPENOCD_VERSION}/`
-  + `xpack-openocd-${OPENOCD_VERSION}-win32-x64.zip`;
+  `${GITHUB_PROXY}https://github.com/xpack-dev-tools/openocd-xpack/releases/download/`
+  + `v${OPENOCD_VERSION}/xpack-openocd-${OPENOCD_VERSION}-win32-x64.zip`;
+export const OPENOCD_SOURCES = [
+  OPENOCD_URL,
+  'https://github.com/xpack-dev-tools/openocd-xpack/releases/download/'
+    + `v${OPENOCD_VERSION}/xpack-openocd-${OPENOCD_VERSION}-win32-x64.zip`
+];
 
 /** Rough sizes, used for a percentage before the server reports a length. */
 export const ARM_GCC_EXPECTED_BYTES = 296_000_000;
 export const OPENOCD_EXPECTED_BYTES = 3_300_000;
+
+/** Python package index mirror used by the pyOCD install step. */
+export const PYPI_MIRROR = 'https://pypi.tuna.tsinghua.edu.cn/simple';
 
 export type ToolDownloadStage = 'download' | 'extract' | 'verify' | 'done';
 
@@ -76,17 +97,48 @@ function report(
   options.onProgress?.(percent === undefined ? { stage, message } : { stage, message, percent });
 }
 
-async function downloadArchive(
+function parseTotalFromRange(header: string | null): number | undefined {
+  const match = /\/(\d+)$/.exec(header ?? '');
+  if (!match) {
+    return undefined;
+  }
+  const total = Number(match[1]);
+  return Number.isFinite(total) && total > 0 ? total : undefined;
+}
+
+async function downloadSingle(
   options: InstallOptions,
+  fetcher: typeof fetch,
   url: string,
   destination: string,
   expectedBytes: number,
   label: string
 ): Promise<void> {
-  const fetcher = options.fetchImpl ?? fetch;
-  mkdirSync(join(destination, '..'), { recursive: true });
   report(options, 'download', `正在下载 ${label}…`, 0);
-  const response = await fetcher(url, { signal: options.signal, redirect: 'follow' });
+  // A single stream has no per-chunk timeout of its own; the proxy used to stall
+  // mid-body and leave the promise pending forever. Abort after 60 s of silence.
+  const idle = new AbortController();
+  const signal = options.signal ? AbortSignal.any([options.signal, idle.signal]) : idle.signal;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = (): void => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    timer = setTimeout(() => idle.abort(), REQUEST_TIMEOUT_MS * 2);
+  };
+  arm();
+  let response: Response;
+  try {
+    response = await fetcher(url, { signal, redirect: 'follow' });
+  } catch (error) {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    if (idle.signal.aborted) {
+      throw new Error(`下载 ${label} 失败：${REQUEST_TIMEOUT_MS * 2 / 1000} 秒内没有收到响应。`);
+    }
+    throw error;
+  }
   if (!response.ok || !response.body) {
     // The CDN answers 403/404 with a short body; surfacing the status is enough
     // to tell a blocked network from a moved release.
@@ -101,6 +153,7 @@ async function downloadArchive(
   let lastPercent = -1;
   try {
     for (;;) {
+      arm();
       const chunk = await reader.read();
       if (chunk.done) {
         break;
@@ -122,12 +175,196 @@ async function downloadArchive(
       stream.end((error?: Error | null) => (error ? reject(error) : resolve()));
     });
     renameSync(partial, destination);
+  } catch (error) {
+    if (idle.signal.aborted && !options.signal?.aborted) {
+      throw new Error(`下载 ${label} 失败：${REQUEST_TIMEOUT_MS * 2 / 1000} 秒内没有收到数据。`);
+    }
+    throw error;
   } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
     stream.destroy();
     if (existsSync(partial)) {
       rmSync(partial, { force: true });
     }
   }
+}
+
+/**
+ * Single connections to international CDNs are throttled hard here, so a
+ * ranged download with several parallel connections is where most of the
+ * speed comes from. Falls back to one stream when the server ignores `Range`.
+ */
+const CHUNK_BYTES = 1024 * 1024;
+const CHUNK_WORKERS = 24;
+/** 单个请求的兜底超时：代理偶尔挂住连接，不能让一个分片拖死整次下载。 */
+const REQUEST_TIMEOUT_MS = 30_000;
+
+async function downloadChunks(
+  options: InstallOptions,
+  fetcher: typeof fetch,
+  url: string,
+  destination: string,
+  total: number,
+  label: string
+): Promise<void> {
+  const chunks = Math.ceil(total / CHUNK_BYTES);
+  const controller = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, controller.signal])
+    : controller.signal;
+  const parts: string[] = [];
+  let completed = 0;
+  let lastPercent = -1;
+  let nextChunk = 0;
+  let failure: unknown;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = nextChunk++;
+      if (index >= chunks || failure) {
+        return;
+      }
+      const start = index * CHUNK_BYTES;
+      const end = Math.min(total - 1, start + CHUNK_BYTES - 1);
+      const partPath = `${destination}.part${index}`;
+      try {
+        for (let attempt = 1; ; attempt += 1) {
+          try {
+            const response = await fetcher(url, {
+              headers: { Range: `bytes=${start}-${end}` },
+              signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
+              redirect: 'follow'
+            });
+            if (response.status !== 206 || !response.body) {
+              throw new Error(`分片 ${index} 返回 HTTP ${response.status}`);
+            }
+            const stream = createWriteStream(partPath);
+            const reader = response.body.getReader();
+            try {
+              for (;;) {
+                const chunk = await reader.read();
+                if (chunk.done) {
+                  break;
+                }
+                if (!stream.write(chunk.value)) {
+                  await new Promise<void>((resolve) => stream.once('drain', resolve));
+                }
+              }
+            } finally {
+              await new Promise<void>((resolve, reject) => {
+                stream.end((error?: Error | null) => (error ? reject(error) : resolve()));
+              });
+            }
+            break;
+          } catch (error) {
+            rmSync(partPath, { force: true });
+            if (signal.aborted || attempt >= 3) {
+              throw error;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+          }
+        }
+        parts[index] = partPath;
+        completed += end - start + 1;
+        const percent = Math.min(99, Math.floor((completed / total) * 100));
+        if (percent !== lastPercent) {
+          lastPercent = percent;
+          report(options, 'download', `正在下载 ${label}… ${percent}%`, percent);
+        }
+      } catch (error) {
+        if (!failure) {
+          failure = error;
+        }
+        controller.abort();
+        return;
+      }
+    }
+  };
+  try {
+    await Promise.all(Array.from({ length: Math.min(CHUNK_WORKERS, chunks) }, () => worker()));
+    if (failure) {
+      throw failure;
+    }
+    const assembled = `${destination}.part`;
+    rmSync(assembled, { force: true });
+    for (let index = 0; index < chunks; index += 1) {
+      appendFileSync(assembled, readFileSync(parts[index]));
+      rmSync(parts[index], { force: true });
+    }
+    renameSync(assembled, destination);
+  } finally {
+    for (const part of parts) {
+      if (part) {
+        rmSync(part, { force: true });
+      }
+    }
+  }
+}
+
+async function downloadFrom(
+  options: InstallOptions,
+  fetcher: typeof fetch,
+  url: string,
+  destination: string,
+  expectedBytes: number,
+  label: string
+): Promise<void> {
+  mkdirSync(join(destination, '..'), { recursive: true });
+  let probe: Response | undefined;
+  try {
+    probe = await fetcher(url, {
+      headers: { Range: 'bytes=0-0' },
+      signal: options.signal
+        ? AbortSignal.any([options.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
+        : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      redirect: 'follow'
+    });
+  } catch (error) {
+    if (options.signal?.aborted) {
+      throw error;
+    }
+    probe = undefined;
+  }
+  if (probe) {
+    if (!probe.ok) {
+      await probe.body?.cancel().catch(() => undefined);
+      throw new Error(`下载 ${label} 失败：HTTP ${probe.status}`);
+    }
+    const total = parseTotalFromRange(probe.headers.get('content-range'));
+    await probe.body?.cancel().catch(() => undefined);
+    if (probe.status === 206 && total !== undefined && total > 1024 * 1024) {
+      await downloadChunks(options, fetcher, url, destination, total, label);
+      return;
+    }
+  }
+  await downloadSingle(options, fetcher, url, destination, expectedBytes, label);
+}
+
+async function downloadArchive(
+  options: InstallOptions,
+  sources: string[],
+  destination: string,
+  expectedBytes: number,
+  label: string
+): Promise<void> {
+  const fetcher = options.fetchImpl ?? fetch;
+  let lastError: unknown;
+  for (const url of sources) {
+    try {
+      await downloadFrom(options, fetcher, url, destination, expectedBytes, label);
+      return;
+    } catch (error) {
+      if (options.signal?.aborted) {
+        throw new Error('已取消下载。');
+      }
+      lastError = error;
+      if (sources.indexOf(url) < sources.length - 1) {
+        report(options, 'download', `${label} 的当前镜像不可用，正在换下一个…`);
+      }
+    }
+  }
+  throw lastError ?? new Error(`下载 ${label} 失败。`);
 }
 
 function tarExecutable(): string {
@@ -211,7 +448,7 @@ export async function installArmGcc(options: InstallOptions): Promise<InstalledA
     }
   }
   rmSync(target, { recursive: true, force: true });
-  await downloadArchive(options, ARM_GCC_URL, archive, ARM_GCC_EXPECTED_BYTES, 'ARM GNU 工具链');
+  await downloadArchive(options, ARM_GCC_SOURCES, archive, ARM_GCC_EXPECTED_BYTES, 'ARM GNU 工具链');
   report(options, 'extract', '正在解压 ARM GNU 工具链…（约 300 MB，请稍候）');
   await (options.extractImpl ?? extractWithTar)(archive, target);
   rmSync(archive, { force: true });
@@ -236,7 +473,7 @@ export async function installOpenOcd(options: InstallOptions): Promise<Installed
     }
   }
   rmSync(target, { recursive: true, force: true });
-  await downloadArchive(options, OPENOCD_URL, archive, OPENOCD_EXPECTED_BYTES, 'OpenOCD');
+  await downloadArchive(options, OPENOCD_SOURCES, archive, OPENOCD_EXPECTED_BYTES, 'OpenOCD');
   report(options, 'extract', '正在解压 OpenOCD…');
   await (options.extractImpl ?? extractWithTar)(archive, target);
   rmSync(archive, { force: true });

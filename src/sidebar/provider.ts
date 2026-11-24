@@ -64,7 +64,7 @@ import {
   findBuildToolchain,
   type BuildToolchain
 } from '../env/buildToolchains';
-import { installArmGcc, installOpenOcd } from '../env/toolDownloads';
+import { PYPI_MIRROR, installArmGcc, installOpenOcd } from '../env/toolDownloads';
 import { renderSidebarHtml } from './html';
 import { parseIncomingMessage, type SidebarIncomingMessage } from './messages';
 import {
@@ -1954,7 +1954,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         try {
           const result = await runTool({
             executable,
-            args: ['-m', 'pip', 'install', '--user', '--upgrade', 'pyocd'],
+            args: ['-m', 'pip', 'install', '--user', '--upgrade', '-i', PYPI_MIRROR, 'pyocd'],
             cwd: storageRoot,
             tailLines: 20,
             signal: controller.signal

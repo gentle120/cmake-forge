@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
   ARM_GCC_EXPECTED_BYTES,
+  ARM_GCC_OFFICIAL_URL,
   ARM_GCC_URL,
   ARM_GCC_VERSION,
   OPENOCD_URL,
@@ -26,11 +27,69 @@ function archiveResponse(bytes = 4): Response {
   });
 }
 
-test('download URLs pin releases that actually exist', () => {
-  assert.match(ARM_GCC_URL, /gnu\/15\.2\.rel1\//);
-  assert.match(ARM_GCC_URL, /arm-none-eabi\.zip$/);
+test('download URLs go through the GitHub proxy and keep the official fallback', () => {
+  assert.match(ARM_GCC_URL, /^https:\/\/gh-proxy\.com\/https:\/\/github\.com\//);
+  assert.match(ARM_GCC_URL, /xpack-arm-none-eabi-gcc-15\.2\.1-1\.1-win32-x64\.zip$/);
+  assert.match(ARM_GCC_OFFICIAL_URL, /developer\.arm\.com\/.*gnu\/15\.2\.rel1\//);
+  assert.match(OPENOCD_URL, /^https:\/\/gh-proxy\.com\//);
   assert.match(OPENOCD_URL, /openocd-xpack\/releases\/download\/v0\.12\.0-7\//);
   assert.equal(ARM_GCC_EXPECTED_BYTES > 200 * 1024 * 1024, true);
+});
+
+test('a ranged download fetches chunks in parallel and rebuilds the archive', async () => {
+  const total = 8 * 1024 * 1024 + 1024;
+  let chunkCalls = 0;
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const range = new Headers(init?.headers).get('range');
+    if (range === 'bytes=0-0') {
+      return new Response(null, {
+        status: 206,
+        headers: { 'content-range': `bytes 0-0/${total}` }
+      });
+    }
+    chunkCalls += 1;
+    const match = /bytes=(\d+)-(\d+)/.exec(range ?? '');
+    const start = Number(match?.[1]);
+    const end = Number(match?.[2]);
+    return new Response(new Uint8Array(end - start + 1), { status: 206 });
+  }) as typeof fetch;
+  await withTempDir(async (dir) => {
+    let extractedBytes = 0;
+    await installOpenOcd({
+      storageRoot: dir,
+      fetchImpl,
+      extractImpl: async (archive, destination) => {
+        extractedBytes = statSync(archive).size;
+        const bin = join(destination, 'bin');
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(join(bin, 'openocd.exe'), '');
+      }
+    });
+    assert.equal(chunkCalls >= 3, true);
+    assert.equal(extractedBytes, total);
+  });
+});
+
+test('an unreachable mirror falls through to the next source', async () => {
+  await withTempDir(async (dir) => {
+    let calls = 0;
+    const installed = await installOpenOcd({
+      storageRoot: dir,
+      fetchImpl: (async () => {
+        calls += 1;
+        if (calls <= 1) {
+          return new Response('blocked', { status: 403 });
+        }
+        return archiveResponse();
+      }) as typeof fetch,
+      extractImpl: async (_archive, destination) => {
+        const bin = join(destination, 'bin');
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(join(bin, 'openocd.exe'), '');
+      }
+    });
+    assert.equal(existsSync(installed.executable), true);
+  });
 });
 
 test('findBelow locates a nested executable and rejects a missing one', async () => {

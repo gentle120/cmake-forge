@@ -47,8 +47,10 @@ cmake --build --preset debug
 - C/C++ 扩展推荐安装；不装也能生成工程，只是没有 IntelliSense 集成。
 - MCU 需要 Cortex-Debug 与 `arm-none-eabi-gdb`，编译链固定为 GNU Arm GCC。
 - 侧栏「编译与烧录工具」会检测 ARM GNU 工具链与 OpenOCD；缺少时点「下载」，扩展会
-  下载官方发布包（Arm 15.2.rel1、xpack OpenOCD 0.12.0-7）、解压到扩展全局存储并把路径
-  写进 `cmakeForge.armGccPath` / `cmakeForge.openocdPath`，带百分比进度。
+  下载官方发布包（GNU Arm GCC 15.2.1 与 xpack OpenOCD 0.12.0-7，默认走 `gh-proxy.com`
+  加速、失败回退官方直连），解压到扩展全局存储并把路径写进 `cmakeForge.armGccPath` /
+  `cmakeForge.openocdPath`，带百分比进度；支持分段时按 1 MB 分片、最多 24 路并发。
+  pyOCD 用 `python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pyocd`。
 - Linux 需要对应前缀的 `gcc`/`g++`。
 
 **F5 立刻退出**：确认已装 Cortex-Debug、`arm-none-eabi-gdb` 在 `PATH`、先构建过
