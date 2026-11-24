@@ -96,7 +96,6 @@ export function renderSidebarHtml(
           <span class="section-icon"><span class="ui-icon" data-icon="chip" aria-hidden="true"></span></span>
           <div class="section-heading">
             <h2 id="target-title">目标配置</h2>
-            <p>先选厂商与系列，再确定 Pack 与型号。</p>
           </div>
         </div>
         <div id="target-host" class="target-host"></div>
@@ -136,12 +135,10 @@ export function renderSidebarHtml(
           <span class="section-icon"><span class="ui-icon" data-icon="tool" aria-hidden="true"></span></span>
           <div class="section-heading">
             <h2 id="environment-title">编译与烧录工具</h2>
-            <p>只使用 ARM GNU 工具链与 OpenOCD；缺少时点「下载」，无需自己找安装包。</p>
           </div>
         </div>
         <div id="environment" class="environment" aria-live="polite">
           <div id="env-fields" class="env-fields"></div>
-          <p id="env-hint" class="env-hint">工具链与烧录后端都在这里选；下拉里带「下载」的项会装上对应的官方包。</p>
           <div id="env-progress" class="env-progress" hidden>
             <div class="env-progress-track"><div id="env-progress-bar" class="env-progress-bar"></div></div>
             <span id="env-progress-text" class="env-progress-text"></span>
@@ -154,7 +151,6 @@ export function renderSidebarHtml(
           <span class="section-icon"><span class="ui-icon" data-icon="zap" aria-hidden="true"></span></span>
           <div class="section-heading">
             <h2 id="flash-title">烧录与调试</h2>
-            <p>检测探针读芯片型号、选固件后一键烧录，调试配置同时生成好。</p>
           </div>
         </div>
         <div id="flash-host" class="flash-host"></div>

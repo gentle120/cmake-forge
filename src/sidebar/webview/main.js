@@ -64,9 +64,6 @@
     const heading = document.createElement('h2');
     heading.textContent = title;
     copy.append(heading);
-    if (description) {
-      copy.append(paragraph('', description));
-    }
     header.append(copy);
     return header;
   }
@@ -199,7 +196,6 @@
   const cancelFlashButton = document.getElementById('cancel-flash');
   const environmentHost = document.getElementById('environment');
   const envFields = document.getElementById('env-fields');
-  const envHint = document.getElementById('env-hint');
   const envProgress = document.getElementById('env-progress');
   const envProgressBar = document.getElementById('env-progress-bar');
   const envProgressText = document.getElementById('env-progress-text');
@@ -273,13 +269,7 @@
     if (!state) return;
     saveSelection({ ...state.selection, flash: { ...state.selection.flash, probeId: value } });
   });
-  flashHost.append(
-    probeField.wrapper,
-    paragraph(
-      'field-detail',
-      '探针要与实际调试器一致；选错时 F5 立即退出，原因见「终端 → gdb-server」。'
-    )
-  );
+  flashHost.append(probeField.wrapper);
 
   // Toolchain and backend are picked in the environment card: choosing an
   // entry whose tool is missing posts the same install request the old
@@ -464,7 +454,6 @@
     copy.append(name, note);
     status.append(statusIcon, copy);
     panel.append(section, status);
-    panel.append(paragraph('empty-note', '生成器会扫描工作区源文件、头文件目录和已保存的宏定义。'));
     linuxPanel = {
       panel,
       select: field.select,
@@ -534,18 +523,8 @@
     const standards = document.createElement('div');
     standards.className = 'target-grid';
     standards.append(cStandard.wrapper, cxxStandard.wrapper);
-    // Desktop compilers are detected by CMake Tools / CMake itself; the plugin
-    // deliberately offers no compiler picker.
-    const compilerNote = paragraph(
-      'empty-note',
-      '编译器由 CMake Tools 自动检测，无需在这里选择。'
-    );
-    section.append(targetType.wrapper, standards, compilerNote);
+    section.append(targetType.wrapper, standards);
     panel.append(section);
-    panel.append(paragraph(
-      'empty-note',
-      '将扫描当前工作区并生成 CMakeLists.txt、Debug/Release 预设和 C/C++ IntelliSense 配置。'
-    ));
     nativePanel = {
       panel,
       targetType: targetType.select,
@@ -606,10 +585,6 @@
     }
     applyOptions(backendField.select, backendOptions, state.selection.flash.backend);
     backendField.select.disabled = installing;
-    const selected = backends.find((choice) => choice.value === state.selection.flash.backend);
-    envHint.textContent = installing
-      ? '正在安装，完成后自动刷新。'
-      : (selected?.detail || '工具链与烧录后端都在这里选；带「下载」的项会装上官方包。');
     const progress = environment.progress;
     envProgress.hidden = !installing && !progress;
     if (progress) {

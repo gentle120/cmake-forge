@@ -1330,12 +1330,6 @@ input:disabled {
   gap: 8px;
 }
 
-.env-hint {
-  margin: 0;
-  color: var(--ce-meta, var(--vscode-descriptionForeground));
-  font-size: 0.9em;
-}
-
 .env-progress {
   display: flex;
   flex-direction: column;
