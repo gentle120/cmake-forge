@@ -14,7 +14,7 @@ export type SidebarIncomingMessage =
   | { type: 'generateDebugConfiguration' }
   | { type: 'detectFlash' }
   | { type: 'pickFirmware' }
-  | { type: 'installTool'; tool: 'armgcc' | 'openocd' }
+  | { type: 'installTool'; tool: 'armgcc' | 'openocd' | 'jlink' | 'pyocd' }
   | {
       type: 'flash';
       /** Overrides, all optional: the sidebar sends only what the user changed. */
@@ -46,7 +46,7 @@ export type SidebarOutgoingMessage =
   | { type: 'flashOutput'; lines: string[] }
   | {
       type: 'toolProgress';
-      tool: 'armgcc' | 'openocd';
+      tool: 'armgcc' | 'openocd' | 'jlink' | 'pyocd';
       stage: 'download' | 'extract' | 'verify' | 'done';
       message: string;
       percent?: number;
@@ -126,8 +126,9 @@ export function parseIncomingMessage(value: unknown): SidebarIncomingMessage | u
     return message;
   }
   if (record.type === 'installTool') {
-    return record.tool === 'armgcc' || record.tool === 'openocd'
-      ? { type: 'installTool', tool: record.tool }
+    const tools = ['armgcc', 'openocd', 'jlink', 'pyocd'] as const;
+    return tools.includes(record.tool as (typeof tools)[number])
+      ? { type: 'installTool', tool: record.tool as (typeof tools)[number] }
       : undefined;
   }
   if (!commandTypes.has(record.type)) {

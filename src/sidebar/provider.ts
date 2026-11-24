@@ -77,6 +77,7 @@ import {
   type SidebarFlashDetection,
   type SidebarOption,
   type SidebarSelection,
+  type SidebarToolId,
   type SidebarToolStatus
 } from './state';
 import { discoverFirmware, findWorkspaceFirmware } from '../flash/firmwareDiscovery';
@@ -238,7 +239,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   /** Project root the cached chip label belongs to; a new root invalidates it. */
   private chipDetectionRoot?: string;
   /** Which tool download is running, if any. */
-  private toolInstallRunning?: 'armgcc' | 'openocd';
+  private toolInstallRunning?: SidebarToolId;
   /** Progress of the tool download the user started, if any. */
   private toolProgress?: SidebarEnvironment['progress'];
   private packOptions: DevicePackOption[] = [];
@@ -1740,8 +1741,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     return environment;
   }
 
-  /** Downloads and registers one of the two tools the flow needs. */
-  private async installTool(tool: 'armgcc' | 'openocd'): Promise<void> {
+  /** Installs (or opens the download page for) whichever tool the user picked. */
+  private async installTool(tool: SidebarToolId): Promise<void> {
+    if (tool === 'jlink') {
+      await this.openJlinkDownload();
+      return;
+    }
+    if (tool === 'pyocd') {
+      await this.installPyocd();
+      return;
+    }
     if (process.platform !== 'win32') {
       this.post({
         type: 'notification',
@@ -1807,6 +1816,88 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.post({
         type: 'operationFinished',
         result: { ok: false, message: `${label} 安装失败：${message}`, files: [] }
+      });
+    } finally {
+      this.busy = false;
+      this.toolInstallRunning = undefined;
+      this.toolProgress = undefined;
+      this.postState();
+    }
+  }
+
+  /** J-Link ships as a GUI installer, so the honest "download" is its page. */
+  private async openJlinkDownload(): Promise<void> {
+    const url = 'https://www.segger.com/downloads/jlink/';
+    try {
+      await vscode.env.openExternal(vscode.Uri.parse(url));
+    } catch {
+      // Headless hosts have no browser; the notice below still carries the URL.
+    }
+    this.post({
+      type: 'notification',
+      level: 'info',
+      message: `已打开 J-Link 下载页：${url}。安装后重开 VS Code；装在非默认目录时请填写 cmakeForge.jlinkPath。`
+    });
+  }
+
+  /** pyOCD is a pip package, so it can be installed in place. */
+  private async installPyocd(): Promise<void> {
+    const storageRoot = this.dependencies.toolStorageRoot?.();
+    if (!storageRoot) {
+      this.post({
+        type: 'notification',
+        level: 'error',
+        message: '无法确定安装目录：请在扩展的全局存储目录可写后重试。'
+      });
+      return;
+    }
+    const python = this.pythonPath();
+    const executable = resolveConfiguredExecutable(python, python);
+    if (!executable) {
+      this.post({
+        type: 'operationFinished',
+        result: {
+          ok: false,
+          message:
+            '没有找到 Python，无法自动安装 pyOCD：请先安装 Python（勾选 Add to PATH），或到 https://pyocd.io/docs/installing 按说明安装。',
+          files: []
+        }
+      });
+      return;
+    }
+    this.busy = true;
+    this.toolInstallRunning = 'pyocd';
+    this.toolProgress = { tool: 'pyocd', stage: 'download', message: '正在安装 pyOCD…' };
+    this.post({ type: 'operationStarted', operation: '正在安装 pyOCD' });
+    this.postState();
+    try {
+      const result = await runTool({
+        executable,
+        args: ['-m', 'pip', 'install', '--user', '--upgrade', 'pyocd'],
+        cwd: storageRoot,
+        tailLines: 20
+      });
+      if (result.ok) {
+        this.post({
+          type: 'operationFinished',
+          result: {
+            ok: true,
+            message: 'pyOCD 已安装。若侧栏仍显示未安装，请重开窗口；路径特殊时填写 cmakeForge.pyocdPath。',
+            files: []
+          }
+        });
+      } else {
+        const reason = result.spawnError ?? result.outputTail.filter(Boolean).at(-1) ?? '未知错误';
+        this.post({
+          type: 'operationFinished',
+          result: { ok: false, message: `pyOCD 安装失败：${reason}`, files: [] }
+        });
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.post({
+        type: 'operationFinished',
+        result: { ok: false, message: `pyOCD 安装失败：${reason}`, files: [] }
       });
     } finally {
       this.busy = false;

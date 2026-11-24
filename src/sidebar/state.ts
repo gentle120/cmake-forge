@@ -88,6 +88,9 @@ export interface SidebarEnvironmentChoice {
   detail: string;
 }
 
+/** Tools the environment card can install without leaving VS Code. */
+export type SidebarToolId = 'armgcc' | 'openocd' | 'jlink' | 'pyocd';
+
 export interface SidebarEnvironment {
   armGcc: SidebarToolStatus;
   openocd: SidebarToolStatus;
@@ -95,9 +98,9 @@ export interface SidebarEnvironment {
   toolchains: SidebarEnvironmentChoice[];
   backends: SidebarEnvironmentChoice[];
   /** Which download is running; buttons turn into a progress bar meanwhile. */
-  installing?: 'armgcc' | 'openocd';
+  installing?: SidebarToolId;
   progress?: {
-    tool: 'armgcc' | 'openocd';
+    tool: SidebarToolId;
     stage: 'download' | 'extract' | 'verify' | 'done';
     message: string;
     percent?: number;
