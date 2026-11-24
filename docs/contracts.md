@@ -62,7 +62,8 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - 显式切换厂商时自动激活该厂商服务当前所选系列的可用版本（`imported`/`installed`，同版本 `imported` 优先；无系列匹配时取最新版本）；`downloadable` 版本不自动下载，启动时的目录刷新不自动激活。
 - 仅切换侧栏模式（mcu/linux/native）的保存按消息保留模式；MCU 字段重算不改写模式。
 - 侧栏调试器列表仅提供当前烧录后端支持的探针；切换后端时不保留不兼容探针。
-- 手选的固件优先于自动检测的最新固件；手选路径不存在时烧录禁用并说明原因，探针探测成功会把当前探针改成探测成功的接口。
+- 固件的来源顺序是「手选 > `build/<preset>` 最新产物 > 工作区其余位置最新的 ELF」；手选路径不存在时烧录禁用并说明原因，构建目录为空时回退到工作区扫描。
+- 探针探测成功会把当前探针改成探测成功的接口；烧录 target 由读到的 DBGMCU DEV_ID 推导（`src/flash/chipTargets.ts`），DEV_ID 未收录时保留当前目标而不是按内核猜。检测结果（芯片/目标/探针）写进「烧录输出」，侧栏不提供 target 手选或后端细节面板。
 
 ## Performance And Resources
 

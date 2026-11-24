@@ -24,7 +24,6 @@
   const resultRegion = document.getElementById('result-region');
   const generatedFiles = document.getElementById('generated-files');
   const toggleCorePack = document.getElementById('toggle-core-pack');
-  const backendHint = document.getElementById('backend-hint');
 
   function post(message) {
     vscode.postMessage(message);
@@ -182,7 +181,6 @@
   packCatalogBusy.textContent = '正在读取 Pack 目录…';
   packCatalogBusy.hidden = true;
   const flashHost = document.getElementById('flash-host');
-  const backendDetailsHost = document.getElementById('backend-details-host');
   const flashFirmwareValue = document.getElementById('flash-firmware');
   const flashChipLabel = document.getElementById('flash-chip-label');
   const flashTargetLabel = document.getElementById('flash-target-label');
@@ -293,38 +291,6 @@
     )
   );
 
-  const openocdGroup = document.createElement('div');
-  openocdGroup.className = 'details-group';
-  const targetField = createSelectField('烧录 target cfg', (value) => {
-    if (!state) return;
-    saveSelection({ ...state.selection, flash: { ...state.selection.flash, targetId: value } });
-  });
-  const openocdPathField = createPathField('OpenOCD 可执行文件', 'openocd', (value) => {
-    if (!state) return;
-    saveSelection({ ...state.selection, flash: { ...state.selection.flash, openocdPath: value } });
-  });
-  openocdGroup.append(targetField.wrapper, openocdPathField.wrapper);
-
-  const settingsGroup = document.createElement('div');
-  settingsGroup.className = 'details-group';
-  const settingsNote = paragraph('field-detail', '');
-  const settingsButton = document.createElement('button');
-  settingsButton.type = 'button';
-  settingsButton.className = 'secondary-action';
-  settingsButton.append(icon('settings-gear'), document.createTextNode('打开工具设置'));
-  settingsButton.addEventListener('click', () => {
-    if (busy) return;
-    post({ type: 'openSettings' });
-  });
-  settingsGroup.append(settingsNote, settingsButton);
-
-  backendDetailsHost.append(openocdGroup, settingsGroup);
-
-  const settingsNotes = {
-    jlink: 'J-Link 路径由扩展设置 cmakeForge.jlinkPath 提供，侧栏不保存该路径。',
-    pyocd: 'pyOCD 路径由扩展设置 cmakeForge.pyocdPath 提供，侧栏不保存该路径。'
-  };
-
   function saveSelection(selection) {
     if (!state) return;
     state.selection = selection;
@@ -395,20 +361,6 @@
     const flash = state.selection.flash;
     applyOptions(backendField.select, state.flashBackends, flash.backend);
     applyOptions(probeField.select, state.flashProbes, flash.probeId);
-    applyOptions(targetField.select, state.flashTargets, flash.targetId);
-    if (openocdPathField.input.value !== flash.openocdPath
-      && document.activeElement !== openocdPathField.input) {
-      openocdPathField.input.value = flash.openocdPath || '';
-    }
-    const isOpenocd = flash.backend === 'openocd';
-    openocdGroup.hidden = !isOpenocd;
-    settingsGroup.hidden = isOpenocd;
-    settingsNote.textContent = settingsNotes[flash.backend] || settingsNotes.jlink;
-    const backend = selectedOption(state.flashBackends, flash.backend);
-    const probe = selectedOption(state.flashProbes, flash.probeId);
-    const hint = [backend?.label, probe?.label].filter(Boolean).join(' · ');
-    backendHint.textContent = hint;
-    backendHint.hidden = !hint;
 
     // Detection is host-side IO, so it can lag the selection by one refresh;
     // until it arrives the row says so instead of pretending there is no ELF.

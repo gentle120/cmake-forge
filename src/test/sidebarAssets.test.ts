@@ -35,7 +35,14 @@ interface SidebarSelection {
   };
   linux: { toolchainFamily: string };
   native: { targetType: string; cStandard: number; cxxStandard: number };
-  flash: { targetId: string; probeId: string; openocdPath: string; backend: string };
+  flash: {
+    targetId: string;
+    probeId: string;
+    openocdPath: string;
+    backend: string;
+    verify?: boolean;
+    resetAfterFlash?: boolean;
+  };
 }
 
 interface SidebarState {
@@ -57,6 +64,16 @@ interface SidebarState {
   packCatalogNotice: string;
   corePackNotice: string;
   mcuBlockedReason: string;
+  flashDetection?: {
+    firmwarePath: string;
+    firmwareLabel: string;
+    firmwareDetail: string;
+    targetLabel: string;
+    probeLabel: string;
+    chipLabel: string;
+    available: boolean;
+    blockedReason: string;
+  };
   selection: SidebarSelection & { corePackInclude: boolean };
 }
 
@@ -174,9 +191,7 @@ test('sidebar renderer wires every supported command', () => {
     'cancelFlash',
     'flash',
     'generateProject',
-    'generateFlashScript',
-    'generateDebugConfiguration',
-    'openSettings'
+    'generateDebugConfiguration'
   ]) {
     assert.match(scriptSource, new RegExp(command));
   }
@@ -288,7 +303,7 @@ test('every command button is unique and its command is dispatched by the render
   assert.deepEqual(
     [...new Set(commands)].sort(),
     ['cancelFlash', 'cancelWorkspaceScan', 'detectFlash', 'flash',
-      'generateDebugConfiguration', 'generateFlashScript',
+      'generateDebugConfiguration',
       'generateProject', 'importPack', 'installCorePack', 'installPackOnline',
       'pickFirmware', 'scanWorkspace']
   );
@@ -409,7 +424,7 @@ test('a blocked MCU selection disables generation and shows why', () => {
   assert.match(notice.textContent, /STM32F4xx_DFP/);
 
   // Every MCU generation entry point is unavailable, not just the main button.
-  for (const command of ['generateProject', 'generateFlashScript', 'generateDebugConfiguration']) {
+  for (const command of ['generateProject', 'flash', 'generateDebugConfiguration']) {
     const button = harness.byCommand(command)[0];
     assert.ok(button, `expected a ${command} button`);
     assert.equal(button.disabled, true, `${command} must be disabled while blocked`);
@@ -496,30 +511,29 @@ test('failure messages stay visible and focus returns to the initiating control'
   assert.equal(harness.document.activeElement, generate);
 });
 
-test('only the backend-relevant detail group is exposed and probes come from state', () => {
+test('detection rows come from host state, including a missing firmware', () => {
   const harness = startSidebar(baseState({
-    flashProbes: [{ value: 'jlink-ob', label: 'J-Link OB' }],
-    selection: { ...baseState().selection, flash: { ...baseState().selection.flash, backend: 'jlink', probeId: 'jlink-ob' } }
+    flashDetection: {
+      firmwarePath: '',
+      firmwareLabel: '',
+      firmwareDetail: '',
+      targetLabel: 'STM32L4xx',
+      probeLabel: 'DapLink',
+      chipLabel: 'Cortex-M4 · STM32L4x · DEV_ID 0x461',
+      available: false,
+      blockedReason: '还没有构建产物：先执行 cmake --build --preset debug。'
+    }
   }));
-  const detailHost = harness.element('backend-details-host');
-  const openocdGroup = detailHost.querySelector('.details-group') as Element | undefined;
-  const settingsGroup = detailHost.querySelectorAll('.details-group')[1];
-  assert.ok(openocdGroup, 'expected an OpenOCD detail group');
-  assert.ok(settingsGroup, 'expected a backend settings group');
-  assert.equal(openocdGroup.hidden, true);
-  assert.equal(settingsGroup.hidden, false);
-  assert.ok(harness.element('backend-hint').textContent.includes('J-Link'));
+  assert.equal(harness.element('flash-firmware').textContent, '未找到固件');
+  assert.equal(harness.element('flash-target-label').textContent, 'STM32L4xx');
+  assert.equal(harness.element('flash-probe-label').textContent, 'DapLink');
+  assert.equal(harness.element('flash-chip-label').textContent, 'Cortex-M4 · STM32L4x · DEV_ID 0x461');
+  assert.equal(harness.element('flash-blocked').hidden, false);
+  assert.equal(harness.element('quick-flash').disabled, true);
 });
 
 test('Linux and desktop modes stay reachable without duplicate listeners', () => {
   const harness = startSidebar(baseState());
-  const settingsGroup = harness.element('backend-details-host').querySelectorAll('.details-group')[1];
-  const settingsButton = settingsGroup.querySelector('button');
-  assert.ok(settingsButton, 'expected the tool settings button');
-  settingsButton.dispatch('click', { target: settingsButton });
-  assert.equal(harness.posted.filter((message) => message.type === 'openSettings').length, 1);
-  settingsButton.dispatch('click', { target: settingsButton });
-  assert.equal(harness.posted.filter((message) => message.type === 'openSettings').length, 2);
 
   harness.send({ type: 'state', state: baseState({
     selection: { ...baseState().selection, mode: 'linux' }

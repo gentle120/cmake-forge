@@ -222,6 +222,72 @@ export async function findFirmwareCandidates(
   return candidates.sort(compareCandidates);
 }
 
+/**
+ * Workspace-level fallback: projects are not always built into `build/`
+ * (Keil/CubeMX trees and hand-written Makefiles keep the ELF elsewhere), yet
+ * the user still expects the newest image to be found without browsing.
+ */
+const WORKSPACE_SKIPPED_DIRECTORIES = new Set([
+  ...SKIPPED_DIRECTORIES,
+  'build',
+  '.vscode',
+  'out',
+  'dist',
+  '.venv'
+]);
+
+async function collectElves(
+  directory: string,
+  depth: number,
+  fs: FirmwareDiscoveryFs,
+  found: FirmwareCandidate[]
+): Promise<void> {
+  let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+  try {
+    entries = await fs.readdir(directory);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const entryPath = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (depth >= MAX_SCAN_DEPTH || WORKSPACE_SKIPPED_DIRECTORIES.has(entry.name.toLowerCase())) {
+        continue;
+      }
+      await collectElves(entryPath, depth + 1, fs, found);
+      continue;
+    }
+    if (!entry.isFile() || !isElfName(entry.name) || isSideArtefact(entry.name)) {
+      continue;
+    }
+    let info: { size: number; mtimeMs: number };
+    try {
+      info = await fs.stat(entryPath);
+    } catch {
+      continue;
+    }
+    if (info.size <= 0) {
+      continue;
+    }
+    found.push({ path: entryPath, preset: 'other', size: info.size, mtimeMs: info.mtimeMs });
+  }
+}
+
+/** Newest ELF anywhere in the workspace, build trees excluded (they are scanned first). */
+export async function findWorkspaceFirmware(
+  root: string,
+  fs: FirmwareDiscoveryFs = defaultFs
+): Promise<FirmwareCandidate[]> {
+  if (!root.trim()) {
+    return [];
+  }
+  const found: FirmwareCandidate[] = [];
+  await collectElves(root, 0, fs, found);
+  return found.sort((left, right) =>
+    right.mtimeMs - left.mtimeMs || left.path.localeCompare(right.path)
+  );
+}
+
 function isFlashable(candidate: FirmwareCandidate): boolean {
   if (candidate.size <= 0) {
     return false;

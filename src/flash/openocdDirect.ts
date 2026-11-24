@@ -179,7 +179,25 @@ const STM32_DEVICE_FAMILIES: Record<number, string> = {
   0x469: 'STM32G4x',
   0x479: 'STM32G4x',
   0x480: 'STM32H7x',
-  0x483: 'STM32H7x'
+  0x483: 'STM32H7x',
+  0x415: 'STM32L4x',
+  0x416: 'STM32L1x',
+  0x417: 'STM32L0x',
+  0x427: 'STM32L1x',
+  0x429: 'STM32L1x',
+  0x435: 'STM32L4x',
+  0x436: 'STM32L1x',
+  0x437: 'STM32L1x',
+  0x447: 'STM32L0x',
+  0x461: 'STM32L4x',
+  0x462: 'STM32L4x',
+  0x464: 'STM32L4x',
+  0x470: 'STM32L4x',
+  0x472: 'STM32L5x',
+  0x482: 'STM32U5x',
+  0x495: 'STM32WBx',
+  0x496: 'STM32WLx',
+  0x497: 'STM32WLx'
 };
 
 export function coreFromCpuid(word: number | undefined): string | undefined {

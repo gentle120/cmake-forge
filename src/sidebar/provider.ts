@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { existsSync, statSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import type { CommandResult } from '../shared/commandResult';
 import { randomBytes } from 'node:crypto';
 import {
@@ -33,8 +33,10 @@ import {
   buildOpenOcdFlashArgs,
   detectChip,
   describeIdentity,
-  matchOpenOcdStage
+  matchOpenOcdStage,
+  type ChipIdentity
 } from '../flash/openocdDirect';
+import { suggestTargetForChip } from '../flash/chipTargets';
 import {
   generateDebugWorkflow,
   generateFlashWorkflow,
@@ -73,7 +75,7 @@ import {
   type SidebarOption,
   type SidebarSelection
 } from './state';
-import { discoverFirmware } from '../flash/firmwareDiscovery';
+import { discoverFirmware, findWorkspaceFirmware } from '../flash/firmwareDiscovery';
 import { runFlash, runTool, type FlashEvent, type FlashRunResult } from '../flash/flashRunner';
 import { diagnoseFlashFailure } from '../flash/flashDiagnostics';
 
@@ -1052,13 +1054,27 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         logLine(`[flash] ${root}: ${error instanceof Error ? error.message : String(error)}`);
         discovered = { candidates: [], reason: '无法读取 build 目录。' };
       }
-      const firmware = discovered.selected;
+      let firmware = discovered.selected;
+      let fromWorkspace = false;
+      if (!firmware) {
+        // Projects built by Keil or a hand-written Makefile keep the ELF outside
+        // build/; fall back to the newest image anywhere in the workspace.
+        try {
+          const workspace = await findWorkspaceFirmware(root);
+          firmware = workspace[0];
+          fromWorkspace = firmware !== undefined;
+        } catch (error) {
+          logLine(`[flash] workspace scan: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       if (firmware) {
         firmwarePath = firmware.path;
         firmwareLabel = basenamePath(firmware.path);
-        firmwareDetail = `${firmware.preset} · ${formatBytes(firmware.size)} · ${new Date(firmware.mtimeMs).toLocaleString()}`;
+        firmwareDetail = fromWorkspace
+          ? `工作区 · ${formatBytes(firmware.size)} · ${new Date(firmware.mtimeMs).toLocaleString()}`
+          : `${firmware.preset} · ${formatBytes(firmware.size)} · ${new Date(firmware.mtimeMs).toLocaleString()}`;
       } else {
-        blockedReason = discovered.reason || '没有找到已构建的固件：先构建工程。';
+        blockedReason = discovered.reason || '没有找到可烧录的 ELF：先构建工程，或用「选择…」指定固件。';
       }
     }
     this.flashDetection = {
@@ -1071,6 +1087,50 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       available: firmwarePath !== '',
       blockedReason
     };
+  }
+
+  /**
+   * 检测是芯片型号的唯一权威：写芯片行、把应答的接口改成当前探针，并按
+   * DBGMCU DEV_ID 推导烧录 target——用户不必再手选一个可能和硅片矛盾的目标。
+   */
+  private async applyChipIdentity(
+    identity: ChipIdentity,
+    probeId: FlashProbeId | undefined
+  ): Promise<string[]> {
+    const label = describeIdentity(identity);
+    if (this.flashDetection) {
+      this.flashDetection = { ...this.flashDetection, chipLabel: label };
+    }
+    const lines = [`芯片  ${label}`];
+    const suggested = suggestTargetForChip(identity);
+    const currentTarget = this.selectionValue.flash.targetId;
+    if (suggested && suggested.id !== currentTarget) {
+      this.selectionValue = {
+        ...this.selectionValue,
+        flash: { ...this.selectionValue.flash, targetId: suggested.id }
+      };
+      lines.push(`目标  ${suggested.label} · ${suggested.targetConfig}（已按检测结果切换）`);
+    } else if (suggested) {
+      lines.push(`目标  ${suggested.label} · ${suggested.targetConfig}`);
+    } else {
+      let currentLabel = currentTarget;
+      try {
+        currentLabel = getFlashTargetProfile(currentTarget).label;
+      } catch {
+        // An unset target id is reported as-is instead of failing detection.
+      }
+      lines.push(`目标  ${currentLabel}（DEV_ID 未收录，保留当前目标）`);
+    }
+    if (probeId && probeId !== this.selectionValue.flash.probeId) {
+      this.selectionValue = {
+        ...this.selectionValue,
+        flash: { ...this.selectionValue.flash, probeId }
+      };
+    }
+    const probe = getFlashProbeProfile(this.selectionValue.flash.probeId);
+    lines.push(`探针  ${probe.label} · ${probe.interfaceConfig}`);
+    await this.context.workspaceState.update(selectionKey, this.selectionValue);
+    return lines;
   }
 
   /**
@@ -1115,10 +1175,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         cwd: root,
         timeoutMs: 10000
       });
-      if (result.outputTail.length > 0) {
-        this.post({ type: 'flashOutput', lines: result.outputTail });
-      }
       if (!result.ok || !result.identity) {
+        if (result.outputTail.length > 0) {
+          this.post({ type: 'flashOutput', lines: result.outputTail });
+        }
         this.post({ type: 'flashProgress', stage: 'failed', message: '没有读到芯片信息。' });
         this.post({
           type: 'operationFinished',
@@ -1130,19 +1190,21 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         });
         return;
       }
-      const label = describeIdentity(result.identity);
-      if (this.flashDetection) {
-        this.flashDetection = { ...this.flashDetection, chipLabel: label };
-      }
-      if (result.probeId && result.probeId !== this.selectionValue.flash.probeId) {
-        const probeId = result.probeId as FlashProbeId;
-        this.selectionValue = {
-          ...this.selectionValue,
-          flash: { ...this.selectionValue.flash, probeId }
-        };
-      }
-      this.post({ type: 'flashProgress', stage: 'done', message: `检测到 ${label}`, percent: 100 });
-      this.post({ type: 'operationFinished', result: { ok: true, message: `检测到 ${label}。`, files: [] } });
+      const lines = await this.applyChipIdentity(
+        result.identity,
+        result.probeId as FlashProbeId | undefined
+      );
+      this.post({ type: 'flashOutput', lines });
+      this.post({
+        type: 'flashProgress',
+        stage: 'done',
+        message: `检测到 ${describeIdentity(result.identity)}`,
+        percent: 100
+      });
+      this.post({
+        type: 'operationFinished',
+        result: { ok: true, message: `${lines[0].replace(/^芯片\s+/, '检测到 ')}；${lines[1]}`, files: [] }
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logLine(`[flash] detect: ${message}`);
@@ -1202,17 +1264,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         if (!result.ok || !result.identity || this.busy) {
           return;
         }
-        const label = describeIdentity(result.identity);
-        if (this.flashDetection) {
-          this.flashDetection = { ...this.flashDetection, chipLabel: label };
-        }
-        if (result.probeId && result.probeId !== this.selectionValue.flash.probeId) {
-          this.selectionValue = {
-            ...this.selectionValue,
-            flash: { ...this.selectionValue.flash, probeId: result.probeId as FlashProbeId }
-          };
-        }
+        const lines = await this.applyChipIdentity(
+          result.identity,
+          result.probeId as FlashProbeId | undefined
+        );
         this.postState();
+        const label = lines[0].replace(/^芯片\s+/, '');
         this.post({ type: 'notification', level: 'info', message: `探针检测到 ${label}。` });
       } catch (error) {
         logLine(`[flash] auto detect: ${error instanceof Error ? error.message : String(error)}`);
@@ -1220,6 +1277,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         this.chipDetectionRunning = false;
       }
     })();
+  }
+
+  /** 文件对话框从当前固件所在目录开始；没有固件时退回 build/ 或工作区根。 */
+  private firmwareBrowseDirectory(root: string): string {
+    const current = this.flashDetection?.firmwarePath;
+    if (current && existsSync(current)) {
+      return dirname(current);
+    }
+    const build = join(root, 'build');
+    return existsSync(build) ? build : root;
   }
 
   /** 打开文件对话框手选一个 ELF；选中后写入选择并立即刷新检测结果。 */
@@ -1232,7 +1299,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     const picked = await vscode.window.showOpenDialog({
       canSelectMany: false,
       openLabel: '选择要烧录的固件',
-      defaultUri: vscode.Uri.file(join(root, 'build')),
+      defaultUri: vscode.Uri.file(this.firmwareBrowseDirectory(root)),
       filters: { 'ELF 固件': ['elf'], '所有文件': ['*'] }
     });
     if (!picked || picked.length === 0) {

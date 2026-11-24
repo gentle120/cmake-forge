@@ -27,9 +27,10 @@ cmake --build --preset debug
     `starm-clang.cmake`）→ 独立 LLVM clang（LLD + `-nostdlib`）。
 - ATfE/STARM 自带 picolibc；独立 LLVM clang 需要 `lld` 且不提供标准 C 运行时。
   armclang 使用 Arm C 库，`printf` 等函数需自行 retarget。
-- 侧栏烧录区：「检测探针」读 CPUID 与 DBGMCU IDCODE，显示内核/系列/DEV_ID 并自动选中
-  探测成功的探针接口；固件默认取 `build/debug`、`build/release` 下最新的 ELF，也可手动选择；
-  一键烧录带阶段进度、输出与失败诊断。
+- 侧栏烧录区：「检测探针」读 CPUID 与 DBGMCU IDCODE，显示内核/系列/DEV_ID，自动选中
+  探测成功的探针接口，并按 DEV_ID 把 target 切到对应系列（未收录的芯片保留当前目标）；
+  检测结果会写进「烧录输出」。固件默认取 `build/debug`、`build/release` 下最新的 ELF，
+  构建目录为空时回退到工作区最新的 ELF，也可手动选择；一键烧录带阶段进度、输出与失败诊断。
 - 可选 `flash.py`（J-Link / pyOCD 后端）与 Cortex-Debug 配置（可带 SVD 与 `preLaunchTask`，
   launch/attach 两条配置）。
 

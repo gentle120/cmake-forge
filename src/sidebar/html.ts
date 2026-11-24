@@ -195,20 +195,6 @@ export function renderSidebarHtml(
           </summary>
           <pre id="flash-output" class="flash-output"></pre>
         </details>
-        <details id="backend-details" class="advanced">
-          <summary>
-            <span class="ui-icon" data-icon="settings-gear" aria-hidden="true"></span>
-            <span class="details-title">后端细节</span>
-            <span id="backend-hint" class="summary-hint"></span>
-          </summary>
-          <div id="backend-details-host" class="advanced-grid"></div>
-          <div class="details-group">
-            <button id="generate-flash-script" class="secondary-action" type="button"
-              data-command="generateFlashScript">
-              <span class="ui-icon" data-icon="zap" aria-hidden="true"></span><span>只生成 flash.py</span>
-            </button>
-          </div>
-        </details>
       </section>
     </section>
 

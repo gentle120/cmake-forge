@@ -35,7 +35,7 @@ MCU 路径：目录加载（vendor→pack→version：已安装 PDSC 身份、�
 
 编译路径：生成的工程文件交给 CMake Tools，由用户在其 UI 或 `cmake --preset` 中配置和编译；插件不启动编译器进程。
 
-烧录路径：侧栏只读扫描 `build/debug`、`build/release` 下的 ELF（或用户手选的 ELF）回填固件行 →「检测探针」用当前 target cfg 依次试探针接口，`init` 后读 CPUID 与两个 DBGMCU IDCODE 窗口，解析出「Cortex-Mx · STM32Fxx · DEV_ID」并把探测成功的接口写成当前探针 → 用户点「烧录」→ OpenOCD 后端由 `openocdDirect` 拼 `program … verify reset exit` 并 spawn `openocd`，J-Link/pyOCD 后端拼 `flash.py` 参数 → `flashRunner.runTool` 解析阶段行 → 进度/输出回灌 Webview → 失败经 `flashDiagnostics` 映射为可执行提示。
+烧录路径：侧栏只读扫描 `build/debug`、`build/release` 下的 ELF，构建目录没有产物时回退到工作区最新的 ELF（或用户手选的 ELF）回填固件行 →「检测探针」用当前 target cfg 依次试探针接口，`init` 后读 CPUID 与两个 DBGMCU IDCODE 窗口，解析出「Cortex-Mx · STM32Fxx · DEV_ID」，把探测成功的接口写成当前探针、按 `chipTargets` 的 DEV_ID 表推导 target，并把三行芯片信息写进「烧录输出」 → 用户点「烧录」→ OpenOCD 后端由 `openocdDirect` 拼 `program … verify reset exit` 并 spawn `openocd`，J-Link/pyOCD 后端拼 `flash.py` 参数 → `flashRunner.runTool` 解析阶段行 → 进度/输出回灌 Webview → 失败经 `flashDiagnostics` 映射为可执行提示。
 
 工具链路径：插件不保存 ARM GNU 路径。生成的工具链文件、Cortex-Debug 配置和 IntelliSense 只写 `arm-none-eabi-*` 命令名，解析交给 `PATH` 或 CMake Tools kit。
 

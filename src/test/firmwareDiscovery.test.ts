@@ -6,6 +6,7 @@ import test from 'node:test';
 import {
   discoverFirmware,
   findFirmwareCandidates,
+  findWorkspaceFirmware,
   pickFirmware,
   type FirmwareCandidate
 } from '../flash/firmwareDiscovery';
@@ -136,5 +137,28 @@ test('reads CMAKE_BUILD_TYPE for a custom preset directory', async () => {
     const result = await discoverFirmware(root);
     assert.equal(result.selected?.path, elf);
     assert.equal(result.selected?.preset, 'debug');
+  });
+});
+
+test('falls back to the newest ELF anywhere in the workspace', async () => {
+  await withRoot(async (root) => {
+    await writeElf(root, 'build/debug/stale.elf');
+    const app = await writeElf(root, 'MDK-ARM/Objects/app.elf');
+    await writeElf(root, 'node_modules/tool/ignored.elf');
+    await setMtime(app, '2026-01-02T03:04:05Z');
+
+    const found = await findWorkspaceFirmware(root);
+    assert.deepEqual(found.map((candidate) => candidate.path), [app]);
+    assert.equal(found[0].preset, 'other');
+  });
+});
+
+test('workspace fallback ignores side artefacts and empty files', async () => {
+  await withRoot(async (root) => {
+    await writeElf(root, 'firmware/app.elf.map');
+    await writeElf(root, 'firmware/empty.elf', '');
+    const real = await writeElf(root, 'firmware/app.elf');
+    const found = await findWorkspaceFirmware(root);
+    assert.deepEqual(found.map((candidate) => candidate.path), [real]);
   });
 });
