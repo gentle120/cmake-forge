@@ -201,6 +201,40 @@ test('sidebar renderer wires every supported command', () => {
   assert.doesNotMatch(scriptSource, /innerHTML/);
 });
 
+test('the environment card offers a download only for the missing tool', () => {
+  const harness = startSidebar(baseState({
+    environment: {
+      armGcc: { ready: false, detail: '未找到 arm-none-eabi-gcc' },
+      openocd: { ready: true, detail: 'C:/tools/openocd/bin/openocd.exe' }
+    }
+  } as never));
+  assert.equal(harness.element('env-armgcc-detail').textContent, '未找到');
+  assert.equal(harness.byCommand('installArmGcc')[0].hidden, false);
+  assert.equal(harness.byCommand('installOpenOcd')[0].hidden, true);
+  const button = harness.byCommand('installArmGcc')[0];
+  button.dispatch('click', { target: button });
+  assert.deepEqual(harness.posted.at(-1), { type: 'installTool', tool: 'armgcc' });
+});
+
+test('a running download renders its progress inside the environment card', () => {
+  const harness = startSidebar(baseState({
+    environment: {
+      armGcc: { ready: false, detail: '未找到' },
+      openocd: { ready: false, detail: '未找到' },
+      installing: 'openocd',
+      progress: { tool: 'openocd', stage: 'download', message: '正在下载 OpenOCD… 42%', percent: 42 }
+    }
+  } as never));
+  harness.send({
+    type: 'toolProgress',
+    tool: 'openocd',
+    stage: 'extract',
+    message: '正在解压 OpenOCD…'
+  });
+  assert.equal(harness.element('env-progress-text').textContent, '正在解压 OpenOCD…');
+  assert.equal(harness.element('env-progress').hidden, false);
+});
+
 test('the import and online-install buttons dispatch their commands', () => {
   const harness = startSidebar(baseState());
   for (const command of ['importPack', 'installPackOnline']) {

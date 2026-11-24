@@ -107,6 +107,9 @@ export class Element {
     });
   }
 
+  /** Minimal inline-style bag: the webview only writes widths and text. */
+  readonly style: Record<string, string> = {};
+
   get hidden(): boolean {
     return this.attributes.has('hidden');
   }
