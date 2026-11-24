@@ -585,7 +585,10 @@ test('detection rows come from host state, including a missing firmware', () => 
   assert.equal(harness.element('flash-target-label').textContent, 'STM32L4xx');
   assert.equal(harness.element('flash-probe-label').textContent, 'DapLink');
   assert.equal(harness.element('flash-chip-label').textContent, 'Cortex-M4 · STM32L4x · DEV_ID 0x461');
-  assert.equal(harness.element('flash-blocked').hidden, false);
+  assert.equal(
+    (harness.element('quick-flash') as unknown as { title: string }).title,
+    '还没有构建产物：先执行 cmake --build --preset debug。'
+  );
   assert.equal(harness.element('quick-flash').disabled, true);
 });
 

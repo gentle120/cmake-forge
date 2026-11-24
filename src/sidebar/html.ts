@@ -173,7 +173,6 @@ export function renderSidebarHtml(
             <span id="flash-chip-label" class="flash-detect-value">未检测</span>
           </div>
           <p id="flash-firmware-detail" class="field-detail"></p>
-          <p id="flash-blocked" class="field-detail" data-tone="warning" role="alert" hidden></p>
         </div>
         <div class="flash-options">
           <label class="flash-option">

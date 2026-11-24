@@ -183,7 +183,6 @@
   const flashTargetLabel = document.getElementById('flash-target-label');
   const flashProbeLabel = document.getElementById('flash-probe-label');
   const flashFirmwareDetail = document.getElementById('flash-firmware-detail');
-  const flashBlocked = document.getElementById('flash-blocked');
   const flashVerifyInput = document.getElementById('flash-verify');
   const flashResetInput = document.getElementById('flash-reset');
   const flashProgress = document.getElementById('flash-progress');
@@ -380,16 +379,13 @@
     flashProbeLabel.textContent = detection?.probeLabel || '—';
     flashChipLabel.textContent = detection?.chipLabel || '未检测';
     flashChipLabel.classList.toggle('missing', !detection?.chipLabel);
-    flashChipLabel.title = detection?.chipLabel
-      ? '点「检测探针」重新读取'
-      : '点「检测探针」让探针读取 CPUID / DEV_ID';
     flashFirmwareDetail.textContent = detection?.firmwareDetail || '';
     flashFirmwareDetail.hidden = !flashFirmwareDetail.textContent;
-    showNotice(
-      flashBlocked,
-      detection && !detection.available ? (detection.blockedReason || '当前无法烧录。') : '',
-      'warning'
-    );
+    // Why flashing is unavailable stays in the tooltip instead of a paragraph:
+    // the disabled button already says something is missing.
+    quickFlashButton.title = detection && !detection.available
+      ? (detection.blockedReason || '当前无法烧录。')
+      : '';
     if (document.activeElement !== flashVerifyInput) {
       flashVerifyInput.checked = flash.verify !== false;
     }
