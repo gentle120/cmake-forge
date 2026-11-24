@@ -18,3 +18,4 @@ This file is a compact relay ledger, not a history log. Stable facts belong in `
 
 - Objective: 按需补充精选厂商/系列，并用真实 DFP 验证生成工程编译（大 Pack 走镜像或本地导入）。
 - Status: `ready`
+- Follow-up：环境卡片的工具链/烧录后端下拉在缺工具时直接给出下载项（本次已随卡片改造落地）。

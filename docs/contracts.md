@@ -24,7 +24,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 
 ## Data And Persistence
 
-- 工具安装：侧栏「编译与烧录工具」在缺少 ARM GNU 工具链或 OpenOCD 时显示「下载」，由扩展下载官方发布包（Arm 15.2.rel1、xpack OpenOCD 0.12.0-7）、用系统 `tar` 解压到扩展全局存储的 `tools/`，成功后写 `cmakeForge.armGccPath` / `cmakeForge.openocdPath`；下载必须按百分比回报进度、失败或取消后删除半成品目录，不得把不完整的解压结果当成已安装。
+- 工具安装：侧栏「编译与烧录工具」用两个下拉分别选择编译工具链与烧录后端；缺失的工具仍列在选项里并标注「未安装」，选中「下载」项即触发安装（选择本身不改变已保存的选择），由扩展下载官方发布包（Arm 15.2.rel1、xpack OpenOCD 0.12.0-7）、用系统 `tar` 解压到扩展全局存储的 `tools/`，成功后写 `cmakeForge.armGccPath` / `cmakeForge.openocdPath`；下载必须按百分比回报进度、失败或取消后删除半成品目录，不得把不完整的解压结果当成已安装。
 - Pack 导入持久化在扩展 globalStorage：归档来源保存到 `packs/<vendor>/<file>.pack`，`packs.json`（version 2）记录 `source`、真实 `archiveFile` 和序列化 DeviceProfile；同 part 重复导入覆盖旧版。
 - Pack 导入只解压/读取 PDSC、SVD 与启动文件条目（`isPackDeviceSourceEntry`）；文档、示例等无关条目不进入解析、不读入内存（真实 DFP 达数百 MB）。
 - 同一 globalStorage 的 Pack 写入串行执行；`packs.json` 先写临时文件、校验后原子替换，损坏的现有文件报错且不得被静默清空。

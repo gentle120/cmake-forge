@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { existsSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import type { CommandResult } from '../shared/commandResult';
 import { randomBytes } from 'node:crypto';
 import {
@@ -73,6 +73,7 @@ import {
   packServesSeries,
   sanitizeSidebarSelection,
   type SidebarEnvironment,
+  type SidebarEnvironmentChoice,
   type SidebarFlashDetection,
   type SidebarOption,
   type SidebarSelection,
@@ -179,6 +180,43 @@ function formatBytes(size: number): string {
   }
   const text = unit === 0 || value >= 10 ? String(Math.round(value)) : value.toFixed(1);
   return `${text} ${units[unit]}`;
+}
+
+
+function toolExtensions(): string[] {
+  const windows = typeof process !== 'undefined' && process.platform === 'win32';
+  return windows ? ['', '.exe', '.cmd', '.bat'] : [''];
+}
+
+/**
+ * Resolves a configured command (absolute path or bare name) to a real file.
+ * Bare names are looked up on `PATH`; a configured name alone is not proof the
+ * tool is installed.
+ */
+function resolveConfiguredExecutable(configured: string, fallback: string): string | undefined {
+  if (typeof process === 'undefined') {
+    return undefined;
+  }
+  const value = configured.trim() || fallback;
+  if (isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value)) {
+    try {
+      return statSync(value).isFile() ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  const path = process.env.PATH ?? process.env.Path ?? '';
+  for (const directory of path.split(delimiter).filter((entry) => entry.length > 0)) {
+    for (const extension of toolExtensions()) {
+      const candidate = join(directory, `${value}${extension}`);
+      try {
+        if (statSync(candidate).isFile()) return candidate;
+      } catch {
+        // Keep looking.
+      }
+    }
+  }
+  return undefined;
 }
 
 export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -1657,11 +1695,41 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
             : '未找到 arm-none-eabi-gcc（自动下载仅 Windows）'
         };
     const openocdExecutable = resolveOpenOcdExecutable(this.configuredOpenOcdPath());
+    const toolchainChoices: SidebarEnvironmentChoice[] = this.buildToolchains().map((toolchain) => ({
+      value: toolchain.id,
+      label: toolchain.label,
+      ready: toolchain.detected !== false,
+      detail: toolchain.binDir
+    }));
+    const executables = this.executablePaths();
+    const jlink = resolveConfiguredExecutable(executables.jlink ?? '', 'JLink.exe');
+    const pyocd = resolveConfiguredExecutable(executables.pyocd ?? '', 'pyocd');
     const environment: SidebarEnvironment = {
       armGcc,
       openocd: openocdExecutable
         ? { ready: true, detail: openocdExecutable }
-        : { ready: false, detail: '未找到 openocd.exe' }
+        : { ready: false, detail: '未找到 openocd.exe' },
+      toolchains: toolchainChoices,
+      backends: [
+        {
+          value: 'openocd',
+          label: 'OpenOCD',
+          ready: Boolean(openocdExecutable),
+          detail: openocdExecutable ?? '未找到 openocd.exe'
+        },
+        {
+          value: 'jlink',
+          label: 'J-Link',
+          ready: Boolean(jlink),
+          detail: jlink ?? '未找到 JLink.exe'
+        },
+        {
+          value: 'pyocd',
+          label: 'pyOCD',
+          ready: Boolean(pyocd),
+          detail: pyocd ?? '未找到 pyocd'
+        }
+      ]
     };
     if (this.toolInstallRunning) {
       environment.installing = this.toolInstallRunning;

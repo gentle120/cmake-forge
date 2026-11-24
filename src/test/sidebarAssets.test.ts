@@ -191,9 +191,7 @@ test('sidebar renderer wires every supported command', () => {
     'cancelFlash',
     'flash',
     'generateProject',
-    'generateDebugConfiguration',
-    'installArmGcc',
-    'installOpenOcd'
+    'generateDebugConfiguration'
   ]) {
     assert.match(scriptSource, new RegExp(command));
   }
@@ -201,19 +199,48 @@ test('sidebar renderer wires every supported command', () => {
   assert.doesNotMatch(scriptSource, /innerHTML/);
 });
 
-test('the environment card offers a download only for the missing tool', () => {
+test('the environment card turns missing tools into download entries', () => {
   const harness = startSidebar(baseState({
     environment: {
       armGcc: { ready: false, detail: '未找到 arm-none-eabi-gcc' },
-      openocd: { ready: true, detail: 'C:/tools/openocd/bin/openocd.exe' }
+      openocd: { ready: false, detail: '未找到 openocd.exe' },
+      toolchains: [],
+      backends: [
+        { value: 'openocd', label: 'OpenOCD', ready: false, detail: '未找到 openocd.exe' },
+        { value: 'jlink', label: 'J-Link', ready: true, detail: 'C:/SEGGER/JLink.exe' }
+      ]
     }
   } as never));
-  assert.equal(harness.element('env-armgcc-detail').textContent, '未找到');
-  assert.equal(harness.byCommand('installArmGcc')[0].hidden, false);
-  assert.equal(harness.byCommand('installOpenOcd')[0].hidden, true);
-  const button = harness.byCommand('installArmGcc')[0];
-  button.dispatch('click', { target: button });
+  const [toolchain, backend] = harness.element('env-fields').querySelectorAll('select');
+  const values = (select: Element): string[] =>
+    select.querySelectorAll('option').map((option) => (option as unknown as { value: string }).value);
+  assert.deepEqual(values(toolchain), ['download:armgcc']);
+  assert.deepEqual(values(backend), ['openocd', 'jlink', 'download:openocd']);
+  toolchain.value = 'download:armgcc';
+  toolchain.dispatch('change');
   assert.deepEqual(harness.posted.at(-1), { type: 'installTool', tool: 'armgcc' });
+});
+
+test('picking an installed toolchain saves it in the MCU selection', () => {
+  const harness = startSidebar(baseState({
+    environment: {
+      armGcc: { ready: true, detail: 'C:/arm/bin' },
+      openocd: { ready: true, detail: 'C:/ocd/openocd.exe' },
+      toolchains: [
+        { value: 'mcu:arm-none-eabi', label: 'ARM GNU 15.3.1', ready: true, detail: 'C:/arm/bin' }
+      ],
+      backends: [
+        { value: 'openocd', label: 'OpenOCD', ready: true, detail: 'C:/ocd/openocd.exe' }
+      ]
+    }
+  } as never));
+  const [toolchain, backend] = harness.element('env-fields').querySelectorAll('select');
+  assert.equal(toolchain.value, 'mcu:arm-none-eabi');
+  backend.value = 'jlink';
+  backend.dispatch('change');
+  const saved = harness.posted.filter((m) => m.type === 'saveSelection').at(-1) as
+    { selection?: { flash?: { backend?: string } } } | undefined;
+  assert.equal(saved?.selection?.flash?.backend, 'jlink');
 });
 
 test('a running download renders its progress inside the environment card', () => {
@@ -221,6 +248,8 @@ test('a running download renders its progress inside the environment card', () =
     environment: {
       armGcc: { ready: false, detail: '未找到' },
       openocd: { ready: false, detail: '未找到' },
+      toolchains: [],
+      backends: [{ value: 'openocd', label: 'OpenOCD', ready: false, detail: '未找到' }],
       installing: 'openocd',
       progress: { tool: 'openocd', stage: 'download', message: '正在下载 OpenOCD… 42%', percent: 42 }
     }
@@ -277,21 +306,13 @@ test('MCU selection follows vendor, series, Pack, version, and device order', ()
     series: [{ value: 'F1x', label: 'F1x' }]
   }));
   const selects = harness.element('target-host').querySelectorAll('select');
-  assert.equal(selects.length, 6);
-  const [vendor, series, pack, version, device, toolchain] = selects;
+  assert.equal(selects.length, 5);
+  const [vendor, series, pack, version, device] = selects;
   assert.equal(vendor.value, 'STM');
   assert.equal(series.value, 'F1x');
   assert.equal(pack.value, 'builtin:STM');
   assert.equal(version.value, 'builtin');
   assert.equal(device.value, 'STM32F103C8T6');
-  assert.equal(toolchain.value, '');
-
-  toolchain.value = 'mcu:arm-none-eabi';
-  toolchain.dispatch('change');
-  const toolchainSave = harness.posted
-    .filter((message) => message.type === 'saveSelection')
-    .at(-1) as { selection?: { mcu?: { buildToolchain?: string } } } | undefined;
-  assert.equal(toolchainSave?.selection?.mcu?.buildToolchain, 'mcu:arm-none-eabi');
 
   series.value = 'F4x';
   series.dispatch('change');
@@ -340,8 +361,8 @@ test('every command button is unique and its command is dispatched by the render
     [...new Set(commands)].sort(),
     ['cancelFlash', 'cancelWorkspaceScan', 'detectFlash', 'flash',
       'generateDebugConfiguration',
-      'generateProject', 'importPack', 'installArmGcc', 'installCorePack',
-      'installOpenOcd', 'installPackOnline', 'pickFirmware', 'scanWorkspace']
+      'generateProject', 'importPack', 'installCorePack',
+      'installPackOnline', 'pickFirmware', 'scanWorkspace']
   );
   // One delegated listener owns the static commands; no per-button wiring remains.
   const catalogListeners = [...scriptSource.matchAll(/app\.addEventListener\('click'/g)];

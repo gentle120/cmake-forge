@@ -79,9 +79,21 @@ export interface SidebarToolStatus {
  * of the pure selection model for the same reason as the flash detection: the
  * host does the IO.
  */
+/** One entry of the toolchain or backend dropdown in the environment card. */
+export interface SidebarEnvironmentChoice {
+  value: string;
+  label: string;
+  /** False entries stay selectable so choosing one can offer the download. */
+  ready: boolean;
+  detail: string;
+}
+
 export interface SidebarEnvironment {
   armGcc: SidebarToolStatus;
   openocd: SidebarToolStatus;
+  /** Compiler toolchains and flash backends, rendered as two dropdowns. */
+  toolchains: SidebarEnvironmentChoice[];
+  backends: SidebarEnvironmentChoice[];
   /** Which download is running; buttons turn into a progress bar meanwhile. */
   installing?: 'armgcc' | 'openocd';
   progress?: {

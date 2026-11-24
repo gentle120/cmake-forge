@@ -140,16 +140,8 @@ export function renderSidebarHtml(
           </div>
         </div>
         <div id="environment" class="environment" aria-live="polite">
-          <div class="env-row" id="env-armgcc">
-            <span class="env-name">ARM GNU 工具链</span>
-            <span id="env-armgcc-detail" class="env-detail">检测中…</span>
-            <button id="env-armgcc-install" class="secondary-action" type="button" data-command="installArmGcc">下载</button>
-          </div>
-          <div class="env-row" id="env-openocd">
-            <span class="env-name">OpenOCD</span>
-            <span id="env-openocd-detail" class="env-detail">检测中…</span>
-            <button id="env-openocd-install" class="secondary-action" type="button" data-command="installOpenOcd">下载</button>
-          </div>
+          <div id="env-fields" class="env-fields"></div>
+          <p id="env-hint" class="env-hint">工具链与烧录后端都在这里选；下拉里带「下载」的项会装上对应的官方包。</p>
           <div id="env-progress" class="env-progress" hidden>
             <div class="env-progress-track"><div id="env-progress-bar" class="env-progress-bar"></div></div>
             <span id="env-progress-text" class="env-progress-text"></span>

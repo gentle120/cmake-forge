@@ -198,12 +198,8 @@
   const quickFlashButton = document.getElementById('quick-flash');
   const cancelFlashButton = document.getElementById('cancel-flash');
   const environmentHost = document.getElementById('environment');
-  const envArmGccRow = document.getElementById('env-armgcc');
-  const envArmGccDetail = document.getElementById('env-armgcc-detail');
-  const envArmGccInstall = document.getElementById('env-armgcc-install');
-  const envOpenOcdRow = document.getElementById('env-openocd');
-  const envOpenOcdDetail = document.getElementById('env-openocd-detail');
-  const envOpenOcdInstall = document.getElementById('env-openocd-install');
+  const envFields = document.getElementById('env-fields');
+  const envHint = document.getElementById('env-hint');
   const envProgress = document.getElementById('env-progress');
   const envProgressBar = document.getElementById('env-progress-bar');
   const envProgressText = document.getElementById('env-progress-text');
@@ -248,15 +244,6 @@
     if (!state) return;
     saveSelection({ ...state.selection, mcu: { ...state.selection.mcu, part: value } });
   });
-  const toolchainField = createSelectField('编译链', (value) => {
-    if (!state) return;
-    saveSelection({
-      ...state.selection,
-      mcu: { ...state.selection.mcu, buildToolchain: value }
-    });
-  });
-  toolchainField.wrapper.classList.add('field-wide');
-  const toolchainNote = paragraph('field-detail', '');
   const deviceSummary = document.createElement('div');
   deviceSummary.className = 'device-summary field-wide';
   const deviceMeta = document.createElement('span');
@@ -271,8 +258,6 @@
     versionField.wrapper,
     deviceField.wrapper,
     deviceSummary,
-    toolchainField.wrapper,
-    toolchainNote,
     packCatalogBusy
   );
   // The installed core-pack version sits with its include switch, after the
@@ -284,22 +269,48 @@
     targetHost.append(corePackField.wrapper);
   }
 
-  const backendField = createSelectField('烧录后端', (value) => {
-    if (!state) return;
-    saveSelection({ ...state.selection, flash: { ...state.selection.flash, backend: value } });
-  });
   const probeField = createSelectField('调试探针', (value) => {
     if (!state) return;
     saveSelection({ ...state.selection, flash: { ...state.selection.flash, probeId: value } });
   });
   flashHost.append(
-    backendField.wrapper,
     probeField.wrapper,
     paragraph(
       'field-detail',
       '探针要与实际调试器一致；选错时 F5 立即退出，原因见「终端 → gdb-server」。'
     )
   );
+
+  // Toolchain and backend are picked in the environment card: choosing an
+  // entry whose tool is missing posts the same install request the old
+  // download button used to.
+  const DOWNLOAD_ARM_GCC = 'download:armgcc';
+  const DOWNLOAD_OPENOCD = 'download:openocd';
+  const toolchainField = createSelectField('工具链', (value) => {
+    if (!state) return;
+    if (value === DOWNLOAD_ARM_GCC) {
+      post({ type: 'installTool', tool: 'armgcc' });
+      syncEnvironment();
+      return;
+    }
+    saveSelection({
+      ...state.selection,
+      mcu: { ...state.selection.mcu, buildToolchain: value }
+    });
+  });
+  const backendField = createSelectField('烧录后端', (value) => {
+    if (!state) return;
+    if (value === DOWNLOAD_OPENOCD) {
+      post({ type: 'installTool', tool: 'openocd' });
+      syncEnvironment();
+      return;
+    }
+    saveSelection({ ...state.selection, flash: { ...state.selection.flash, backend: value } });
+  });
+  if (envFields) {
+    envFields.append(toolchainField.wrapper, backendField.wrapper);
+  }
+
 
   function saveSelection(selection) {
     if (!state) return;
@@ -327,13 +338,6 @@
     }
     applyOptions(seriesField.select, state.series, selection.series);
     applyOptions(deviceField.select, state.devices, selection.part);
-    const mcuToolchainOptions = Array.isArray(state.mcuToolchains) ? state.mcuToolchains : [];
-    applyOptions(toolchainField.select, mcuToolchainOptions, selection.buildToolchain);
-    // Only one family is offered; a one-item dropdown is noise.
-    toolchainField.wrapper.hidden = mcuToolchainOptions.length <= 1;
-    const toolchain = selectedOption(mcuToolchainOptions, selection.buildToolchain);
-    toolchainNote.textContent = toolchain?.description || '';
-    toolchainNote.hidden = !toolchainNote.textContent || mcuToolchainOptions.length === 0;
     // The core pack row only means something while the headers are being
     // copied into the project and a core pack is actually installed.
     const corePackVersions = Array.isArray(state.corePackVersions)
@@ -370,7 +374,6 @@
 
   function syncFlashSection() {
     const flash = state.selection.flash;
-    applyOptions(backendField.select, state.flashBackends, flash.backend);
     applyOptions(probeField.select, state.flashProbes, flash.probeId);
 
     // Detection is host-side IO, so it can lag the selection by one refresh;
@@ -582,19 +585,32 @@
       return;
     }
     environmentHost.hidden = false;
-    const applyRow = (row, detail, button, tool, status) => {
-      row.classList.toggle('ready', status.ready);
-      row.classList.toggle('missing', !status.ready);
-      detail.textContent = status.ready ? status.detail : '未找到';
-      detail.title = status.detail;
-      button.hidden = status.ready;
-      button.disabled = Boolean(environment.installing) || busy;
-      button.dataset.tool = tool;
-    };
-    applyRow(envArmGccRow, envArmGccDetail, envArmGccInstall, 'armgcc', environment.armGcc);
-    applyRow(envOpenOcdRow, envOpenOcdDetail, envOpenOcdInstall, 'openocd', environment.openocd);
-    const progress = environment.progress;
     const installing = Boolean(environment.installing);
+    const toolchains = Array.isArray(environment.toolchains) ? environment.toolchains : [];
+    const toolchainOptions = toolchains.map((choice) => ({
+      value: choice.value,
+      label: choice.ready ? choice.label : `${choice.label}（未安装）`
+    }));
+    if (!toolchains.some((choice) => choice.ready)) {
+      toolchainOptions.push({ value: DOWNLOAD_ARM_GCC, label: '未检测到 · 点此下载' });
+    }
+    applyOptions(toolchainField.select, toolchainOptions, state.selection.mcu.buildToolchain);
+    toolchainField.select.disabled = installing;
+    const backends = Array.isArray(environment.backends) ? environment.backends : [];
+    const backendOptions = backends.map((choice) => ({
+      value: choice.value,
+      label: choice.ready ? choice.label : `${choice.label}（未安装）`
+    }));
+    if (!environment.openocd.ready) {
+      backendOptions.push({ value: DOWNLOAD_OPENOCD, label: '下载 OpenOCD…' });
+    }
+    applyOptions(backendField.select, backendOptions, state.selection.flash.backend);
+    backendField.select.disabled = installing;
+    const selected = backends.find((choice) => choice.value === state.selection.flash.backend);
+    envHint.textContent = installing
+      ? '正在安装，完成后自动刷新。'
+      : (selected?.detail || '工具链与烧录后端都在这里选；带「下载」的项会装上官方包。');
+    const progress = environment.progress;
     envProgress.hidden = !installing && !progress;
     if (progress) {
       const percent = Number.isFinite(progress.percent) ? progress.percent : 0;
@@ -879,11 +895,6 @@
     if (command === 'detectFlash') {
       if (!state || busy) return;
       post({ type: 'detectFlash' });
-      return;
-    }
-    if (command === 'installArmGcc' || command === 'installOpenOcd') {
-      if (!state || busy) return;
-      post({ type: 'installTool', tool: command === 'installArmGcc' ? 'armgcc' : 'openocd' });
       return;
     }
     if (command === 'pickFirmware') {
