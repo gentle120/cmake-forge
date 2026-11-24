@@ -8,7 +8,7 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 
 - 用户与外部系统：嵌入式开发者在 VS Code 侧边栏/命令面板选择方向与芯片；扩展读写工作区文件并生成 `.vscode/` 配置；配置与编译由 CMake Tools 负责，烧录/调试依赖用户 PATH 或设置中的 OpenOCD、arm-none-eabi、J-Link、pyOCD；CMSIS Pack 来自本地文件、Keil 安装库或 CMSIS 公开在线索引。
 - 运行与部署目标：VS Code 扩展宿主（Node，`engines.vscode ^1.85`），`main: ./out/extension.js`，tsc 编译，无打包器。
-- 信任与安全边界：生成文件落盘前有覆盖确认；不执行外部烧录器进程（仅生成脚本供用户执行）；Pack 导入只读 zip 内容并复制到扩展 globalStorage。
+- 信任与安全边界：生成文件落盘前有覆盖确认；烧录只由用户显式触发，扩展 spawn 生成的 `flash.py` 而不自行拼装 OpenOCD/J-Link/pyOCD 命令；Pack 导入只读 zip 内容并复制到扩展 globalStorage。
 
 ## Component Ownership
 
@@ -20,7 +20,7 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 | `src/generator/` | 纯函数字符串生成器（CMake/toolchain/linker/startup/flash/debug） | DeviceProfile、Flash*Profile 契约 | 文件系统、UI |
 | `src/generation/` | 生成工作流编排 | generator、scanner、integration、shared | 芯片数据、烧录执行、编译执行 |
 | `src/integration/` | 生成产物的宿主接线（C/C++ IntelliSense、工作区设置写入） | generator 契约、VS Code API | 生成器逻辑、芯片数据、编译执行 |
-| `src/flash/` | 烧录探针、target、后端注册表 | devices 档案（经 debugTarget 桥） | 调用外部进程 |
+| `src/flash/` | 烧录探针、target、后端注册表、固件发现、`flash.py` 子进程编排与失败诊断 | devices 档案（经 debugTarget 桥）、generator 的 flash.py 契约 | 编译执行、芯片数据 |
 | `src/scanner/` | 工作区源码/头文件/宏扫描 | vendorRegistry（宏前缀） | — |
 | `src/sidebar/` + `src/extension.ts` | 命令/QuickPick/Webview 交互层、状态持久化 | 全部下层注册表 API | 生成逻辑 |
 | `src/linux/`、`src/native/` | 独立的 Linux 交叉与桌面方向；桌面编译器由 CMake Tools 检测 | — | MCU 芯片数据 |
@@ -34,6 +34,8 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 MCU 路径：目录加载（vendor→pack→version：已安装 PDSC 身份、已导入记录、在线版本）→ 选择版本激活并按其所有权取档案 → `getDeviceProfileForPack` → `generateMcuWorkflow` 生成 CMakeLists/toolchain/linker/startup/presets（flash.py 与 launch.json 经烧录后端 openocd/jlink/pyocd 参数化）→ 覆盖确认 → 写盘。烧录 target 经 `DeviceProfile.debugTarget` 桥接到 OpenOCD cfg；无映射的设备走 jlink/pyocd 后端。Pack 导入：zip 或解压目录→PDSC/SVD→DeviceProfile 合成→globalStorage 持久化→注册表注入；identity 与 profile 所有权都以导入存储路径为准。注册表无内置数据：`src/devices/` 只含运行时注册表，档案全部由 Pack 注入。
 
 编译路径：生成的工程文件交给 CMake Tools，由用户在其 UI 或 `cmake --preset` 中配置和编译；插件不启动编译器进程。
+
+烧录路径：侧栏「重新检测」只读扫描 `build/debug`、`build/release` 下的 ELF 并回填固件行 → 用户点「烧录」→ provider 依当前 target/probe/后端拼 `flash.py` 参数 → `flashRunner` spawn 并解析阶段行 → 进度/输出回灌 Webview → 失败经 `flashDiagnostics` 映射为可执行提示。
 
 工具链路径：插件不保存 ARM GNU 路径。生成的工具链文件、Cortex-Debug 配置和 IntelliSense 只写 `arm-none-eabi-*` 命令名，解析交给 `PATH` 或 CMake Tools kit。
 

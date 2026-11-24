@@ -1247,7 +1247,16 @@ export async function generateDebugWorkflow(
   openocdPath: string,
   backend: FlashBackendId = 'openocd',
   device?: FlashDeviceContext,
-  options: { toolchainPrefix?: string; toolchainFamily?: 'gcc' | 'armclang' | 'clang' } = {}
+  options: {
+    toolchainPrefix?: string;
+    toolchainFamily?: 'gcc' | 'armclang' | 'clang';
+    /** Absolute SVD path to register when it exists; detection decides this. */
+    svdFilePath?: string;
+    /** Build task run before the launch session; `CMake: build` fits the presets. */
+    preLaunchTask?: string;
+    /** Also write the `attach` twin configuration. */
+    includeAttach?: boolean;
+  } = {}
 ): Promise<WorkflowResult> {
   const root = host.workspaceRoot();
   if (!root) {
@@ -1272,13 +1281,31 @@ export async function generateDebugWorkflow(
     // depend on CMake Tools having a selected launch target.
     executable: `\${workspaceFolder}/build/debug/${projectNameFromRoot(root)}.elf`,
     searchDirs: backend === 'openocd' ? await findOpenOcdSearchDirs(openocdPath) : [],
+    ...(options.svdFilePath ? { svdFile: options.svdFilePath } : {}),
+    ...(options.includeAttach ? { includeAttach: true } : {}),
+    // The presets build with CMake Tools, whose build task is stable across
+    // versions; without it F5 on a clean tree opens a session with no ELF.
+    ...(options.preLaunchTask === undefined ? {} : { preLaunchTask: options.preLaunchTask }),
     ...(options.toolchainFamily !== 'armclang' && options.toolchainFamily !== 'clang' && options.toolchainPrefix
       ? { toolchainPrefix: options.toolchainPrefix }
       : {})
   });
   await mkdir(join(root, '.vscode'), { recursive: true });
   // launch.json is merged rather than replaced, so an identical merge result
-  // needs no write and keeps the file's modification time intact.
+  // needs no write and keeps the file's modification time intact. A different
+  // result may be the user's hand-written configuration set, so it needs the
+  // same overwrite confirmation the generated project files get.
+  if (content !== existingContent && existingContent !== undefined) {
+    if (!(await host.confirmOverwrite(['.vscode/launch.json']))) {
+      return {
+        kind: 'debug',
+        ok: false,
+        cancelled: true,
+        files: [],
+        message: '已取消覆盖 .vscode/launch.json。'
+      };
+    }
+  }
   if (content !== existingContent) {
     await writeFile(launchPath, content, 'utf8');
   }

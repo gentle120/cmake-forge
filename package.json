@@ -117,6 +117,16 @@
           "type": "string",
           "default": "",
           "description": "Pack 下载镜像根地址（可选）。形如 https://mirror.example.com/cmsis 的扁平目录，按 <vendor>.<name>.<version>.pack 提供文件。留空时直连官方 CDN。"
+        },
+        "cmakeForge.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "运行 flash.py 的 Python 解释器。留空时 Windows 用 python，其他平台用 python3。"
+        },
+        "cmakeForge.debugPreLaunchTask": {
+          "type": "string",
+          "default": "CMake: build",
+          "description": "生成的调试配置在启动前运行的任务名（preLaunchTask）。默认使用 CMake Tools 的「CMake: build」，留空则不写入。"
         }
       }
     }

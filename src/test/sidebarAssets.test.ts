@@ -169,6 +169,9 @@ test('sidebar renderer wires every supported command', () => {
     'installPackOnline',
     'scanWorkspace',
     'cancelWorkspaceScan',
+    'detectFlash',
+    'cancelFlash',
+    'flash',
     'generateProject',
     'generateFlashScript',
     'generateDebugConfiguration',
@@ -283,7 +286,8 @@ test('every command button is unique and its command is dispatched by the render
   }
   assert.deepEqual(
     [...new Set(commands)].sort(),
-    ['cancelWorkspaceScan', 'generateDebugConfiguration', 'generateFlashScript',
+    ['cancelFlash', 'cancelWorkspaceScan', 'detectFlash', 'flash',
+      'generateDebugConfiguration', 'generateFlashScript',
       'generateProject', 'importPack', 'installCorePack', 'installPackOnline', 'scanWorkspace']
   );
   // One delegated listener owns the static commands; no per-button wiring remains.

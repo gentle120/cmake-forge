@@ -140,14 +140,56 @@ export function renderSidebarHtml(
           </div>
         </div>
         <div id="flash-host" class="flash-host"></div>
-        <div class="quick-actions">
-          <button id="quick-flash" class="quick-action" type="button" data-command="generateFlashScript">
-            <span class="ui-icon" data-icon="zap" aria-hidden="true"></span><span>生成 flash.py</span>
-          </button>
-          <button id="quick-debug" class="quick-action" type="button" data-command="generateDebugConfiguration">
-            <span class="ui-icon" data-icon="debug-alt" aria-hidden="true"></span><span>生成 Debug 配置</span>
+        <div id="flash-detection" class="flash-detection" aria-live="polite">
+          <div class="flash-detect-row">
+            <span class="flash-detect-key">固件</span>
+            <span id="flash-firmware" class="flash-detect-value">尚未检测</span>
+          </div>
+          <div class="flash-detect-row">
+            <span class="flash-detect-key">目标</span>
+            <span id="flash-target-label" class="flash-detect-value">—</span>
+          </div>
+          <div class="flash-detect-row">
+            <span class="flash-detect-key">探针</span>
+            <span id="flash-probe-label" class="flash-detect-value">—</span>
+          </div>
+          <p id="flash-firmware-detail" class="field-detail"></p>
+          <p id="flash-blocked" class="field-detail" data-tone="warning" role="alert" hidden></p>
+        </div>
+        <div class="flash-options">
+          <label class="flash-option">
+            <input id="flash-verify" type="checkbox" checked><span>烧录后校验</span>
+          </label>
+          <label class="flash-option">
+            <input id="flash-reset" type="checkbox" checked><span>完成后复位运行</span>
+          </label>
+          <button id="flash-redetect" class="secondary-action compact" type="button" data-command="detectFlash">
+            <span class="ui-icon" data-icon="refresh" aria-hidden="true"></span><span>重新检测</span>
           </button>
         </div>
+        <div id="flash-progress" class="flash-progress" hidden>
+          <div class="flash-progress-track"><div id="flash-progress-bar" class="flash-progress-bar"></div></div>
+          <p id="flash-progress-text" class="flash-progress-text" role="status" aria-live="polite"></p>
+        </div>
+        <div class="quick-actions">
+          <button id="quick-flash" class="quick-action primary" type="button" data-command="flash">
+            <span class="ui-icon" data-icon="zap" aria-hidden="true"></span><span>烧录</span>
+          </button>
+          <button id="cancel-flash" class="quick-action" type="button" data-command="cancelFlash"
+            data-always-enabled="true" hidden>
+            <span class="ui-icon" data-icon="cancel" aria-hidden="true"></span><span>取消烧录</span>
+          </button>
+          <button id="quick-debug" class="quick-action" type="button" data-command="generateDebugConfiguration">
+            <span class="ui-icon" data-icon="debug-alt" aria-hidden="true"></span><span>调试配置</span>
+          </button>
+        </div>
+        <details id="flash-output-details" class="advanced" hidden>
+          <summary>
+            <span class="details-title">烧录输出</span>
+            <span id="flash-output-hint" class="summary-hint"></span>
+          </summary>
+          <pre id="flash-output" class="flash-output"></pre>
+        </details>
         <details id="backend-details" class="advanced">
           <summary>
             <span class="ui-icon" data-icon="settings-gear" aria-hidden="true"></span>
@@ -155,6 +197,12 @@ export function renderSidebarHtml(
             <span id="backend-hint" class="summary-hint"></span>
           </summary>
           <div id="backend-details-host" class="advanced-grid"></div>
+          <div class="details-group">
+            <button id="generate-flash-script" class="secondary-action" type="button"
+              data-command="generateFlashScript">
+              <span class="ui-icon" data-icon="zap" aria-hidden="true"></span><span>只生成 flash.py</span>
+            </button>
+          </div>
         </details>
       </section>
     </section>

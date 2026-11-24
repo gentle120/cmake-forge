@@ -183,6 +183,21 @@
   packCatalogBusy.hidden = true;
   const flashHost = document.getElementById('flash-host');
   const backendDetailsHost = document.getElementById('backend-details-host');
+  const flashFirmwareValue = document.getElementById('flash-firmware');
+  const flashTargetLabel = document.getElementById('flash-target-label');
+  const flashProbeLabel = document.getElementById('flash-probe-label');
+  const flashFirmwareDetail = document.getElementById('flash-firmware-detail');
+  const flashBlocked = document.getElementById('flash-blocked');
+  const flashVerifyInput = document.getElementById('flash-verify');
+  const flashResetInput = document.getElementById('flash-reset');
+  const flashProgress = document.getElementById('flash-progress');
+  const flashProgressBar = document.getElementById('flash-progress-bar');
+  const flashProgressText = document.getElementById('flash-progress-text');
+  const flashOutputDetails = document.getElementById('flash-output-details');
+  const flashOutputPre = document.getElementById('flash-output');
+  const flashOutputHint = document.getElementById('flash-output-hint');
+  const quickFlashButton = document.getElementById('quick-flash');
+  const cancelFlashButton = document.getElementById('cancel-flash');
 
   const vendorField = createSelectField('厂商', (value) => {
     if (!state) return;
@@ -393,7 +408,49 @@
     const hint = [backend?.label, probe?.label].filter(Boolean).join(' · ');
     backendHint.textContent = hint;
     backendHint.hidden = !hint;
+
+    // Detection is host-side IO, so it can lag the selection by one refresh;
+    // until it arrives the row says so instead of pretending there is no ELF.
+    const detection = state.flashDetection;
+    const firmwareName = detection && detection.firmwarePath
+      ? detection.firmwarePath.split(/[\\/]/).pop()
+      : '';
+    flashFirmwareValue.textContent = detection
+      ? (detection.firmwareLabel || firmwareName || '未找到固件')
+      : '尚未检测';
+    flashFirmwareValue.classList.toggle('missing', Boolean(detection) && !detection.firmwarePath);
+    flashTargetLabel.textContent = detection?.targetLabel || '—';
+    flashProbeLabel.textContent = detection?.probeLabel || '—';
+    flashFirmwareDetail.textContent = detection?.firmwareDetail || '';
+    flashFirmwareDetail.hidden = !flashFirmwareDetail.textContent;
+    showNotice(
+      flashBlocked,
+      detection && !detection.available ? (detection.blockedReason || '当前无法烧录。') : '',
+      'warning'
+    );
+    if (document.activeElement !== flashVerifyInput) {
+      flashVerifyInput.checked = flash.verify !== false;
+    }
+    if (document.activeElement !== flashResetInput) {
+      flashResetInput.checked = flash.resetAfterFlash !== false;
+    }
   }
+
+  flashVerifyInput.addEventListener('change', () => {
+    if (!state || busy) return;
+    saveSelection({
+      ...state.selection,
+      flash: { ...state.selection.flash, verify: flashVerifyInput.checked }
+    });
+  });
+
+  flashResetInput.addEventListener('change', () => {
+    if (!state || busy) return;
+    saveSelection({
+      ...state.selection,
+      flash: { ...state.selection.flash, resetAfterFlash: flashResetInput.checked }
+    });
+  });
 
   // --- Linux and desktop panels: built once per mode, then synced ---
 
@@ -593,15 +650,25 @@
     // only produces an error. Listing the commands keeps a future non-MCU
     // generation command from being disabled by accident.
     const blocked = Boolean(state?.mcuBlockedReason);
-    const mcuCommands = new Set(['generateProject', 'generateFlashScript', 'generateDebugConfiguration']);
+    const mcuCommands = new Set([
+      'generateProject',
+      'generateFlashScript',
+      'generateDebugConfiguration',
+      'flash'
+    ]);
+    const flashUnavailable = Boolean(state?.flashDetection) && !state.flashDetection.available;
     controls().forEach((control) => {
       if (control.dataset.alwaysEnabled === 'true') return;
       const mcuCommand = typeof control.dataset.command === 'string'
         && mcuCommands.has(control.dataset.command);
       control.disabled = busy
         || (control === projectRootSelect && Boolean(state?.discoveringProjects))
-        || (blocked && mcuCommand);
+        || (blocked && mcuCommand)
+        || (control === quickFlashButton && flashUnavailable);
     });
+    const flashing = busy && activeOperation === '正在烧录';
+    cancelFlashButton.hidden = !flashing;
+    cancelFlashButton.disabled = cancelRequested;
     syncCancelWorkspaceScan();
   }
 
@@ -777,7 +844,9 @@
     scanWorkspace: '正在扫描工作区',
     generateProject: '正在生成工程',
     generateFlashScript: '正在生成 flash.py',
-    generateDebugConfiguration: '正在生成调试配置'
+    generateDebugConfiguration: '正在生成调试配置',
+    detectFlash: '正在检测固件',
+    flash: '正在烧录'
   };
   const cancellableCommands = new Set(['scanWorkspace']);
 
@@ -794,6 +863,35 @@
       syncCancelWorkspaceScan();
       setStatusBadge('busy', '正在取消扫描');
       post({ type: 'cancelWorkspaceScan' });
+      return;
+    }
+    if (command === 'cancelFlash') {
+      if (cancelRequested || cancelFlashButton.hidden) return;
+      cancelRequested = true;
+      cancelFlashButton.disabled = true;
+      setStatusBadge('busy', '正在取消烧录');
+      post({ type: 'cancelFlash' });
+      return;
+    }
+    if (command === 'detectFlash') {
+      if (!state || busy) return;
+      post({ type: 'detectFlash' });
+      return;
+    }
+    if (command === 'flash') {
+      if (!state) return;
+      if (!startOperation(target, commandLabels.flash)) return;
+      flashProgress.hidden = false;
+      flashProgressBar.style.width = '0%';
+      flashProgressText.textContent = '准备烧录…';
+      post({
+        type: 'flash',
+        verify: flashVerifyInput.checked,
+        reset: flashResetInput.checked,
+        ...(state.flashDetection?.firmwarePath
+          ? { firmwarePath: state.flashDetection.firmwarePath }
+          : {})
+      });
       return;
     }
     if (!(command in commandLabels)) return;
@@ -870,6 +968,27 @@
     }
     if (message.type === 'operationFinished') {
       finishOperation(message.result);
+      return;
+    }
+    if (message.type === 'flashProgress') {
+      flashProgress.hidden = false;
+      const percent = Number.isFinite(message.percent)
+        ? Math.max(0, Math.min(100, message.percent))
+        : 0;
+      flashProgressBar.style.width = `${percent}%`;
+      flashProgressText.textContent = message.message || '';
+      if (!busy || message.stage === 'failed') {
+        setStatusBadge(message.stage === 'failed' ? 'error' : 'busy', message.message || '');
+      }
+      return;
+    }
+    if (message.type === 'flashOutput') {
+      const lines = Array.isArray(message.lines) ? message.lines : [];
+      if (lines.length > 0) {
+        flashOutputPre.textContent = lines.join('\n');
+        flashOutputDetails.hidden = false;
+        flashOutputHint.textContent = `${lines.length} 行输出`;
+      }
       return;
     }
     if (message.type === 'workspaceScan') {

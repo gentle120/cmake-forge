@@ -639,3 +639,23 @@ test('keeps a persisted toolchain id before discovery has run', () => {
   });
   assert.equal(selection.mcu.buildToolchain, 'mcu:gcc');
 });
+
+test('keeps the flash verify and reset defaults unless the user opts out', () => {
+  const defaults = defaultSidebarSelection();
+  assert.equal(defaults.flash.verify, true);
+  assert.equal(defaults.flash.resetAfterFlash, true);
+
+  const opted = sanitizeSidebarSelection({
+    ...defaultSidebarSelection(),
+    flash: { verify: false, resetAfterFlash: false }
+  });
+  assert.equal(opted.flash.verify, false);
+  assert.equal(opted.flash.resetAfterFlash, false);
+
+  const repaired = sanitizeSidebarSelection({
+    ...defaultSidebarSelection(),
+    flash: { verify: 'no' as unknown as boolean, resetAfterFlash: 0 as unknown as boolean }
+  });
+  assert.equal(repaired.flash.verify, true);
+  assert.equal(repaired.flash.resetAfterFlash, true);
+});

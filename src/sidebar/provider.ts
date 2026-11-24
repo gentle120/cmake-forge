@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { CommandResult } from '../shared/commandResult';
 import { randomBytes } from 'node:crypto';
 import {
@@ -21,6 +23,8 @@ import {
 import {
   backendSupportsProbe,
   defaultBackendFor,
+  jlinkDeviceName,
+  pyocdTargetName,
   type FlashBackendId
 } from '../flash/backendProfiles';
 import type { FlashDeviceContext, FlashExecutablePaths } from '../generator/flashScriptGenerator';
@@ -58,9 +62,13 @@ import {
   nextMcuSelection,
   packServesSeries,
   sanitizeSidebarSelection,
+  type SidebarFlashDetection,
   type SidebarOption,
   type SidebarSelection
 } from './state';
+import { discoverFirmware } from '../flash/firmwareDiscovery';
+import { runFlash, type FlashEvent } from '../flash/flashRunner';
+import { diagnoseFlashFailure } from '../flash/flashDiagnostics';
 
 const selectionKey = 'cmakeForge.sidebarSelection.v1';
 
@@ -131,6 +139,26 @@ function normalizeResult(result: WorkflowResult): {
   };
 }
 
+function basenamePath(file: string): string {
+  const parts = file.split(/[\\/]/);
+  return parts[parts.length - 1] || file;
+}
+
+function formatBytes(size: number): string {
+  if (!Number.isFinite(size) || size <= 0) {
+    return '0 B';
+  }
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = size;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const text = unit === 0 || value >= 10 ? String(Math.round(value)) : value.toFixed(1);
+  return `${text} ${units[unit]}`;
+}
+
 export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   static readonly viewType = 'cmakeForge.sidebar';
 
@@ -143,6 +171,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private projectDiscoveryController?: AbortController;
   private workspaceScanController?: AbortController;
   private workspaceScanPromise?: Promise<void>;
+  /** Latest firmware/target/probe detection; `undefined` until the first scan. */
+  private flashDetection?: SidebarFlashDetection;
+  private flashController?: AbortController;
   private packOptions: DevicePackOption[] = [];
   private vendorOptions?: Array<{ value: string; label: string; description?: string }>;
   private pendingPackId: string;
@@ -350,7 +381,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
 
   private state() {
     // The sidebar loader contract is optional for old host fixtures.
-    return buildSidebarState(
+    const state = buildSidebarState(
       workspaceName(),
       this.selectionValue,
       this.dependencies.discoverToolchains(),
@@ -370,6 +401,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.corePackVersions,
       this.buildToolchains()
     );
+    // Detection is host-side IO and can lag the selection by one refresh; the
+    // webview shows "尚未检测" until the first result lands.
+    return this.flashDetection ? { ...state, flashDetection: this.flashDetection } : state;
   }
 
   private postState(): void {
@@ -437,6 +471,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.packCatalogNotice = '';
     }
     this.postState();
+    // The firmware, target and probe labels in the flash card follow the
+    // selection, so every persisted change re-runs the detection.
+    void this.refreshFlashDetection().then(() => this.postState());
     if (vendorChanged) {
       // Series-first: switching vendors only refreshes the catalog; the series
       // (defaulted to the catalog's first entry) then determines the Pack.
@@ -945,6 +982,226 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     return `「${metadata.label}」暂无内置 OpenOCD target 映射：已按 ${target.label} 生成，请按实际芯片修改 launch.json 的 configFiles / flash.py 的 target。`;
   }
 
+  /**
+   * Finds the newest built firmware and the target/probe the flash card shows.
+   *
+   * Never throws: a missing `build/` directory is the normal state right after
+   * cloning a project, and the sidebar must still render.
+   */
+  private async refreshFlashDetection(): Promise<void> {
+    const root = this.projectRoot();
+    if (!root) {
+      this.flashDetection = undefined;
+      return;
+    }
+    const selection = this.selectionValue.flash;
+    const probe = getFlashProbeProfile(selection.probeId);
+    let targetLabel = selection.targetId;
+    try {
+      targetLabel = getFlashTargetProfile(selection.targetId).label;
+    } catch {
+      // An unknown persisted target id is repaired by sanitize; keep the raw id
+      // instead of failing the whole state for a label.
+    }
+    let discovered: Awaited<ReturnType<typeof discoverFirmware>>;
+    try {
+      discovered = await discoverFirmware(root);
+    } catch (error) {
+      logLine(`[flash] ${root}: ${error instanceof Error ? error.message : String(error)}`);
+      discovered = { candidates: [], reason: '无法读取 build 目录。' };
+    }
+    const firmware = discovered.selected;
+    this.flashDetection = {
+      firmwarePath: firmware?.path ?? '',
+      firmwareLabel: firmware ? basenamePath(firmware.path) : '',
+      firmwareDetail: firmware
+        ? `${firmware.preset} · ${formatBytes(firmware.size)} · ${new Date(firmware.mtimeMs).toLocaleString()}`
+        : '',
+      targetLabel,
+      probeLabel: probe.label,
+      available: firmware !== undefined,
+      blockedReason: firmware === undefined
+        ? (discovered.reason || '没有找到已构建的固件：先构建工程。')
+        : ''
+    };
+  }
+
+  /** Python executable: the setting wins, then the platform launcher. */
+  private pythonPath(): string {
+    const configured = vscode.workspace
+      .getConfiguration('cmakeForge')
+      .get<string>('pythonPath', '');
+    if (configured && configured.trim()) {
+      return configured.trim();
+    }
+    return process.platform === 'win32' ? 'python' : 'python3';
+  }
+
+  private flashArguments(
+    flash: ReturnType<SidebarProvider['flashGenerationOptions']>,
+    firmwarePath: string,
+    verify: boolean,
+    reset: boolean
+  ): string[] {
+    const args = ['--firmware', firmwarePath];
+    if (flash.backend === 'openocd') {
+      args.push('--probe', flash.probe.id, '--openocd', flash.openocdPath,
+        '--target', flash.target.targetConfig, '--speed', '4000');
+      if (flash.target.transport !== 'swd') {
+        args.push('--transport', flash.target.transport);
+      }
+      if (!verify) {
+        args.push('--no-verify');
+      }
+      if (!reset) {
+        args.push('--no-reset');
+      }
+      return args;
+    }
+    if (flash.backend === 'jlink') {
+      args.push(
+        '--jlink', flash.executables.jlink ?? 'JLink',
+        '--device', jlinkDeviceName(flash.device.part ?? '', flash.device.core ?? ''),
+        '--speed', '4000'
+      );
+      if (!reset) {
+        args.push('--no-reset');
+      }
+      return args;
+    }
+    args.push(
+      '--probe', flash.probe.id,
+      '--pyocd', flash.executables.pyocd ?? 'pyocd',
+      '--target', pyocdTargetName(flash.device.part ?? ''),
+      '--speed', '4000'
+    );
+    if (flash.device.packFile) {
+      args.push('--pack', flash.device.packFile);
+    }
+    return args;
+  }
+
+  private postFlashEvent(event: FlashEvent): void {
+    this.post({
+      type: 'flashProgress',
+      stage: event.stage,
+      message: event.message,
+      ...(event.percent === undefined ? {} : { percent: event.percent })
+    });
+  }
+
+  /**
+   * Flash the detected firmware through the project's own `flash.py`.
+   *
+   * Executing the script the user can read (instead of spawning OpenOCD/GDB
+   * directly) keeps one flashing implementation: the command line is visible,
+   * the same argument surface works in a terminal, and failure text is the
+   * script's own.
+   */
+  private async flashFirmware(
+    request: { firmwarePath?: string; verify?: boolean; reset?: boolean }
+  ): Promise<void> {
+    if (this.busy) {
+      return;
+    }
+    const root = this.projectRoot();
+    const firmwarePath = request.firmwarePath || this.flashDetection?.firmwarePath;
+    if (!root || !firmwarePath) {
+      this.post({
+        type: 'operationFinished',
+        result: { ok: false, message: '没有找到可烧录的固件：先构建工程。', files: [] }
+      });
+      return;
+    }
+    const scriptPath = join(root, 'flash.py');
+    if (!existsSync(scriptPath)) {
+      this.post({
+        type: 'operationFinished',
+        result: { ok: false, message: '工程里还没有 flash.py：先点「只生成 flash.py」。', files: [] }
+      });
+      return;
+    }
+    let flash: ReturnType<SidebarProvider['flashGenerationOptions']>;
+    try {
+      flash = this.flashGenerationOptions();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.post({ type: 'operationFinished', result: { ok: false, message, files: [] } });
+      return;
+    }
+    const verify = request.verify ?? this.selectionValue.flash.verify !== false;
+    const reset = request.reset ?? this.selectionValue.flash.resetAfterFlash !== false;
+    const controller = new AbortController();
+    this.flashController = controller;
+    this.busy = true;
+    this.post({ type: 'operationStarted', operation: '正在烧录' });
+    this.post({ type: 'flashProgress', stage: 'init', message: '准备烧录…', percent: 5 });
+    try {
+      const result = await runFlash({
+        pythonPath: this.pythonPath(),
+        scriptPath,
+        args: this.flashArguments(flash, firmwarePath, verify, reset),
+        cwd: root,
+        signal: controller.signal,
+        onEvent: (event) => this.postFlashEvent(event)
+      });
+      if (result.outputTail.length > 0) {
+        this.post({ type: 'flashOutput', lines: result.outputTail });
+      }
+      if (result.cancelled) {
+        this.post({ type: 'flashProgress', stage: 'failed', message: '已取消烧录。' });
+        this.post({
+          type: 'operationFinished',
+          result: { ok: false, cancelled: true, message: '已取消烧录。', files: [] }
+        });
+        return;
+      }
+      if (!result.ok) {
+        const diagnosis = diagnoseFlashFailure({
+          output: result.outputTail,
+          exitCode: result.exitCode,
+          spawnError: result.spawnError,
+          backend: flash.backend
+        });
+        this.post({ type: 'flashProgress', stage: 'failed', message: diagnosis.title });
+        this.post({
+          type: 'operationFinished',
+          result: {
+            ok: false,
+            message: `${diagnosis.title}：${diagnosis.detail}`,
+            files: []
+          }
+        });
+        return;
+      }
+      this.post({ type: 'flashProgress', stage: 'done', message: '烧录完成。', percent: 100 });
+      this.post({
+        type: 'operationFinished',
+        result: { ok: true, message: '烧录完成。', files: ['flash.py'] }
+      });
+    } finally {
+      this.flashController = undefined;
+      this.busy = false;
+      void this.refreshFlashDetection().then(() => this.postState());
+    }
+  }
+
+  /**
+   * Build task F5 runs before the session. CMake Tools owns the label; the
+   * setting exists so a workspace with a renamed task can still use it.
+   */
+  private debugPreLaunchTask(): string | undefined {
+    const configured = vscode.workspace
+      .getConfiguration('cmakeForge')
+      .get<string>('debugPreLaunchTask', 'CMake: build');
+    const trimmed = configured?.trim();
+    return trimmed ? trimmed : undefined;
+  }
+
+  private cancelFlash(): void {
+    this.flashController?.abort();
+  }
+
   private selectedDeviceProfile() {
     const { part, sourcePack } = this.selectionValue.mcu;
     if (!part || !sourcePack) {
@@ -976,6 +1233,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.cancelWorkspaceScan();
       return;
     }
+    if (message.type === 'cancelFlash') {
+      // Cancellation must work while the flash operation holds `busy`.
+      this.cancelFlash();
+      return;
+    }
     if (this.busy && message.type !== 'ready' && message.type !== 'openSettings') {
       // Clicks during a running operation must never feel dead: answer with a
       // throttled wait hint instead of silently dropping the message.
@@ -984,6 +1246,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         this.lastBusyHintAt = now;
         this.post({ type: 'notification', level: 'info', message: '正在处理上一个操作，请稍候。' });
       }
+      return;
+    }
+    if (message.type === 'detectFlash') {
+      await this.refreshFlashDetection();
+      this.postState();
+      return;
+    }
+    if (message.type === 'flash') {
+      await this.flashFirmware(message);
       return;
     }
     if (message.type === 'ready') {
@@ -998,6 +1269,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         this.postState();
       });
       void this.refreshPackCatalog(this.selectionValue.mcu.vendor);
+      void this.refreshFlashDetection().then(() => this.postState());
       this.postState();
       return;
     }
@@ -1056,6 +1328,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       });
       await this.context.workspaceState.update(selectionKey, this.selectionValue);
       this.postState();
+      void this.refreshFlashDetection().then(() => this.postState());
       return;
     }
     if (message.type === 'scanWorkspace') {
@@ -1267,7 +1540,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           flash.device,
           {
             toolchainPrefix: this.selectedMcuToolchain()?.prefix,
-            toolchainFamily: this.selectedMcuToolchain()?.family
+            toolchainFamily: this.selectedMcuToolchain()?.family,
+            preLaunchTask: this.debugPreLaunchTask(),
+            includeAttach: true
           }
         );
         const warning = flash.backend === 'openocd'

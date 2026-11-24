@@ -12,6 +12,15 @@ export type SidebarIncomingMessage =
   | { type: 'generateProject' }
   | { type: 'generateFlashScript' }
   | { type: 'generateDebugConfiguration' }
+  | { type: 'detectFlash' }
+  | {
+      type: 'flash';
+      /** Overrides, all optional: the sidebar sends only what the user changed. */
+      firmwarePath?: string;
+      verify?: boolean;
+      reset?: boolean;
+    }
+  | { type: 'cancelFlash' }
   | { type: 'openSettings' };
 
 export type SidebarOutgoingMessage =
@@ -26,6 +35,13 @@ export type SidebarOutgoingMessage =
     }
   | { type: 'operationStarted'; operation: string }
   | { type: 'operationProgress'; message: string }
+  | {
+      type: 'flashProgress';
+      stage: 'init' | 'program' | 'verify' | 'reset' | 'done' | 'failed';
+      message: string;
+      percent?: number;
+    }
+  | { type: 'flashOutput'; lines: string[] }
   | {
       type: 'operationFinished';
       result: {
@@ -48,6 +64,8 @@ const commandTypes = new Set([
   'generateProject',
   'generateFlashScript',
   'generateDebugConfiguration',
+  'detectFlash',
+  'cancelFlash',
   'openSettings'
 ]);
 
@@ -81,6 +99,21 @@ export function parseIncomingMessage(value: unknown): SidebarIncomingMessage | u
     return typeof record.packId === 'string' && typeof record.version === 'string'
       ? { type: 'activatePack', packId: record.packId, version: record.version }
       : undefined;
+  }
+  if (record.type === 'flash') {
+    // Every field is optional: the webview sends only the overrides the user
+    // actually made, and the host falls back to the persisted selection.
+    const message: SidebarIncomingMessage = { type: 'flash' };
+    if (typeof record.firmwarePath === 'string' && record.firmwarePath.trim() !== '') {
+      message.firmwarePath = record.firmwarePath.trim();
+    }
+    if (typeof record.verify === 'boolean') {
+      message.verify = record.verify;
+    }
+    if (typeof record.reset === 'boolean') {
+      message.reset = record.reset;
+    }
+    return message;
   }
   if (!commandTypes.has(record.type)) {
     return undefined;

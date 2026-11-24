@@ -8,6 +8,7 @@ import {
 } from '../flash/backendProfiles';
 
 const generatedConfigurationName = 'CMake Forge OpenOCD';
+const attachConfigurationName = 'CMake Forge OpenOCD (attach)';
 
 export interface CortexDebugConfigurationOptions {
   openocdPath: string;
@@ -26,6 +27,18 @@ export interface CortexDebugConfigurationOptions {
   executable?: string;
   /** Compiler prefix used by the generated project (`arm-none-eabi-`). */
   toolchainPrefix?: string;
+  /**
+   * SVD file registered with cortex-debug so peripheral registers show names
+   * instead of raw addresses. Only set when the file exists on disk.
+   */
+  svdFile?: string;
+  /**
+   * Build task to run before the session starts, so F5 on a clean checkout
+   * compiles first instead of failing on a missing ELF.
+   */
+  preLaunchTask?: string;
+  /** Also emit a `request: "attach"` twin for debugging an already-running target. */
+  includeAttach?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -126,18 +139,31 @@ function parseJsonc(source: string): Record<string, unknown> {
   return value;
 }
 
-function createConfiguration(options: CortexDebugConfigurationOptions): Record<string, unknown> {
+function createConfiguration(
+  options: CortexDebugConfigurationOptions,
+  request: 'launch' | 'attach' = 'launch'
+): Record<string, unknown> {
   const backend = options.backend ?? 'openocd';
   const configuration: Record<string, unknown> = {
-    name: generatedConfigurationName,
+    name: request === 'launch' ? generatedConfigurationName : attachConfigurationName,
     type: 'cortex-debug',
-    request: 'launch',
+    request,
     cwd: '${workspaceRoot}',
     executable: options.executable ?? '${command:cmake.launchTargetPath}',
-    runToEntryPoint: 'main',
     showDevDebugOutput: 'none',
     toolchainPrefix: options.toolchainPrefix ?? 'arm-none-eabi'
   };
+  if (options.svdFile) {
+    configuration.svdFile = options.svdFile;
+  }
+  if (request === 'launch') {
+    // `runToEntryPoint` only makes sense when the debugger starts the target;
+    // an attach session joins a core that is already running.
+    configuration.runToEntryPoint = 'main';
+    if (options.preLaunchTask) {
+      configuration.preLaunchTask = options.preLaunchTask;
+    }
+  }
   if (backend === 'jlink') {
     configuration.servertype = 'jlink';
     configuration.device = jlinkDeviceName(options.device?.part, options.device?.core);
@@ -178,11 +204,18 @@ export function generateCortexDebugLaunchJson(
   const configurations = Array.isArray(document.configurations) ? document.configurations : [];
   document.version = typeof document.version === 'string' ? document.version : '0.2.0';
   document.configurations = configurations.filter((configuration) => (
-    !isRecord(configuration) || configuration.name !== generatedConfigurationName
+    !isRecord(configuration)
+    || (configuration.name !== generatedConfigurationName
+      && configuration.name !== attachConfigurationName)
   ));
   // The generated entry goes first: `F5` without an explicit selection picks the
   // first configuration, and a stale entry from another extension (a C/C++
   // Runner `cppdbg` config, for example) would then fail within a second.
-  (document.configurations as unknown[]).unshift(createConfiguration(options));
+  // Launch stays ahead of attach so F5 keeps flashing/building as before.
+  const generated = [createConfiguration(options, 'launch')];
+  if (options.includeAttach) {
+    generated.push(createConfiguration(options, 'attach'));
+  }
+  (document.configurations as unknown[]).unshift(...generated);
   return `${JSON.stringify(document, null, 2)}\n`;
 }

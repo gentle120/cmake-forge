@@ -37,6 +37,29 @@ export interface SidebarFlashSelection {
   probeId: FlashProbeId;
   openocdPath: string;
   backend: FlashBackendId;
+  /** Verify the written image (`program … verify`). */
+  verify: boolean;
+  /** Reset and run the target once flashing finishes. */
+  resetAfterFlash: boolean;
+}
+
+/**
+ * What the sidebar shows above the flash controls: the newest built firmware,
+ * the target derived from the selected device, and why flashing is unavailable.
+ *
+ * Detection runs in the extension host (it touches the file system), so this is
+ * not part of the pure selection model; the provider fills it in right before
+ * posting the state.
+ */
+export interface SidebarFlashDetection {
+  firmwarePath: string;
+  firmwareLabel: string;
+  firmwareDetail: string;
+  targetLabel: string;
+  probeLabel: string;
+  /** False disables the flash button; `blockedReason` says why. */
+  available: boolean;
+  blockedReason: string;
 }
 
 export interface SidebarSelection {
@@ -106,6 +129,8 @@ export interface SidebarBootstrapState {
   flashTargets: SidebarOption[];
   flashProbes: SidebarOption[];
   flashBackends: SidebarOption[];
+  /** Latest detection result; absent when the host has not scanned yet. */
+  flashDetection?: SidebarFlashDetection;
   linuxToolchains: SidebarOption[];
   mcuToolchains: SidebarOption[];
   selection: SidebarSelection;
@@ -234,7 +259,9 @@ export function defaultSidebarSelection(): SidebarSelection {
       targetId: defaultFlashTarget,
       probeId: defaultFlashProbe,
       openocdPath: 'openocd',
-      backend: 'openocd'
+      backend: 'openocd',
+      verify: true,
+      resetAfterFlash: true
     }
   };
 }
@@ -369,7 +396,11 @@ export function sanitizeSidebarSelection(
       backend,
       openocdPath: typeof flash?.openocdPath === 'string' && flash.openocdPath.trim()
         ? flash.openocdPath.trim()
-        : 'openocd'
+        : 'openocd',
+      // Both default to on: a flashing tool that silently skips verification or
+      // leaves the target halted is the surprising behaviour, not the safe one.
+      verify: typeof flash?.verify === 'boolean' ? flash.verify : true,
+      resetAfterFlash: typeof flash?.resetAfterFlash === 'boolean' ? flash.resetAfterFlash : true
     }
   };
 }

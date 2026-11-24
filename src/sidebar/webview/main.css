@@ -617,6 +617,109 @@ input:disabled {
   background: var(--vscode-toolbar-hoverBackground);
 }
 
+/* --- Flash detection, progress and output --------------------------------- */
+
+.flash-detection {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0 6px;
+  padding: 8px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--vscode-sideBar-background) 70%, transparent);
+}
+
+.flash-detect-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.flash-detect-key {
+  flex: none;
+  width: 2.4em;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--ce-meta);
+}
+
+.flash-detect-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ce-label);
+}
+
+.flash-detect-value.missing {
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+}
+
+.flash-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.flash-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--ce-label);
+}
+
+.flash-option input {
+  margin: 0;
+}
+
+#flash-redetect {
+  margin-left: auto;
+}
+
+.flash-progress {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.flash-progress-track {
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--vscode-progressBar-background) 22%, transparent);
+}
+
+.flash-progress-bar {
+  width: 0;
+  height: 100%;
+  background: var(--vscode-progressBar-background);
+  transition: width 120ms linear;
+}
+
+.flash-progress-text {
+  margin: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--ce-meta);
+}
+
+.flash-output {
+  margin: 0;
+  max-height: 12em;
+  overflow: auto;
+  padding: 6px;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background);
+  color: var(--vscode-sideBar-foreground);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--ce-meta);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .quick-action .ui-icon {
   flex: 0 0 auto;
   width: 12px;

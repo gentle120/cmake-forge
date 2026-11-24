@@ -29,8 +29,7 @@ test('keeps the selection payload for provider-side sanitization', () => {
   });
 });
 
-test('accepts the selected project root and rejects non-string values', () => {
-  assert.deepEqual(parseIncomingMessage({ type: 'setProjectRoot', root: 'C:/work/app' }), {
+test('accepts the selected project root and rejects non-string values', () => {  assert.deepEqual(parseIncomingMessage({ type: 'setProjectRoot', root: 'C:/work/app' }), {
     type: 'setProjectRoot',
     root: 'C:/work/app'
   });
@@ -53,6 +52,26 @@ test('accepts Pack selection and version activation messages', () => {
     version: '2.4.1'
   });
   assert.equal(parseIncomingMessage({ type: 'activatePack', packId: 42, version: '1.0.0' }), undefined);
+});
+
+test('flash requests keep only the overrides the user made', () => {
+  assert.deepEqual(parseIncomingMessage({ type: 'detectFlash' }), { type: 'detectFlash' });
+  assert.deepEqual(parseIncomingMessage({ type: 'cancelFlash' }), { type: 'cancelFlash' });
+  assert.deepEqual(parseIncomingMessage({ type: 'flash' }), { type: 'flash' });
+  assert.deepEqual(parseIncomingMessage({
+    type: 'flash',
+    firmwarePath: ' build/debug/app.elf ',
+    verify: false,
+    reset: false
+  }), {
+    type: 'flash',
+    firmwarePath: 'build/debug/app.elf',
+    verify: false,
+    reset: false
+  });
+  // A path is host-side IO; the webview may only pass strings it received.
+  assert.deepEqual(parseIncomingMessage({ type: 'flash', firmwarePath: '   ' }), { type: 'flash' });
+  assert.deepEqual(parseIncomingMessage({ type: 'flash', verify: 'yes' }), { type: 'flash' });
 });
 
 test('rejects malformed messages', () => {

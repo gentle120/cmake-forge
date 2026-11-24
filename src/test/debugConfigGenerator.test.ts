@@ -82,3 +82,43 @@ test('does not inject a machine-local ARM GNU toolchain path for Cortex-Debug', 
   assert.equal(config.armToolchainPath, undefined);
   assert.equal(config.toolchainPrefix, 'arm-none-eabi');
 });
+
+test('adds SVD, preLaunchTask and the attach twin when asked', () => {
+  const launch = JSON.parse(generateCortexDebugLaunchJson(undefined, {
+    openocdPath: 'openocd',
+    target: getFlashTargetProfile('stm32f4xx'),
+    probe: getFlashProbeProfile('stlink'),
+    svdFile: '${workspaceFolder}/CMSIS/Device/STM32F4.svd',
+    preLaunchTask: 'CMake: build',
+    includeAttach: true
+  }));
+
+  assert.deepEqual(
+    launch.configurations.map((config: { name: string }) => config.name),
+    ['CMake Forge OpenOCD', 'CMake Forge OpenOCD (attach)']
+  );
+  const [launchConfig, attachConfig] = launch.configurations;
+  assert.equal(launchConfig.request, 'launch');
+  assert.equal(launchConfig.svdFile, '${workspaceFolder}/CMSIS/Device/STM32F4.svd');
+  assert.equal(launchConfig.preLaunchTask, 'CMake: build');
+  assert.equal(launchConfig.runToEntryPoint, 'main');
+  // An attach session joins a running core: it neither builds nor runs to main.
+  assert.equal(attachConfig.request, 'attach');
+  assert.equal(attachConfig.preLaunchTask, undefined);
+  assert.equal(attachConfig.runToEntryPoint, undefined);
+  assert.equal(attachConfig.svdFile, launchConfig.svdFile);
+  assert.equal(attachConfig.executable, launchConfig.executable);
+});
+
+test('a regenerated attach twin does not accumulate stale copies', () => {
+  const options = {
+    openocdPath: 'openocd',
+    target: getFlashTargetProfile('stm32f4xx'),
+    probe: getFlashProbeProfile('stlink'),
+    includeAttach: true
+  };
+  const once = generateCortexDebugLaunchJson(undefined, options);
+  const twice = generateCortexDebugLaunchJson(once, options);
+
+  assert.equal(twice, once);
+});
