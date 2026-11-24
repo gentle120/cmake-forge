@@ -1,7 +1,8 @@
 # CMake Forge
 
 VS Code 插件：为 **MCU 固件**、**Linux / SoC 交叉编译**、**桌面 C/C++** 生成可直接构建的
-CMake 工程。插件只生成文件，构建、烧录与调试交给 CMake Tools、Cortex-Debug 和生成的
+CMake 工程。插件生成文件，构建与调试交给 CMake Tools、Cortex-Debug；烧录在侧栏一键完成：
+OpenOCD 后端直接调用 `openocd`（不经过 `flash.py`），J-Link / pyOCD 后端使用生成的
 `flash.py`。
 
 ## 快速开始
@@ -26,7 +27,11 @@ cmake --build --preset debug
     `starm-clang.cmake`）→ 独立 LLVM clang（LLD + `-nostdlib`）。
 - ATfE/STARM 自带 picolibc；独立 LLVM clang 需要 `lld` 且不提供标准 C 运行时。
   armclang 使用 Arm C 库，`printf` 等函数需自行 retarget。
-- 可选 `flash.py`（J-Link / ST-Link / DapLink）与 Cortex-Debug 配置。
+- 侧栏烧录区：「检测探针」读 CPUID 与 DBGMCU IDCODE，显示内核/系列/DEV_ID 并自动选中
+  探测成功的探针接口；固件默认取 `build/debug`、`build/release` 下最新的 ELF，也可手动选择；
+  一键烧录带阶段进度、输出与失败诊断。
+- 可选 `flash.py`（J-Link / pyOCD 后端）与 Cortex-Debug 配置（可带 SVD 与 `preLaunchTask`，
+  launch/attach 两条配置）。
 
 ## Linux / SoC
 

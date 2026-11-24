@@ -13,6 +13,7 @@ export type SidebarIncomingMessage =
   | { type: 'generateFlashScript' }
   | { type: 'generateDebugConfiguration' }
   | { type: 'detectFlash' }
+  | { type: 'pickFirmware' }
   | {
       type: 'flash';
       /** Overrides, all optional: the sidebar sends only what the user changed. */
@@ -65,6 +66,7 @@ const commandTypes = new Set([
   'generateFlashScript',
   'generateDebugConfiguration',
   'detectFlash',
+  'pickFirmware',
   'cancelFlash',
   'openSettings'
 ]);

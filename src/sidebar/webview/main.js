@@ -184,6 +184,7 @@
   const flashHost = document.getElementById('flash-host');
   const backendDetailsHost = document.getElementById('backend-details-host');
   const flashFirmwareValue = document.getElementById('flash-firmware');
+  const flashChipLabel = document.getElementById('flash-chip-label');
   const flashTargetLabel = document.getElementById('flash-target-label');
   const flashProbeLabel = document.getElementById('flash-probe-label');
   const flashFirmwareDetail = document.getElementById('flash-firmware-detail');
@@ -421,6 +422,11 @@
     flashFirmwareValue.classList.toggle('missing', Boolean(detection) && !detection.firmwarePath);
     flashTargetLabel.textContent = detection?.targetLabel || '—';
     flashProbeLabel.textContent = detection?.probeLabel || '—';
+    flashChipLabel.textContent = detection?.chipLabel || '未检测';
+    flashChipLabel.classList.toggle('missing', !detection?.chipLabel);
+    flashChipLabel.title = detection?.chipLabel
+      ? '点「检测探针」重新读取'
+      : '点「检测探针」让探针读取 CPUID / DEV_ID';
     flashFirmwareDetail.textContent = detection?.firmwareDetail || '';
     flashFirmwareDetail.hidden = !flashFirmwareDetail.textContent;
     showNotice(
@@ -876,6 +882,11 @@
     if (command === 'detectFlash') {
       if (!state || busy) return;
       post({ type: 'detectFlash' });
+      return;
+    }
+    if (command === 'pickFirmware') {
+      if (!state || busy) return;
+      post({ type: 'pickFirmware' });
       return;
     }
     if (command === 'flash') {

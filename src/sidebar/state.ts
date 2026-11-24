@@ -41,6 +41,8 @@ export interface SidebarFlashSelection {
   verify: boolean;
   /** Reset and run the target once flashing finishes. */
   resetAfterFlash: boolean;
+  /** 用户手选的 ELF（绝对路径或工程相对路径）；空串表示用自动检测的最新固件。 */
+  firmwarePath: string;
 }
 
 /**
@@ -57,6 +59,8 @@ export interface SidebarFlashDetection {
   firmwareDetail: string;
   targetLabel: string;
   probeLabel: string;
+  /** 探针连上后读到的内核/系列，形如 "Cortex-M4 · STM32F4x"；未检测时为空。 */
+  chipLabel: string;
   /** False disables the flash button; `blockedReason` says why. */
   available: boolean;
   blockedReason: string;
@@ -261,7 +265,8 @@ export function defaultSidebarSelection(): SidebarSelection {
       openocdPath: 'openocd',
       backend: 'openocd',
       verify: true,
-      resetAfterFlash: true
+      resetAfterFlash: true,
+      firmwarePath: ''
     }
   };
 }
@@ -400,7 +405,8 @@ export function sanitizeSidebarSelection(
       // Both default to on: a flashing tool that silently skips verification or
       // leaves the target halted is the surprising behaviour, not the safe one.
       verify: typeof flash?.verify === 'boolean' ? flash.verify : true,
-      resetAfterFlash: typeof flash?.resetAfterFlash === 'boolean' ? flash.resetAfterFlash : true
+      resetAfterFlash: typeof flash?.resetAfterFlash === 'boolean' ? flash.resetAfterFlash : true,
+      firmwarePath: typeof flash?.firmwarePath === 'string' ? flash.firmwarePath.trim() : ''
     }
   };
 }

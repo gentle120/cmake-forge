@@ -651,6 +651,30 @@ input:disabled {
   font-size: var(--ce-label);
 }
 
+.flash-detect-row .link-action {
+  margin-left: auto;
+  flex: none;
+}
+
+.link-action {
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--vscode-textLink-foreground);
+  font-size: var(--ce-meta);
+  cursor: pointer;
+}
+
+.link-action:hover {
+  text-decoration: underline;
+}
+
+.link-action:disabled {
+  color: var(--vscode-disabledForeground);
+  cursor: default;
+  text-decoration: none;
+}
+
 .flash-detect-value.missing {
   color: var(--vscode-descriptionForeground);
   font-style: italic;

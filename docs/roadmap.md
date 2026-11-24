@@ -9,8 +9,8 @@ This file is a compact relay ledger, not a history log. Stable facts belong in `
 
 ## Current Batch
 
-- Objective: 把烧录与调试从「生成脚本」推进到「检测固件 → 一键烧录 → 自动配好调试」：侧栏显示检测到的固件/芯片/探针，烧录带阶段进度与失败诊断，launch.json 自动带 SVD、preLaunchTask 与 launch/attach 两条配置。
-- Status: `done` — `src/flash/`（固件发现、`flash.py` 执行、失败诊断）+ 侧栏烧录区 + 覆盖确认 + 493 个测试通过；SVD 落盘留作后续（当前仅写用户配置的 `svdFile`）。
+- Objective: 让烧录与调试对齐参考工程的操作面——探针检测 MCU 型号（CPUID + DBGMCU IDCODE）、可手选工作区 ELF、OpenOCD 后端直连烧录不再经过 `flash.py`，检测/烧录都带阶段进度与失败诊断。
+- Status: `done` — `src/flash/openocdDirect.ts`（OpenOCD 参数构造、CPUID/DBGMCU 标识解析、逐探针探测）+ `flashRunner.runTool`（通用子进程与阶段解析）+ 侧栏「检测探针 / 选择… / 烧录」接线 + 契约 L72 修订；`npm test` 504/504 通过，真实进程用 stub 验证（真实探针与 OpenOCD 未在本机安装，待用户侧验收）。
 
 ## Next Batch
 

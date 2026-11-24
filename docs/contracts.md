@@ -62,6 +62,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - 显式切换厂商时自动激活该厂商服务当前所选系列的可用版本（`imported`/`installed`，同版本 `imported` 优先；无系列匹配时取最新版本）；`downloadable` 版本不自动下载，启动时的目录刷新不自动激活。
 - 仅切换侧栏模式（mcu/linux/native）的保存按消息保留模式；MCU 字段重算不改写模式。
 - 侧栏调试器列表仅提供当前烧录后端支持的探针；切换后端时不保留不兼容探针。
+- 手选的固件优先于自动检测的最新固件；手选路径不存在时烧录禁用并说明原因，探针探测成功会把当前探针改成探测成功的接口。
 
 ## Performance And Resources
 
@@ -69,7 +70,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 
 ## Safety And Failure Behavior
 
-- 生成器本身不执行外部工具；扩展只在用户点击侧栏「烧录」时启动生成的 `flash.py`（`src/flash/flashRunner.ts`），命令行与输出对用户可见、可取消，失败给出诊断，不静默重试、不改写脚本。侧栏的固件/目标/探针检测只读扫描工作区与已导入档案，不写盘。
+- 生成器本身不执行外部工具。扩展只在用户显式操作时执行烧录：OpenOCD 后端由 `src/flash/openocdDirect.ts` 直接拼参数并 spawn `openocd`（不依赖 Python，命令行原样回显到输出区），J-Link/pyOCD 后端仍 spawn 生成的 `flash.py`（`src/flash/flashRunner.ts`）；两者都可见、可取消、失败给诊断，不静默重试、不改写脚本。侧栏的固件/目标/探针扫描只读工作区与已导入档案，不写盘；「检测探针」只做 `init` + `read_memory` 读 CPUID/DBGMCU ID，不 halt、不复位、不写目标。
 - zip 读取器遇 Zip64/加密条目抛显式错误，不部分解压。
 - 校验失败的 Pack 设备进入 skipped 并给出原因，不中断整包导入。
 - 内核包安装只写 `CMSIS/Core/Include/**/*.h`，拒绝绝对路径与含 `..` 的归档条目；安装目录名把只含点的身份字段归一为 `_`，安装前的删除只作用于该版本目录。
@@ -81,7 +82,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 | DeviceProfile 注册表唯一性与校验 | `src/test/deviceProfile.test.ts` | 侧边栏五级选择流 |
 | Pack 导入→档案可查 | `src/test/packParser.test.ts`、`src/test/importedProfiles.test.ts` | 扩展宿主导入真实 pack 后生成 |
 | 三后端 flash.py/launch.json | `src/test/flashScriptGenerator.test.ts`、`src/test/debugConfigGenerator.test.ts` | 本机 J-Link/pyOCD 真机烧录（用户侧） |
-| 烧录检测、执行与失败诊断 | `src/test/firmwareDiscovery.test.ts`、`src/test/flashRunner.test.ts`、`src/test/flashDiagnostics.test.ts` | 侧栏「重新检测」→「烧录」真实探针 |
+| 烧录检测、执行与失败诊断 | `src/test/firmwareDiscovery.test.ts`、`src/test/flashRunner.test.ts`、`src/test/flashDiagnostics.test.ts`、`src/test/openocdDirect.test.ts` | 侧栏「检测探针」读 CPUID →「烧录」真实探针 |
 | 生成工程可编译 | `src/test/cmakeBuild.test.ts` | `cmake --preset debug && cmake --build --preset debug` |
 | Keil Pack 发现与 PDSC 身份 | `src/test/toolchainScanner.test.ts`、`src/test/installedPacks.test.ts` | 扩展宿主「导入 Pack」选择 Keil 已安装 Pack |
 | 厂商列表设备过滤与 `Dvendor` 归并 | `src/test/vendorOptions.test.ts`、`src/test/installedPacks.test.ts` | 侧栏厂商下拉（本机 Keil 安装目录） |

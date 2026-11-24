@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import type { CommandResult } from '../shared/commandResult';
 import { randomBytes } from 'node:crypto';
 import {
@@ -14,7 +14,7 @@ import { comparePackVersions } from '../shared/packVersion';
 import { getVendorMetadata, hasVendor } from '../devices/vendorRegistry';
 import { canonicalSeriesId, findCatalogSeries, seriesServesProfile } from '../devices/seriesCatalog';
 import type { CorePackStatus } from '../packs/corePack';
-import { getFlashProbeProfile } from '../flash/probeProfiles';
+import { getFlashProbeProfile, listFlashProbeProfiles, type FlashProbeId } from '../flash/probeProfiles';
 import {
   getFlashTargetProfile,
   listFlashTargetVendors,
@@ -28,6 +28,13 @@ import {
   type FlashBackendId
 } from '../flash/backendProfiles';
 import type { FlashDeviceContext, FlashExecutablePaths } from '../generator/flashScriptGenerator';
+import { missingOpenOcdNotice, resolveOpenOcdExecutable } from '../flash/openocd';
+import {
+  buildOpenOcdFlashArgs,
+  detectChip,
+  describeIdentity,
+  matchOpenOcdStage
+} from '../flash/openocdDirect';
 import {
   generateDebugWorkflow,
   generateFlashWorkflow,
@@ -67,7 +74,7 @@ import {
   type SidebarSelection
 } from './state';
 import { discoverFirmware } from '../flash/firmwareDiscovery';
-import { runFlash, type FlashEvent } from '../flash/flashRunner';
+import { runFlash, runTool, type FlashEvent, type FlashRunResult } from '../flash/flashRunner';
 import { diagnoseFlashFailure } from '../flash/flashDiagnostics';
 
 const selectionKey = 'cmakeForge.sidebarSelection.v1';
@@ -174,6 +181,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   /** Latest firmware/target/probe detection; `undefined` until the first scan. */
   private flashDetection?: SidebarFlashDetection;
   private flashController?: AbortController;
+  private chipDetectionRunning = false;
   private packOptions: DevicePackOption[] = [];
   private vendorOptions?: Array<{ value: string; label: string; description?: string }>;
   private pendingPackId: string;
@@ -982,11 +990,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     return `「${metadata.label}」暂无内置 OpenOCD target 映射：已按 ${target.label} 生成，请按实际芯片修改 launch.json 的 configFiles / flash.py 的 target。`;
   }
 
+  /** 把持久化的手选路径变成绝对路径（相对路径按工程根解析）。 */
+  private absoluteFirmwarePath(root: string, candidate: string): string {
+    return isAbsolute(candidate) || /^[A-Za-z]:[\\/]/.test(candidate)
+      ? candidate
+      : join(root, candidate);
+  }
+
   /**
-   * Finds the newest built firmware and the target/probe the flash card shows.
+   * Finds the firmware the flash card shows and why flashing is (un)available.
    *
    * Never throws: a missing `build/` directory is the normal state right after
-   * cloning a project, and the sidebar must still render.
+   * cloning a project, and the sidebar must still render. The chip label is
+   * carried over from the last probe detection — reading it needs hardware.
    */
   private async refreshFlashDetection(): Promise<void> {
     const root = this.projectRoot();
@@ -1003,27 +1019,233 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       // An unknown persisted target id is repaired by sanitize; keep the raw id
       // instead of failing the whole state for a label.
     }
-    let discovered: Awaited<ReturnType<typeof discoverFirmware>>;
-    try {
-      discovered = await discoverFirmware(root);
-    } catch (error) {
-      logLine(`[flash] ${root}: ${error instanceof Error ? error.message : String(error)}`);
-      discovered = { candidates: [], reason: '无法读取 build 目录。' };
+    const chipLabel = this.flashDetection?.chipLabel ?? '';
+    let firmwarePath = '';
+    let firmwareLabel = '';
+    let firmwareDetail = '';
+    let blockedReason = '';
+    if (selection.firmwarePath) {
+      // A user-picked ELF wins over detection: it is the file they asked to
+      // flash, even when a newer build sits next to it.
+      const picked = this.absoluteFirmwarePath(root, selection.firmwarePath);
+      let size = -1;
+      try {
+        const stats = statSync(picked);
+        if (stats.isFile()) {
+          size = stats.size;
+        }
+      } catch {
+        size = -1;
+      }
+      if (size < 0) {
+        blockedReason = `找不到手动选择的固件：${selection.firmwarePath}`;
+      } else {
+        firmwarePath = picked;
+        firmwareLabel = basenamePath(picked);
+        firmwareDetail = `手动选择 · ${formatBytes(size)}`;
+      }
+    } else {
+      let discovered: Awaited<ReturnType<typeof discoverFirmware>>;
+      try {
+        discovered = await discoverFirmware(root);
+      } catch (error) {
+        logLine(`[flash] ${root}: ${error instanceof Error ? error.message : String(error)}`);
+        discovered = { candidates: [], reason: '无法读取 build 目录。' };
+      }
+      const firmware = discovered.selected;
+      if (firmware) {
+        firmwarePath = firmware.path;
+        firmwareLabel = basenamePath(firmware.path);
+        firmwareDetail = `${firmware.preset} · ${formatBytes(firmware.size)} · ${new Date(firmware.mtimeMs).toLocaleString()}`;
+      } else {
+        blockedReason = discovered.reason || '没有找到已构建的固件：先构建工程。';
+      }
     }
-    const firmware = discovered.selected;
     this.flashDetection = {
-      firmwarePath: firmware?.path ?? '',
-      firmwareLabel: firmware ? basenamePath(firmware.path) : '',
-      firmwareDetail: firmware
-        ? `${firmware.preset} · ${formatBytes(firmware.size)} · ${new Date(firmware.mtimeMs).toLocaleString()}`
-        : '',
+      firmwarePath,
+      firmwareLabel,
+      firmwareDetail,
       targetLabel,
       probeLabel: probe.label,
-      available: firmware !== undefined,
-      blockedReason: firmware === undefined
-        ? (discovered.reason || '没有找到已构建的固件：先构建工程。')
-        : ''
+      chipLabel,
+      available: firmwarePath !== '',
+      blockedReason
     };
+  }
+
+  /**
+   * 让探针读一次芯片标识（CPUID + DBGMCU DEV_ID）。
+   *
+   * 依次尝试支持 OpenOCD 的探针接口，探测成功的接口会写成当前探针——用户不必
+   * 先选对探针再点检测。读内存失败不算错误：换下一个接口继续试。
+   */
+  private async detectProbeChip(): Promise<void> {
+    if (this.busy) {
+      return;
+    }
+    const root = this.projectRoot();
+    if (!root) {
+      this.post({ type: 'notification', level: 'warning', message: '先选择一个工程，再检测探针。' });
+      return;
+    }
+    let flash: ReturnType<SidebarProvider['flashGenerationOptions']>;
+    try {
+      flash = this.flashGenerationOptions();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.post({ type: 'notification', level: 'warning', message });
+      return;
+    }
+    const openocdPath = resolveOpenOcdExecutable(flash.openocdPath);
+    if (!openocdPath) {
+      this.post({ type: 'notification', level: 'warning', message: missingOpenOcdNotice(flash.openocdPath) });
+      return;
+    }
+    const probes = this.chipProbes(flash);
+    this.busy = true;
+    this.post({ type: 'operationStarted', operation: '正在检测探针' });
+    try {
+      this.post({ type: 'flashProgress', stage: 'init', message: '连接探针，读取芯片标识…', percent: 10 });
+      const result = await detectChip({
+        openocdPath,
+        probes,
+        targetConfig: flash.target.targetConfig,
+        transport: flash.target.transport,
+        speedKHz: 4000,
+        cwd: root,
+        timeoutMs: 10000
+      });
+      if (result.outputTail.length > 0) {
+        this.post({ type: 'flashOutput', lines: result.outputTail });
+      }
+      if (!result.ok || !result.identity) {
+        this.post({ type: 'flashProgress', stage: 'failed', message: '没有读到芯片信息。' });
+        this.post({
+          type: 'operationFinished',
+          result: {
+            ok: false,
+            message: '没有从探针读到芯片信息：检查探针连接、目标供电与 OpenOCD 配置后重试。',
+            files: []
+          }
+        });
+        return;
+      }
+      const label = describeIdentity(result.identity);
+      if (this.flashDetection) {
+        this.flashDetection = { ...this.flashDetection, chipLabel: label };
+      }
+      if (result.probeId && result.probeId !== this.selectionValue.flash.probeId) {
+        const probeId = result.probeId as FlashProbeId;
+        this.selectionValue = {
+          ...this.selectionValue,
+          flash: { ...this.selectionValue.flash, probeId }
+        };
+      }
+      this.post({ type: 'flashProgress', stage: 'done', message: `检测到 ${label}`, percent: 100 });
+      this.post({ type: 'operationFinished', result: { ok: true, message: `检测到 ${label}。`, files: [] } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logLine(`[flash] detect: ${message}`);
+      this.post({ type: 'flashProgress', stage: 'failed', message: '探针检测失败。' });
+      this.post({ type: 'operationFinished', result: { ok: false, message: `探针检测失败：${message}`, files: [] } });
+    } finally {
+      this.busy = false;
+      await this.refreshFlashDetection();
+      this.postState();
+    }
+  }
+
+  /** 当前探针优先、其余支持 OpenOCD 的接口随后：探测成功即可自动改选。 */
+  private chipProbes(
+    flash: ReturnType<SidebarProvider['flashGenerationOptions']>
+  ): Array<{ id: FlashProbeId; interfaceConfig: string }> {
+    return listFlashProbeProfiles()
+      .filter((candidate) => backendSupportsProbe('openocd', candidate.id))
+      .sort((left, right) => (left.id === flash.probe.id ? 0 : 1) - (right.id === flash.probe.id ? 0 : 1))
+      .map((candidate) => ({ id: candidate.id, interfaceConfig: candidate.interfaceConfig }));
+  }
+
+  /**
+   * 后台静默读一次芯片标识：打开工程时如果已经接了探针，芯片行不必等用户点
+   * 「检测探针」。没接探针是常态，失败就不吭声。
+   */
+  private autoDetectChip(): void {
+    if (this.chipDetectionRunning || this.busy || this.flashDetection?.chipLabel) {
+      return;
+    }
+    const root = this.projectRoot();
+    if (!root) {
+      return;
+    }
+    let flash: ReturnType<SidebarProvider['flashGenerationOptions']>;
+    try {
+      flash = this.flashGenerationOptions();
+    } catch {
+      return;
+    }
+    const openocdPath = resolveOpenOcdExecutable(flash.openocdPath);
+    if (!openocdPath) {
+      return;
+    }
+    this.chipDetectionRunning = true;
+    void (async () => {
+      try {
+        const result = await detectChip({
+          openocdPath,
+          probes: this.chipProbes(flash),
+          targetConfig: flash.target.targetConfig,
+          transport: flash.target.transport,
+          speedKHz: 2000,
+          cwd: root,
+          timeoutMs: 5000
+        });
+        if (!result.ok || !result.identity || this.busy) {
+          return;
+        }
+        const label = describeIdentity(result.identity);
+        if (this.flashDetection) {
+          this.flashDetection = { ...this.flashDetection, chipLabel: label };
+        }
+        if (result.probeId && result.probeId !== this.selectionValue.flash.probeId) {
+          this.selectionValue = {
+            ...this.selectionValue,
+            flash: { ...this.selectionValue.flash, probeId: result.probeId as FlashProbeId }
+          };
+        }
+        this.postState();
+        this.post({ type: 'notification', level: 'info', message: `探针检测到 ${label}。` });
+      } catch (error) {
+        logLine(`[flash] auto detect: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        this.chipDetectionRunning = false;
+      }
+    })();
+  }
+
+  /** 打开文件对话框手选一个 ELF；选中后写入选择并立即刷新检测结果。 */
+  private async pickFirmwareFile(): Promise<void> {
+    const root = this.projectRoot();
+    if (!root) {
+      this.post({ type: 'notification', level: 'warning', message: '先选择一个工程，再选择固件。' });
+      return;
+    }
+    const picked = await vscode.window.showOpenDialog({
+      canSelectMany: false,
+      openLabel: '选择要烧录的固件',
+      defaultUri: vscode.Uri.file(join(root, 'build')),
+      filters: { 'ELF 固件': ['elf'], '所有文件': ['*'] }
+    });
+    if (!picked || picked.length === 0) {
+      return;
+    }
+    const firmwarePath = picked[0].fsPath;
+    this.selectionValue = {
+      ...this.selectionValue,
+      flash: { ...this.selectionValue.flash, firmwarePath }
+    };
+    await this.refreshFlashDetection();
+    this.postState();
+    this.post({ type: 'notification', level: 'info', message: `已选择固件：${basenamePath(firmwarePath)}` });
   }
 
   /** Python executable: the setting wins, then the platform launcher. */
@@ -1043,21 +1265,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     verify: boolean,
     reset: boolean
   ): string[] {
+    // OpenOCD no longer goes through flash.py; these arguments serve the two
+    // vendors' own CLIs, which have no equivalent "program … verify reset exit".
     const args = ['--firmware', firmwarePath];
-    if (flash.backend === 'openocd') {
-      args.push('--probe', flash.probe.id, '--openocd', flash.openocdPath,
-        '--target', flash.target.targetConfig, '--speed', '4000');
-      if (flash.target.transport !== 'swd') {
-        args.push('--transport', flash.target.transport);
-      }
-      if (!verify) {
-        args.push('--no-verify');
-      }
-      if (!reset) {
-        args.push('--no-reset');
-      }
-      return args;
-    }
     if (flash.backend === 'jlink') {
       args.push(
         '--jlink', flash.executables.jlink ?? 'JLink',
@@ -1091,12 +1301,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   }
 
   /**
-   * Flash the detected firmware through the project's own `flash.py`.
+   * Flash the firmware through OpenOCD directly (or `flash.py` for J-Link and
+   * pyOCD, which own their own tool invocations).
    *
-   * Executing the script the user can read (instead of spawning OpenOCD/GDB
-   * directly) keeps one flashing implementation: the command line is visible,
-   * the same argument surface works in a terminal, and failure text is the
-   * script's own.
+   * The OpenOCD argument list is built in `openocdDirect.ts` and echoed into the
+   * output pane before it runs, so a failure can be replayed verbatim in a
+   * terminal — and no Python is needed for the common ST-Link/DAPLink path.
    */
   private async flashFirmware(
     request: { firmwarePath?: string; verify?: boolean; reset?: boolean }
@@ -1113,11 +1323,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       });
       return;
     }
-    const scriptPath = join(root, 'flash.py');
-    if (!existsSync(scriptPath)) {
+    if (!existsSync(firmwarePath)) {
       this.post({
         type: 'operationFinished',
-        result: { ok: false, message: '工程里还没有 flash.py：先点「只生成 flash.py」。', files: [] }
+        result: { ok: false, message: `找不到要烧录的固件：${firmwarePath}`, files: [] }
       });
       return;
     }
@@ -1137,14 +1346,61 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     this.post({ type: 'operationStarted', operation: '正在烧录' });
     this.post({ type: 'flashProgress', stage: 'init', message: '准备烧录…', percent: 5 });
     try {
-      const result = await runFlash({
-        pythonPath: this.pythonPath(),
-        scriptPath,
-        args: this.flashArguments(flash, firmwarePath, verify, reset),
-        cwd: root,
-        signal: controller.signal,
-        onEvent: (event) => this.postFlashEvent(event)
-      });
+      let result: FlashRunResult;
+      if (flash.backend === 'openocd') {
+        const openocdPath = resolveOpenOcdExecutable(flash.openocdPath);
+        if (!openocdPath) {
+          this.post({ type: 'flashProgress', stage: 'failed', message: '找不到 OpenOCD。' });
+          this.post({
+            type: 'operationFinished',
+            result: { ok: false, message: missingOpenOcdNotice(flash.openocdPath), files: [] }
+          });
+          return;
+        }
+        const args = buildOpenOcdFlashArgs({
+          target: {
+            interfaceConfig: flash.probe.interfaceConfig,
+            targetConfig: flash.target.targetConfig,
+            transport: flash.target.transport,
+            speedKHz: 4000
+          },
+          firmwarePath,
+          verify,
+          reset
+        });
+        // 原样回显命令行：用户可以在终端复现同一条命令，失败截图也自带上下文。
+        this.post({ type: 'flashOutput', lines: [`> ${openocdPath} ${args.join(' ')}`] });
+        result = await runTool({
+          executable: openocdPath,
+          args,
+          cwd: root,
+          signal: controller.signal,
+          onEvent: (event) => this.postFlashEvent(event),
+          matchLine: matchOpenOcdStage,
+          tailLines: 40
+        });
+      } else {
+        const scriptPath = join(root, 'flash.py');
+        if (!existsSync(scriptPath)) {
+          this.post({
+            type: 'operationFinished',
+            result: {
+              ok: false,
+              message: '工程里还没有 flash.py：J-Link / pyOCD 后端仍由它执行，先点「只生成 flash.py」。',
+              files: []
+            }
+          });
+          return;
+        }
+        result = await runFlash({
+          pythonPath: this.pythonPath(),
+          scriptPath,
+          args: this.flashArguments(flash, firmwarePath, verify, reset),
+          cwd: root,
+          signal: controller.signal,
+          onEvent: (event) => this.postFlashEvent(event)
+        });
+      }
       if (result.outputTail.length > 0) {
         this.post({ type: 'flashOutput', lines: result.outputTail });
       }
@@ -1249,8 +1505,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       return;
     }
     if (message.type === 'detectFlash') {
-      await this.refreshFlashDetection();
-      this.postState();
+      await this.detectProbeChip();
+      return;
+    }
+    if (message.type === 'pickFirmware') {
+      await this.pickFirmwareFile();
       return;
     }
     if (message.type === 'flash') {
@@ -1269,7 +1528,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         this.postState();
       });
       void this.refreshPackCatalog(this.selectionValue.mcu.vendor);
-      void this.refreshFlashDetection().then(() => this.postState());
+      void this.refreshFlashDetection().then(() => {
+        this.postState();
+        this.autoDetectChip();
+      });
       this.postState();
       return;
     }
@@ -1328,7 +1590,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       });
       await this.context.workspaceState.update(selectionKey, this.selectionValue);
       this.postState();
-      void this.refreshFlashDetection().then(() => this.postState());
+      void this.refreshFlashDetection().then(() => {
+        this.postState();
+        this.autoDetectChip();
+      });
       return;
     }
     if (message.type === 'scanWorkspace') {

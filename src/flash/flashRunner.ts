@@ -31,6 +31,19 @@ export interface FlashRunOptions {
   tailLines?: number;
 }
 
+export interface ToolRunOptions {
+  /** 直接启动的可执行文件（OpenOCD、J-Link Commander 等）。 */
+  executable: string;
+  args: string[];
+  cwd: string;
+  signal?: AbortSignal;
+  spawn?: typeof import('node:child_process').spawn;
+  onEvent?(event: FlashEvent): void;
+  tailLines?: number;
+  /** 覆盖默认阶段行匹配：不同后端的进度文案不同。 */
+  matchLine?(line: string): StageMatch | undefined;
+}
+
 export interface FlashRunResult {
   ok: boolean;
   /** 进程退出码；被取消或 spawn 失败时为 undefined。 */
@@ -107,7 +120,7 @@ function terminate(target: ChildProcess, allowTaskkill: boolean): void {
   target.kill();
 }
 
-export async function runFlash(options: FlashRunOptions): Promise<FlashRunResult> {
+export async function runTool(options: ToolRunOptions): Promise<FlashRunResult> {
   const startedAt = Date.now();
   const events: FlashEvent[] = [];
   const output: string[] = [];
@@ -141,7 +154,7 @@ export async function runFlash(options: FlashRunOptions): Promise<FlashRunResult
         return;
       }
       output.push(line);
-      const match = matchStage(line);
+      const match = (options.matchLine ?? matchStage)(line);
       if (!match) {
         return;
       }
@@ -208,7 +221,7 @@ export async function runFlash(options: FlashRunOptions): Promise<FlashRunResult
 
     let spawned: ChildProcess;
     try {
-      spawned = spawnFn(options.pythonPath ?? 'python', [options.scriptPath, ...options.args], {
+      spawned = spawnFn(options.executable, options.args, {
         cwd: options.cwd,
         windowsHide: true
       });
@@ -241,5 +254,21 @@ export async function runFlash(options: FlashRunOptions): Promise<FlashRunResult
     if (options.signal?.aborted) {
       onAbort();
     }
+  });
+}
+
+/**
+ * Runs the generated `flash.py` helper. Kept as the compatibility surface for
+ * the J-Link and pyOCD backends; the OpenOCD path calls `runTool` directly.
+ */
+export async function runFlash(options: FlashRunOptions): Promise<FlashRunResult> {
+  return runTool({
+    executable: options.pythonPath ?? 'python',
+    args: [options.scriptPath, ...options.args],
+    cwd: options.cwd,
+    signal: options.signal,
+    spawn: options.spawn,
+    onEvent: options.onEvent,
+    tailLines: options.tailLines
   });
 }

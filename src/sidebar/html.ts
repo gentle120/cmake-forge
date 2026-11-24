@@ -136,7 +136,7 @@ export function renderSidebarHtml(
           <span class="section-icon"><span class="ui-icon" data-icon="zap" aria-hidden="true"></span></span>
           <div class="section-heading">
             <h2 id="flash-title">烧录与调试</h2>
-            <p>选择后端与探针，可单独生成烧录脚本或调试配置。</p>
+            <p>检测探针读芯片型号、选固件后一键烧录，调试配置同时生成好。</p>
           </div>
         </div>
         <div id="flash-host" class="flash-host"></div>
@@ -144,6 +144,7 @@ export function renderSidebarHtml(
           <div class="flash-detect-row">
             <span class="flash-detect-key">固件</span>
             <span id="flash-firmware" class="flash-detect-value">尚未检测</span>
+            <button id="flash-pick-firmware" class="link-action" type="button" data-command="pickFirmware">选择…</button>
           </div>
           <div class="flash-detect-row">
             <span class="flash-detect-key">目标</span>
@@ -152,6 +153,10 @@ export function renderSidebarHtml(
           <div class="flash-detect-row">
             <span class="flash-detect-key">探针</span>
             <span id="flash-probe-label" class="flash-detect-value">—</span>
+          </div>
+          <div class="flash-detect-row">
+            <span class="flash-detect-key">芯片</span>
+            <span id="flash-chip-label" class="flash-detect-value">未检测</span>
           </div>
           <p id="flash-firmware-detail" class="field-detail"></p>
           <p id="flash-blocked" class="field-detail" data-tone="warning" role="alert" hidden></p>
@@ -164,7 +169,7 @@ export function renderSidebarHtml(
             <input id="flash-reset" type="checkbox" checked><span>完成后复位运行</span>
           </label>
           <button id="flash-redetect" class="secondary-action compact" type="button" data-command="detectFlash">
-            <span class="ui-icon" data-icon="refresh" aria-hidden="true"></span><span>重新检测</span>
+            <span class="ui-icon" data-icon="refresh" aria-hidden="true"></span><span>检测探针</span>
           </button>
         </div>
         <div id="flash-progress" class="flash-progress" hidden>
