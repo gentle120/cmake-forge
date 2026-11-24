@@ -240,6 +240,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private chipDetectionRoot?: string;
   /** Which tool download is running, if any. */
   private toolInstallRunning?: SidebarToolId;
+  /** Download prompts already shown in this window; VS Code notifications are not persistent. */
+  private promptedTools = new Set<SidebarToolId>();
   /** Progress of the tool download the user started, if any. */
   private toolProgress?: SidebarEnvironment['progress'];
   private packOptions: DevicePackOption[] = [];
@@ -1769,59 +1771,128 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       return;
     }
     const label = tool === 'armgcc' ? 'ARM GNU 工具链' : 'OpenOCD';
-    this.busy = true;
-    this.toolInstallRunning = tool;
-    this.toolProgress = { tool, stage: 'download', message: `正在准备 ${label}…`, percent: 0 };
-    this.post({ type: 'operationStarted', operation: `正在下载 ${label}` });
-    this.postState();
-    try {
-      const options = {
-        storageRoot,
-        onProgress: (progress: { stage: 'download' | 'extract' | 'verify' | 'done'; message: string; percent?: number }) => {
-          this.toolProgress = { tool, ...progress };
-          this.post({ type: 'toolProgress', tool, ...progress });
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `正在安装 ${label}`,
+        cancellable: true
+      },
+      async (progress, token) => {
+        const controller = new AbortController();
+        token.onCancellationRequested(() => controller.abort());
+        this.busy = true;
+        this.toolInstallRunning = tool;
+        this.toolProgress = { tool, stage: 'download', message: `正在准备 ${label}…`, percent: 0 };
+        this.post({ type: 'operationStarted', operation: `正在下载 ${label}` });
+        this.postState();
+        let reported = 0;
+        try {
+          const options = {
+            storageRoot,
+            signal: controller.signal,
+            onProgress: (update: {
+              stage: 'download' | 'extract' | 'verify' | 'done';
+              message: string;
+              percent?: number;
+            }) => {
+              this.toolProgress = { tool, ...update };
+              this.post({ type: 'toolProgress', tool, ...update });
+              const percent = update.percent;
+              if (typeof percent === 'number' && percent > reported) {
+                progress.report({ message: update.message, increment: percent - reported });
+                reported = percent;
+              } else {
+                progress.report({ message: update.message });
+              }
+            }
+          };
+          if (tool === 'armgcc') {
+            const installed = await installArmGcc(options);
+            await vscode.workspace.getConfiguration('cmakeForge')
+              .update('armGccPath', installed.binDir, vscode.ConfigurationTarget.Global);
+            this.buildToolchainCache = undefined;
+            this.post({
+              type: 'operationFinished',
+              result: {
+                ok: true,
+                message: `ARM GNU 工具链 ${installed.version} 已安装：${installed.binDir}`,
+                files: []
+              }
+            });
+          } else {
+            const installed = await installOpenOcd(options);
+            await vscode.workspace.getConfiguration('cmakeForge')
+              .update('openocdPath', installed.executable, vscode.ConfigurationTarget.Global);
+            this.post({
+              type: 'operationFinished',
+              result: {
+                ok: true,
+                message: `OpenOCD ${installed.version} 已安装：${installed.executable}`,
+                files: []
+              }
+            });
+          }
+          logLine(`[tools] installed ${label}`);
+          await this.refreshFlashDetection();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const cancelled = controller.signal.aborted || message.includes('已取消');
+          if (!cancelled) {
+            logLine(`[tools] ${label} 安装失败：${message}`);
+          }
+          this.post({
+            type: 'operationFinished',
+            result: {
+              ok: false,
+              message: cancelled ? `已取消安装 ${label}。` : `${label} 安装失败：${message}`,
+              files: []
+            }
+          });
+        } finally {
+          this.busy = false;
+          this.toolInstallRunning = undefined;
+          this.toolProgress = undefined;
+          this.postState();
         }
-      };
-      if (tool === 'armgcc') {
-        const installed = await installArmGcc(options);
-        await vscode.workspace.getConfiguration('cmakeForge')
-          .update('armGccPath', installed.binDir, vscode.ConfigurationTarget.Global);
-        this.buildToolchainCache = undefined;
-        this.post({
-          type: 'operationFinished',
-          result: {
-            ok: true,
-            message: `ARM GNU 工具链 ${installed.version} 已安装：${installed.binDir}`,
-            files: []
-          }
-        });
-      } else {
-        const installed = await installOpenOcd(options);
-        await vscode.workspace.getConfiguration('cmakeForge')
-          .update('openocdPath', installed.executable, vscode.ConfigurationTarget.Global);
-        this.post({
-          type: 'operationFinished',
-          result: {
-            ok: true,
-            message: `OpenOCD ${installed.version} 已安装：${installed.executable}`,
-            files: []
-          }
-        });
       }
-      logLine(`[tools] installed ${label}`);
-      await this.refreshFlashDetection();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logLine(`[tools] ${label} 安装失败：${message}`);
-      this.post({
-        type: 'operationFinished',
-        result: { ok: false, message: `${label} 安装失败：${message}`, files: [] }
-      });
-    } finally {
-      this.busy = false;
-      this.toolInstallRunning = undefined;
-      this.toolProgress = undefined;
-      this.postState();
+    );
+  }
+
+  /** One notification per missing tool, so the card keeps showing plain states. */
+  private async promptMissingTools(): Promise<void> {
+    // Unit tests run the provider without a VS Code UI to answer the prompt.
+    if (typeof vscode.window?.showInformationMessage !== 'function') {
+      return;
+    }
+    const environment = this.environment();
+    const backendReady = new Map(environment.backends.map((choice) => [choice.value, choice.ready]));
+    const missing: { tool: SidebarToolId; label: string }[] = [];
+    if (!environment.armGcc.ready) {
+      missing.push({ tool: 'armgcc', label: 'ARM GNU 工具链' });
+    }
+    if (!environment.openocd.ready) {
+      missing.push({ tool: 'openocd', label: 'OpenOCD' });
+    }
+    const backend = this.selectionValue.flash.backend;
+    if (backend === 'jlink' && backendReady.get('jlink') !== true) {
+      missing.push({ tool: 'jlink', label: 'J-Link' });
+    }
+    if (backend === 'pyocd' && backendReady.get('pyocd') !== true) {
+      missing.push({ tool: 'pyocd', label: 'pyOCD' });
+    }
+    for (const item of missing) {
+      if (this.promptedTools.has(item.tool)) {
+        continue;
+      }
+      this.promptedTools.add(item.tool);
+      const answer = await vscode.window.showInformationMessage(
+        `没有找到 ${item.label}，编译或烧录需要它。`,
+        '下载',
+        '稍后'
+      );
+      if (answer === '下载') {
+        await this.installTool(item.tool);
+      }
     }
   }
 
@@ -1865,46 +1936,64 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       });
       return;
     }
-    this.busy = true;
-    this.toolInstallRunning = 'pyocd';
-    this.toolProgress = { tool: 'pyocd', stage: 'download', message: '正在安装 pyOCD…' };
-    this.post({ type: 'operationStarted', operation: '正在安装 pyOCD' });
-    this.postState();
-    try {
-      const result = await runTool({
-        executable,
-        args: ['-m', 'pip', 'install', '--user', '--upgrade', 'pyocd'],
-        cwd: storageRoot,
-        tailLines: 20
-      });
-      if (result.ok) {
-        this.post({
-          type: 'operationFinished',
-          result: {
-            ok: true,
-            message: 'pyOCD 已安装。若侧栏仍显示未安装，请重开窗口；路径特殊时填写 cmakeForge.pyocdPath。',
-            files: []
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: '正在安装 pyOCD',
+        cancellable: true
+      },
+      async (progress, token) => {
+        const controller = new AbortController();
+        token.onCancellationRequested(() => controller.abort());
+        this.busy = true;
+        this.toolInstallRunning = 'pyocd';
+        this.toolProgress = { tool: 'pyocd', stage: 'download', message: '正在安装 pyOCD…' };
+        this.post({ type: 'operationStarted', operation: '正在安装 pyOCD' });
+        progress.report({ message: '正在运行 pip install pyocd…' });
+        this.postState();
+        try {
+          const result = await runTool({
+            executable,
+            args: ['-m', 'pip', 'install', '--user', '--upgrade', 'pyocd'],
+            cwd: storageRoot,
+            tailLines: 20,
+            signal: controller.signal
+          });
+          if (controller.signal.aborted || result.cancelled) {
+            this.post({
+              type: 'operationFinished',
+              result: { ok: false, message: '已取消安装 pyOCD。', files: [] }
+            });
+          } else if (result.ok) {
+            this.post({
+              type: 'operationFinished',
+              result: {
+                ok: true,
+                message: 'pyOCD 已安装。若侧栏仍显示未安装，请重开窗口；路径特殊时填写 cmakeForge.pyocdPath。',
+                files: []
+              }
+            });
+          } else {
+            const reason = result.spawnError ?? result.outputTail.filter(Boolean).at(-1) ?? '未知错误';
+            this.post({
+              type: 'operationFinished',
+              result: { ok: false, message: `pyOCD 安装失败：${reason}`, files: [] }
+            });
           }
-        });
-      } else {
-        const reason = result.spawnError ?? result.outputTail.filter(Boolean).at(-1) ?? '未知错误';
-        this.post({
-          type: 'operationFinished',
-          result: { ok: false, message: `pyOCD 安装失败：${reason}`, files: [] }
-        });
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          this.post({
+            type: 'operationFinished',
+            result: { ok: false, message: `pyOCD 安装失败：${reason}`, files: [] }
+          });
+        } finally {
+          this.busy = false;
+          this.toolInstallRunning = undefined;
+          this.toolProgress = undefined;
+          this.postState();
+        }
       }
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      this.post({
-        type: 'operationFinished',
-        result: { ok: false, message: `pyOCD 安装失败：${reason}`, files: [] }
-      });
-    } finally {
-      this.busy = false;
-      this.toolInstallRunning = undefined;
-      this.toolProgress = undefined;
-      this.postState();
-    }
+    );
   }
 
   private selectedDeviceProfile() {
@@ -1986,11 +2075,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         this.autoDetectChip();
       });
       this.postState();
+      void this.promptMissingTools();
       return;
     }
     if (message.type === 'saveSelection') {
       try {
+        const previousBackend = this.selectionValue.flash.backend;
         await this.saveSelection(message.selection);
+        if (this.selectionValue.flash.backend !== previousBackend) {
+          void this.promptMissingTools();
+        }
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
         this.post({

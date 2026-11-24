@@ -273,14 +273,8 @@
   // Toolchain and backend are picked in the environment card: choosing an
   // entry whose tool is missing posts the same install request the old
   // download button used to.
-  const DOWNLOAD_PREFIX = 'download:';
   const toolchainField = createSelectField('工具链', (value) => {
     if (!state) return;
-    if (value.startsWith(DOWNLOAD_PREFIX)) {
-      post({ type: 'installTool', tool: value.slice(DOWNLOAD_PREFIX.length) });
-      syncEnvironment();
-      return;
-    }
     saveSelection({
       ...state.selection,
       mcu: { ...state.selection.mcu, buildToolchain: value }
@@ -288,11 +282,6 @@
   });
   const backendField = createSelectField('烧录后端', (value) => {
     if (!state) return;
-    if (value.startsWith(DOWNLOAD_PREFIX)) {
-      post({ type: 'installTool', tool: value.slice(DOWNLOAD_PREFIX.length) });
-      syncEnvironment();
-      return;
-    }
     saveSelection({ ...state.selection, flash: { ...state.selection.flash, backend: value } });
   });
   if (envFields) {
@@ -565,9 +554,7 @@
       value: choice.value,
       label: choice.ready ? choice.label : `${choice.label}（未安装）`
     }));
-    if (!toolchains.some((choice) => choice.ready)) {
-      toolchainOptions.push({ value: `${DOWNLOAD_PREFIX}armgcc`, label: '未检测到 · 点此下载' });
-    }
+
     applyOptions(toolchainField.select, toolchainOptions, state.selection.mcu.buildToolchain);
     toolchainField.select.disabled = installing;
     const backends = Array.isArray(environment.backends) ? environment.backends : [];
@@ -575,11 +562,7 @@
       value: choice.value,
       label: choice.ready ? choice.label : `${choice.label}（未安装）`
     }));
-    for (const choice of backends) {
-      if (!choice.ready) {
-        backendOptions.push({ value: `${DOWNLOAD_PREFIX}${choice.value}`, label: `下载 ${choice.label}…` });
-      }
-    }
+
     applyOptions(backendField.select, backendOptions, state.selection.flash.backend);
     backendField.select.disabled = installing;
     const progress = environment.progress;

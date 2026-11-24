@@ -199,7 +199,7 @@ test('sidebar renderer wires every supported command', () => {
   assert.doesNotMatch(scriptSource, /innerHTML/);
 });
 
-test('the environment card turns missing tools into download entries', () => {
+test('missing tools stay listed in the dropdowns without fake download entries', () => {
   const harness = startSidebar(baseState({
     environment: {
       armGcc: { ready: false, detail: '未找到 arm-none-eabi-gcc' },
@@ -214,43 +214,12 @@ test('the environment card turns missing tools into download entries', () => {
   const [toolchain, backend] = harness.element('env-fields').querySelectorAll('select');
   const values = (select: Element): string[] =>
     select.querySelectorAll('option').map((option) => (option as unknown as { value: string }).value);
-  assert.deepEqual(values(toolchain), ['download:armgcc']);
-  assert.deepEqual(values(backend), ['openocd', 'jlink', 'download:openocd']);
-  toolchain.value = 'download:armgcc';
-  toolchain.dispatch('change');
-  assert.deepEqual(harness.posted.at(-1), { type: 'installTool', tool: 'armgcc' });
-});
-
-test('every missing backend row offers its own download entry', () => {
-  const harness = startSidebar(baseState({
-    environment: {
-      armGcc: { ready: true, detail: 'C:/arm/bin' },
-      openocd: { ready: false, detail: '未找到 openocd.exe' },
-      toolchains: [
-        { value: 'mcu:arm-none-eabi', label: 'ARM GNU 15.3.1', ready: true, detail: 'C:/arm/bin' }
-      ],
-      backends: [
-        { value: 'openocd', label: 'OpenOCD', ready: false, detail: '未找到 openocd.exe' },
-        { value: 'jlink', label: 'J-Link', ready: false, detail: '未找到 JLink.exe' },
-        { value: 'pyocd', label: 'pyOCD', ready: false, detail: '未找到 pyocd' }
-      ]
-    }
-  } as never));
-  const [, backend] = harness.element('env-fields').querySelectorAll('select');
-  const values = backend
-    .querySelectorAll('option')
-    .map((option) => (option as unknown as { value: string }).value);
-  assert.deepEqual(values, [
-    'openocd',
-    'jlink',
-    'pyocd',
-    'download:openocd',
-    'download:jlink',
-    'download:pyocd'
-  ]);
-  backend.value = 'download:pyocd';
-  backend.dispatch('change');
-  assert.deepEqual(harness.posted.at(-1), { type: 'installTool', tool: 'pyocd' });
+  assert.deepEqual(values(toolchain), []);
+  assert.deepEqual(values(backend), ['openocd', 'jlink']);
+  assert.equal(
+    [...values(toolchain), ...values(backend)].some((value) => value.startsWith('download:')),
+    false
+  );
 });
 
 test('picking an installed toolchain saves it in the MCU selection', () => {
