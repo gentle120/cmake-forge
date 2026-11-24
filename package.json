@@ -118,6 +118,11 @@
           "default": "",
           "description": "Pack 下载镜像根地址（可选）。形如 https://mirror.example.com/cmsis 的扁平目录，按 <vendor>.<name>.<version>.pack 提供文件。留空时直连官方 CDN。"
         },
+        "cmakeForge.armGccPath": {
+          "type": "string",
+          "default": "",
+          "description": "ARM GNU 工具链的 bin 目录（或 arm-none-eabi-gcc 的完整路径）。留空时只在 PATH 中查找；侧栏可一键下载安装。"
+        },
         "cmakeForge.pythonPath": {
           "type": "string",
           "default": "",

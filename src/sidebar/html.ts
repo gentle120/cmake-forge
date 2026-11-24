@@ -131,6 +131,32 @@ export function renderSidebarHtml(
         </div>
       </section>
 
+      <section class="control-section environment-section" aria-labelledby="environment-title">
+        <div class="section-header">
+          <span class="section-icon"><span class="ui-icon" data-icon="tool" aria-hidden="true"></span></span>
+          <div class="section-heading">
+            <h2 id="environment-title">编译与烧录工具</h2>
+            <p>只使用 ARM GNU 工具链与 OpenOCD；缺少时点「下载」，无需自己找安装包。</p>
+          </div>
+        </div>
+        <div id="environment" class="environment" aria-live="polite">
+          <div class="env-row" id="env-armgcc">
+            <span class="env-name">ARM GNU 工具链</span>
+            <span id="env-armgcc-detail" class="env-detail">检测中…</span>
+            <button id="env-armgcc-install" class="secondary-action" type="button" data-command="installArmGcc">下载</button>
+          </div>
+          <div class="env-row" id="env-openocd">
+            <span class="env-name">OpenOCD</span>
+            <span id="env-openocd-detail" class="env-detail">检测中…</span>
+            <button id="env-openocd-install" class="secondary-action" type="button" data-command="installOpenOcd">下载</button>
+          </div>
+          <div id="env-progress" class="env-progress" hidden>
+            <div class="env-progress-track"><div id="env-progress-bar" class="env-progress-bar"></div></div>
+            <span id="env-progress-text" class="env-progress-text"></span>
+          </div>
+        </div>
+      </section>
+
       <section class="control-section flash-section" aria-labelledby="flash-title">
         <div class="section-header">
           <span class="section-icon"><span class="ui-icon" data-icon="zap" aria-hidden="true"></span></span>

@@ -191,7 +191,9 @@ test('sidebar renderer wires every supported command', () => {
     'cancelFlash',
     'flash',
     'generateProject',
-    'generateDebugConfiguration'
+    'generateDebugConfiguration',
+    'installArmGcc',
+    'installOpenOcd'
   ]) {
     assert.match(scriptSource, new RegExp(command));
   }
@@ -304,8 +306,8 @@ test('every command button is unique and its command is dispatched by the render
     [...new Set(commands)].sort(),
     ['cancelFlash', 'cancelWorkspaceScan', 'detectFlash', 'flash',
       'generateDebugConfiguration',
-      'generateProject', 'importPack', 'installCorePack', 'installPackOnline',
-      'pickFirmware', 'scanWorkspace']
+      'generateProject', 'importPack', 'installArmGcc', 'installCorePack',
+      'installOpenOcd', 'installPackOnline', 'pickFirmware', 'scanWorkspace']
   );
   // One delegated listener owns the static commands; no per-button wiring remains.
   const catalogListeners = [...scriptSource.matchAll(/app\.addEventListener\('click'/g)];

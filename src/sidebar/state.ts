@@ -66,6 +66,32 @@ export interface SidebarFlashDetection {
   blockedReason: string;
 }
 
+/** One external tool the extension can install for the user. */
+export interface SidebarToolStatus {
+  /** True when the sidebar found a usable executable. */
+  ready: boolean;
+  /** Where it was found, or what is missing; shown verbatim in the card. */
+  detail: string;
+}
+
+/**
+ * Tool readiness for the two programs a first run cannot do without. Kept out
+ * of the pure selection model for the same reason as the flash detection: the
+ * host does the IO.
+ */
+export interface SidebarEnvironment {
+  armGcc: SidebarToolStatus;
+  openocd: SidebarToolStatus;
+  /** Which download is running; buttons turn into a progress bar meanwhile. */
+  installing?: 'armgcc' | 'openocd';
+  progress?: {
+    tool: 'armgcc' | 'openocd';
+    stage: 'download' | 'extract' | 'verify' | 'done';
+    message: string;
+    percent?: number;
+  };
+}
+
 export interface SidebarSelection {
   mode: SidebarMode;
   projectRoot: string;
@@ -135,6 +161,8 @@ export interface SidebarBootstrapState {
   flashBackends: SidebarOption[];
   /** Latest detection result; absent when the host has not scanned yet. */
   flashDetection?: SidebarFlashDetection;
+  /** Tool readiness plus any running download; filled in by the provider. */
+  environment?: SidebarEnvironment;
   linuxToolchains: SidebarOption[];
   mcuToolchains: SidebarOption[];
   selection: SidebarSelection;

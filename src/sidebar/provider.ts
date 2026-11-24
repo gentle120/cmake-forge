@@ -64,6 +64,7 @@ import {
   findBuildToolchain,
   type BuildToolchain
 } from '../env/buildToolchains';
+import { installArmGcc, installOpenOcd } from '../env/toolDownloads';
 import { renderSidebarHtml } from './html';
 import { parseIncomingMessage, type SidebarIncomingMessage } from './messages';
 import {
@@ -71,9 +72,11 @@ import {
   nextMcuSelection,
   packServesSeries,
   sanitizeSidebarSelection,
+  type SidebarEnvironment,
   type SidebarFlashDetection,
   type SidebarOption,
-  type SidebarSelection
+  type SidebarSelection,
+  type SidebarToolStatus
 } from './state';
 import { discoverFirmware, findWorkspaceFirmware } from '../flash/firmwareDiscovery';
 import { runFlash, runTool, type FlashEvent, type FlashRunResult } from '../flash/flashRunner';
@@ -127,6 +130,11 @@ export interface SidebarProviderDependencies {
    * generated project. Absent in tests that do not exercise the copy.
    */
   deviceSupportFilesForPart?(part: string, sourcePack?: string): Promise<DeviceSupportFile[]>;
+  /**
+   * Directory the extension may write downloads into (the global storage
+   * root). Absent in tests, which never reach the download buttons.
+   */
+  toolStorageRoot?(): string;
 }
 
 function workspaceName(): string {
@@ -146,6 +154,11 @@ function normalizeResult(result: WorkflowResult): {
     message: result.message,
     files: result.files
   };
+}
+
+function sameDirectory(left: string, right: string): boolean {
+  const normalize = (value: string): string => value.replace(/[\\/]+$/, '').toLowerCase();
+  return normalize(left) === normalize(right);
 }
 
 function basenamePath(file: string): string {
@@ -186,6 +199,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private chipDetectionRunning = false;
   /** Project root the cached chip label belongs to; a new root invalidates it. */
   private chipDetectionRoot?: string;
+  /** Which tool download is running, if any. */
+  private toolInstallRunning?: 'armgcc' | 'openocd';
+  /** Progress of the tool download the user started, if any. */
+  private toolProgress?: SidebarEnvironment['progress'];
   private packOptions: DevicePackOption[] = [];
   private vendorOptions?: Array<{ value: string; label: string; description?: string }>;
   private pendingPackId: string;
@@ -284,10 +301,58 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     if (this.buildToolchainCache && now - this.buildToolchainCache.at < 10_000) {
       return this.buildToolchainCache.value;
     }
-    const value = this.dependencies.discoverMcuBuildToolchains?.()
-      ?? discoverMcuBuildToolchains();
+    // Only GNU Arm GCC is offered: it is the one toolchain the extension can
+    // install by itself and the one the flash/debug flow is verified against.
+    const discovered = (this.dependencies.discoverMcuBuildToolchains?.()
+      ?? discoverMcuBuildToolchains()).filter((toolchain) => toolchain.family === 'gcc');
+    const configured = this.configuredArmGccToolchain();
+    const value = configured
+      ? [
+          configured,
+          ...discovered.filter((toolchain) => !sameDirectory(toolchain.binDir, configured.binDir))
+        ]
+      : discovered;
     this.buildToolchainCache = { at: now, value };
     return value;
+  }
+
+  /** `cmakeForge.armGccPath`: a bin directory or the compiler executable itself. */
+  private configuredArmGccToolchain(): BuildToolchain | undefined {
+    const configured = vscode.workspace
+      .getConfiguration('cmakeForge')
+      .get<string>('armGccPath', '')
+      .trim();
+    if (!configured) {
+      return undefined;
+    }
+    const binDir = /arm-none-eabi-gcc(\.exe)?$/i.test(configured)
+      ? dirname(configured)
+      : configured;
+    const suffix = process.platform === 'win32' ? '.exe' : '';
+    const compiler = join(binDir, `arm-none-eabi-gcc${suffix}`);
+    if (!existsSync(compiler)) {
+      return undefined;
+    }
+    const maybe = (name: string): string | undefined => {
+      const candidate = join(binDir, `${name}${suffix}`);
+      return existsSync(candidate) ? candidate : undefined;
+    };
+    return {
+      id: 'mcu:gcc',
+      direction: 'mcu',
+      family: 'gcc',
+      prefix: 'arm-none-eabi',
+      cCompiler: compiler,
+      cxxCompiler: maybe('arm-none-eabi-g++.exe'),
+      cCompilerPath: compiler,
+      objcopy: maybe('arm-none-eabi-objcopy.exe'),
+      size: maybe('arm-none-eabi-size.exe'),
+      detected: true,
+      onPath: false,
+      binDir,
+      label: 'ARM GNU Toolchain',
+      detail: binDir
+    };
   }
 
   private selectedMcuToolchain(): BuildToolchain | undefined {
@@ -415,7 +480,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     );
     // Detection is host-side IO and can lag the selection by one refresh; the
     // webview shows "尚未检测" until the first result lands.
-    return this.flashDetection ? { ...state, flashDetection: this.flashDetection } : state;
+    return {
+      ...state,
+      ...(this.flashDetection ? { flashDetection: this.flashDetection } : {}),
+      environment: this.environment()
+    };
   }
 
   private postState(): void {
@@ -1569,6 +1638,116 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     this.flashController?.abort();
   }
 
+
+  /**
+   * Tool readiness shown in the sidebar's environment card. Everything is
+   * computed on demand so a download or a settings edit is reflected on the
+   * next render without a restart.
+   */
+  private environment(): SidebarEnvironment {
+    const configured = this.configuredArmGccToolchain();
+    const detected = this.buildToolchains().find((toolchain) => toolchain.detected);
+    const binDir = configured?.binDir ?? detected?.binDir;
+    const armGcc: SidebarToolStatus = binDir
+      ? { ready: true, detail: binDir }
+      : {
+          ready: false,
+          detail: process.platform === 'win32'
+            ? '未找到 arm-none-eabi-gcc'
+            : '未找到 arm-none-eabi-gcc（自动下载仅 Windows）'
+        };
+    const openocdExecutable = resolveOpenOcdExecutable(this.configuredOpenOcdPath());
+    const environment: SidebarEnvironment = {
+      armGcc,
+      openocd: openocdExecutable
+        ? { ready: true, detail: openocdExecutable }
+        : { ready: false, detail: '未找到 openocd.exe' }
+    };
+    if (this.toolInstallRunning) {
+      environment.installing = this.toolInstallRunning;
+    }
+    if (this.toolProgress) {
+      environment.progress = this.toolProgress;
+    }
+    return environment;
+  }
+
+  /** Downloads and registers one of the two tools the flow needs. */
+  private async installTool(tool: 'armgcc' | 'openocd'): Promise<void> {
+    if (process.platform !== 'win32') {
+      this.post({
+        type: 'notification',
+        level: 'warning',
+        message: '自动下载目前只支持 Windows：请用系统包管理器安装 ARM GNU 工具链与 OpenOCD，并在设置里填写路径。'
+      });
+      return;
+    }
+    const storageRoot = this.dependencies.toolStorageRoot?.();
+    if (!storageRoot) {
+      this.post({
+        type: 'notification',
+        level: 'error',
+        message: '无法确定下载目录：请在扩展的全局存储目录可写后重试。'
+      });
+      return;
+    }
+    const label = tool === 'armgcc' ? 'ARM GNU 工具链' : 'OpenOCD';
+    this.busy = true;
+    this.toolInstallRunning = tool;
+    this.toolProgress = { tool, stage: 'download', message: `正在准备 ${label}…`, percent: 0 };
+    this.post({ type: 'operationStarted', operation: `正在下载 ${label}` });
+    this.postState();
+    try {
+      const options = {
+        storageRoot,
+        onProgress: (progress: { stage: 'download' | 'extract' | 'verify' | 'done'; message: string; percent?: number }) => {
+          this.toolProgress = { tool, ...progress };
+          this.post({ type: 'toolProgress', tool, ...progress });
+        }
+      };
+      if (tool === 'armgcc') {
+        const installed = await installArmGcc(options);
+        await vscode.workspace.getConfiguration('cmakeForge')
+          .update('armGccPath', installed.binDir, vscode.ConfigurationTarget.Global);
+        this.buildToolchainCache = undefined;
+        this.post({
+          type: 'operationFinished',
+          result: {
+            ok: true,
+            message: `ARM GNU 工具链 ${installed.version} 已安装：${installed.binDir}`,
+            files: []
+          }
+        });
+      } else {
+        const installed = await installOpenOcd(options);
+        await vscode.workspace.getConfiguration('cmakeForge')
+          .update('openocdPath', installed.executable, vscode.ConfigurationTarget.Global);
+        this.post({
+          type: 'operationFinished',
+          result: {
+            ok: true,
+            message: `OpenOCD ${installed.version} 已安装：${installed.executable}`,
+            files: []
+          }
+        });
+      }
+      logLine(`[tools] installed ${label}`);
+      await this.refreshFlashDetection();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logLine(`[tools] ${label} 安装失败：${message}`);
+      this.post({
+        type: 'operationFinished',
+        result: { ok: false, message: `${label} 安装失败：${message}`, files: [] }
+      });
+    } finally {
+      this.busy = false;
+      this.toolInstallRunning = undefined;
+      this.toolProgress = undefined;
+      this.postState();
+    }
+  }
+
   private selectedDeviceProfile() {
     const { part, sourcePack } = this.selectionValue.mcu;
     if (!part || !sourcePack) {
@@ -1625,6 +1804,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     }
     if (message.type === 'flash') {
       await this.flashFirmware(message);
+      return;
+    }
+    if (message.type === 'installTool') {
+      await this.installTool(message.tool);
       return;
     }
     if (message.type === 'ready') {

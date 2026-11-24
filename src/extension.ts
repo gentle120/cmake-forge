@@ -1620,6 +1620,7 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     discoverPackVendors: () => discoverPackVendorOptions(),
     describeCorePack: () => describeCorePack(packStorageRoot),
+    toolStorageRoot: () => packStorageRoot,
     ensureCortexDebugInstalled: () => ensureCortexDebugInstalled(),
     deviceSupportFilesForPart: async (part, sourcePack) => {
       const selected = getDeviceProfile(part);

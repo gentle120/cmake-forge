@@ -197,6 +197,16 @@
   const flashOutputHint = document.getElementById('flash-output-hint');
   const quickFlashButton = document.getElementById('quick-flash');
   const cancelFlashButton = document.getElementById('cancel-flash');
+  const environmentHost = document.getElementById('environment');
+  const envArmGccRow = document.getElementById('env-armgcc');
+  const envArmGccDetail = document.getElementById('env-armgcc-detail');
+  const envArmGccInstall = document.getElementById('env-armgcc-install');
+  const envOpenOcdRow = document.getElementById('env-openocd');
+  const envOpenOcdDetail = document.getElementById('env-openocd-detail');
+  const envOpenOcdInstall = document.getElementById('env-openocd-install');
+  const envProgress = document.getElementById('env-progress');
+  const envProgressBar = document.getElementById('env-progress-bar');
+  const envProgressText = document.getElementById('env-progress-text');
 
   const vendorField = createSelectField('厂商', (value) => {
     if (!state) return;
@@ -319,7 +329,8 @@
     applyOptions(deviceField.select, state.devices, selection.part);
     const mcuToolchainOptions = Array.isArray(state.mcuToolchains) ? state.mcuToolchains : [];
     applyOptions(toolchainField.select, mcuToolchainOptions, selection.buildToolchain);
-    toolchainField.wrapper.hidden = mcuToolchainOptions.length === 0;
+    // Only one family is offered; a one-item dropdown is noise.
+    toolchainField.wrapper.hidden = mcuToolchainOptions.length <= 1;
     const toolchain = selectedOption(mcuToolchainOptions, selection.buildToolchain);
     toolchainNote.textContent = toolchain?.description || '';
     toolchainNote.hidden = !toolchainNote.textContent || mcuToolchainOptions.length === 0;
@@ -563,6 +574,38 @@
     return panel.panel;
   }
 
+  function syncEnvironment() {
+    if (!environmentHost || !state) return;
+    const environment = state.environment;
+    if (!environment) {
+      environmentHost.hidden = true;
+      return;
+    }
+    environmentHost.hidden = false;
+    const applyRow = (row, detail, button, tool, status) => {
+      row.classList.toggle('ready', status.ready);
+      row.classList.toggle('missing', !status.ready);
+      detail.textContent = status.ready ? status.detail : '未找到';
+      detail.title = status.detail;
+      button.hidden = status.ready;
+      button.disabled = Boolean(environment.installing) || busy;
+      button.dataset.tool = tool;
+    };
+    applyRow(envArmGccRow, envArmGccDetail, envArmGccInstall, 'armgcc', environment.armGcc);
+    applyRow(envOpenOcdRow, envOpenOcdDetail, envOpenOcdInstall, 'openocd', environment.openocd);
+    const progress = environment.progress;
+    const installing = Boolean(environment.installing);
+    envProgress.hidden = !installing && !progress;
+    if (progress) {
+      const percent = Number.isFinite(progress.percent) ? progress.percent : 0;
+      envProgressBar.style.width = `${percent}%`;
+      envProgressText.textContent = progress.message;
+    } else if (!installing) {
+      envProgressBar.style.width = '0%';
+      envProgressText.textContent = '';
+    }
+  }
+
   function render() {
     if (!state) return;
     applyOptions(projectRootSelect, state.projects, state.projectRoot);
@@ -586,6 +629,7 @@
     if (isMcu) {
       syncTargetSection();
       syncFlashSection();
+      syncEnvironment();
       if (mcuBlockedNotice) {
         mcuBlockedNotice.textContent = state.mcuBlockedReason || '';
         mcuBlockedNotice.hidden = !mcuBlockedNotice.textContent;
@@ -603,6 +647,7 @@
   }
 
   function applyDisabled() {
+    syncEnvironment();
     // An MCU generation command cannot succeed without a Pack serving the
     // selected series; disabling it with the reason on screen beats a click that
     // only produces an error. Listing the commands keeps a future non-MCU
@@ -836,6 +881,11 @@
       post({ type: 'detectFlash' });
       return;
     }
+    if (command === 'installArmGcc' || command === 'installOpenOcd') {
+      if (!state || busy) return;
+      post({ type: 'installTool', tool: command === 'installArmGcc' ? 'armgcc' : 'openocd' });
+      return;
+    }
     if (command === 'pickFirmware') {
       if (!state || busy) return;
       post({ type: 'pickFirmware' });
@@ -952,6 +1002,12 @@
         flashOutputDetails.hidden = false;
         flashOutputHint.textContent = `${lines.length} 行输出`;
       }
+      return;
+    }
+    if (message.type === 'toolProgress') {
+      envProgress.hidden = false;
+      envProgressBar.style.width = `${Number.isFinite(message.percent) ? message.percent : 0}%`;
+      envProgressText.textContent = message.message || '';
       return;
     }
     if (message.type === 'workspaceScan') {

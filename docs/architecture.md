@@ -16,7 +16,7 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 | --- | --- | --- | --- |
 | `src/devices/` | 芯片档案注册表（DeviceProfile）、厂商元数据、校验、Pack 导入持久化 | vendorRegistry、generator 契约 | UI、烧录细节 |
 | `src/packs/` | zip 读取、PDSC/SVD 解析、已安装 Pack 身份解析、厂商选项装配、在线索引 | 无 vscode 依赖 | 档案注册（交给 devices） |
-| `src/env/` | Keil Pack 目录发现、烧录/调试工具与编译链扫描算法（PATH 只读，不执行进程） | node fs（注入式） | 设置写入、身份解析（交给 packs） |
+| `src/env/` | Keil Pack 目录发现、烧录/调试工具与编译链扫描算法（PATH 只读，不执行进程）、GNU Arm 工具链与 OpenOCD 的下载/解压/校验（`toolDownloads.ts`） | node fs、net（注入式）、系统 `tar` | 设置写入策略、身份解析（交给 packs） |
 | `src/generator/` | 纯函数字符串生成器（CMake/toolchain/linker/startup/flash/debug） | DeviceProfile、Flash*Profile 契约 | 文件系统、UI |
 | `src/generation/` | 生成工作流编排 | generator、scanner、integration、shared | 芯片数据、烧录执行、编译执行 |
 | `src/integration/` | 生成产物的宿主接线（C/C++ IntelliSense、工作区设置写入） | generator 契约、VS Code API | 生成器逻辑、芯片数据、编译执行 |
@@ -37,7 +37,7 @@ MCU 路径：目录加载（vendor→pack→version：已安装 PDSC 身份、�
 
 烧录路径：侧栏只读扫描 `build/debug`、`build/release` 下的 ELF，构建目录没有产物时回退到工作区最新的 ELF（或用户手选的 ELF）回填固件行 →「检测探针」用当前 target cfg 依次试探针接口，`init` 后读 CPUID 与两个 DBGMCU IDCODE 窗口，解析出「Cortex-Mx · STM32Fxx · DEV_ID」，把探测成功的接口写成当前探针、按 `chipTargets` 的 DEV_ID 表推导 target，并把三行芯片信息写进「烧录输出」 → 用户点「烧录」→ OpenOCD 后端由 `openocdDirect` 拼 `program … verify reset exit` 并 spawn `openocd`，J-Link/pyOCD 后端拼 `flash.py` 参数 → `flashRunner.runTool` 解析阶段行 → 进度/输出回灌 Webview → 失败经 `flashDiagnostics` 映射为可执行提示。
 
-工具链路径：插件不保存 ARM GNU 路径。生成的工具链文件、Cortex-Debug 配置和 IntelliSense 只写 `arm-none-eabi-*` 命令名，解析交给 `PATH` 或 CMake Tools kit。
+工具链路径：MCU 方向只提供 GNU Arm GCC。`cmakeForge.armGccPath` 为空时生成文件写 `arm-none-eabi-*` 命令名，由 `PATH` 解析；该设置为已安装工具链的 bin 目录时，provider 合成一个已检测条目，生成文件改写绝对编译器路径。侧栏「编译与烧录工具」在缺少工具链或 OpenOCD 时提供「下载」：`toolDownloads` 取官方 zip（Arm 15.2.rel1、xpack OpenOCD 0.12.0-7），用系统 `tar` 解压到全局存储 `tools/<tool>-<version>/`，校验可执行文件后写设置并失效工具链缓存。
 
 ## Cross-Cutting Constraints
 

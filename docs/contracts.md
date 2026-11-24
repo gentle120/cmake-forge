@@ -18,19 +18,20 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - 厂商必须先在 `vendorRegistry` 注册（id 唯一，`getVendorMetadata` 未知 id 抛错）。
 - 命令 ID：`cmakeForge.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/importPack/installPackOnline/removePack/installCorePack`；`package.json` 贡献的命令必须与 `extension.ts` 注册的命令一一对应。
 - 工作区可包含多个工程；扫描、生成、烧录与调试都以当前选中的工程根目录为边界，不跨工程合并源文件。目标工程按工作区持久化；发现结果只有一个时自动选择，多个时保留有效选择或等待用户选择。空工作区根目录仍作为可扫描目标保留；扫描返回零个源文件、头文件目录和宏，并明确提示没有 C/C++ 或汇编源文件。
-- 插件不提供构建命令、构建执行器或 ARM GNU 路径设置；配置、编译与调试分别由 CMake Tools 与 Cortex-Debug 拥有。armgcc 生成产物只写可移植命令名 `arm-none-eabi-gcc/g++/objcopy/size`，不含机器绝对路径；armclang 因 Keil 通常不在 `PATH` 而写绝对 `armclang`/`fromelf` 路径，并生成 `.sct` 而不是 `.ld`。
+- 插件不提供构建命令或构建执行器；`cmakeForge.armGccPath` 只用于定位编译器，构建仍由 CMake Tools 拥有。配置、编译与调试分别由 CMake Tools 与 Cortex-Debug 拥有。armgcc 在 `PATH` 内时只写可移植命令名 `arm-none-eabi-gcc/g++/objcopy/size`，`cmakeForge.armGccPath` 指向已安装工具链时改写为该目录下的绝对路径；侧栏只提供 GNU Arm GCC 一个编译家族，不再提供 armclang/clang。
 - 生成文件落盘前必须经过覆盖确认（`shared/generatedFiles.ts`）：只有磁盘内容与新输出不同、或会被生成过程删除的文件才进入确认；内容完全一致的重新生成不提示、不重写。MCU/Linux/桌面三个方向与仅 flash.py 的生成共用这一判据。
 - 内核向量表 16 槽 + `interruptHandlers` 按序拼接，槽位 `'0'` 表示保留（`startupGenerator`）；异常槽按内核架构族选择：ARMv6-M（M0/M0+/M1/SC000 与 ARMv8-M baseline 的 M23）保留 M0 布局，ARMv7-M（M3/M4/M7）保留 UsageFault 后四个保留字，ARMv8-M mainline（M33/M35P/M55）首保留字为 `SecureFault_Handler`。
 
 ## Data And Persistence
 
+- 工具安装：侧栏「编译与烧录工具」在缺少 ARM GNU 工具链或 OpenOCD 时显示「下载」，由扩展下载官方发布包（Arm 15.2.rel1、xpack OpenOCD 0.12.0-7）、用系统 `tar` 解压到扩展全局存储的 `tools/`，成功后写 `cmakeForge.armGccPath` / `cmakeForge.openocdPath`；下载必须按百分比回报进度、失败或取消后删除半成品目录，不得把不完整的解压结果当成已安装。
 - Pack 导入持久化在扩展 globalStorage：归档来源保存到 `packs/<vendor>/<file>.pack`，`packs.json`（version 2）记录 `source`、真实 `archiveFile` 和序列化 DeviceProfile；同 part 重复导入覆盖旧版。
 - Pack 导入只解压/读取 PDSC、SVD 与启动文件条目（`isPackDeviceSourceEntry`）；文档、示例等无关条目不进入解析、不读入内存（真实 DFP 达数百 MB）。
 - 同一 globalStorage 的 Pack 写入串行执行；`packs.json` 先写临时文件、校验后原子替换，损坏的现有文件报错且不得被静默清空。
 - Keil 安装目录中的已解压 Pack 以目录引用方式导入（`packs.json` 记录元数据但不复制目录）；目录旁存在 `.pack` 时记录其绝对路径，删除导入记录不触碰原目录。
 - `CMAKE_EMBEDDED_SKIP_FIRMWARE_BUILDS=1` 跳过真实固件编译用例；CI（release.yml）默认置位。
 - `.mcu-cmake.json`、`.vscode/launch.json`、`c_cpp_properties.json` 的写入保留用户已有内容（JSONC 解析合并）；三个方向的 `c_cpp_properties.json` 与 settings 编辑共用 `shared/cppPropertiesFile.ts`，CMakePresets 共用 `shared/cmakePresets.ts`。
-- `.linux-cmake.json` 记录所选工具链、输出类型、宏定义与可选 `sysroot`，重新生成时以扫描结果重建工程结构并回读这四项；`sysroot` 非空时工具链文件写 `CMAKE_SYSROOT` 与 `CMAKE_FIND_ROOT_PATH*`（PROGRAM NEVER，其余 ONLY），空值不写任何 sysroot 设置；`.native-cmake.json` 记录目标类型与语言标准，命令面板以保存值为默认选项。MCU 的编译链选择按工作区保存：固定提供 armgcc / armclang / clang（优先 STARM，否则 LLVM）三个家族，扫描只决定默认项与“已检测/未检测”提示，未检测到的家族仍可选择并只写命令名；armgcc 写工具链前缀与命令名，armclang 写绝对 `armclang` 路径、`.sct` 分散加载文件并跳过 newlib 的 `syscalls.c`/`sysmem.c`，clang 按可用性优先 ATfE（picolibc）、STARM（`starm-clang.cmake`、picolibc `-lcrt0-hosted`），否则写 LLVM `--target=arm-none-eabi`、`.ld` 链接脚本、`-nostdlib -fuse-ld=lld` 并跳过 C 运行时。桌面方向不提供编译链选择，生成器不写 `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER`，编译器由 CMake Tools / CMake 自动检测。
+- `.linux-cmake.json` 记录所选工具链、输出类型、宏定义与可选 `sysroot`，重新生成时以扫描结果重建工程结构并回读这四项；`sysroot` 非空时工具链文件写 `CMAKE_SYSROOT` 与 `CMAKE_FIND_ROOT_PATH*`（PROGRAM NEVER，其余 ONLY），空值不写任何 sysroot 设置；`.native-cmake.json` 记录目标类型与语言标准，命令面板以保存值为默认选项。MCU 的编译链固定为 GNU Arm GCC（`family === 'gcc'`），扫描只决定默认项与“已检测/未检测”提示；`cmakeForge.armGccPath` 存在时把它合成一个已检测条目并写绝对编译器路径。桌面方向不提供编译链选择，生成器不写 `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER`，编译器由 CMake Tools / CMake 自动检测。
 
 ## Compatibility
 
@@ -83,6 +84,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 | DeviceProfile 注册表唯一性与校验 | `src/test/deviceProfile.test.ts` | 侧边栏五级选择流 |
 | Pack 导入→档案可查 | `src/test/packParser.test.ts`、`src/test/importedProfiles.test.ts` | 扩展宿主导入真实 pack 后生成 |
 | 三后端 flash.py/launch.json | `src/test/flashScriptGenerator.test.ts`、`src/test/debugConfigGenerator.test.ts` | 本机 J-Link/pyOCD 真机烧录（用户侧） |
+| 工具一键安装 | `src/test/toolDownloads.test.ts` | 侧栏「下载」→ 进度条 → 设置写入；真实 OpenOCD 安装与 tar 解压验证 |
 | 烧录检测、执行与失败诊断 | `src/test/firmwareDiscovery.test.ts`、`src/test/flashRunner.test.ts`、`src/test/flashDiagnostics.test.ts`、`src/test/openocdDirect.test.ts` | 侧栏「检测探针」读 CPUID →「烧录」真实探针 |
 | 生成工程可编译 | `src/test/cmakeBuild.test.ts` | `cmake --preset debug && cmake --build --preset debug` |
 | Keil Pack 发现与 PDSC 身份 | `src/test/toolchainScanner.test.ts`、`src/test/installedPacks.test.ts` | 扩展宿主「导入 Pack」选择 Keil 已安装 Pack |

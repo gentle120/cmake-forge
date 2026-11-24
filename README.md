@@ -19,14 +19,10 @@ cmake --build --preset debug
 - 芯片数据全部来自 CMSIS Pack：内置 STM32、GD32、NXP、nRF、Microchip 系列，其它厂商
   可导入本地 `.pack`、Keil 已安装目录或在线安装；缺少 `core_cm*.h` 时安装 `ARM.CMSIS`。
 - 生成时按内核裁剪 CMSIS 头，只复制器件头、`system_*.c` 与必需寄存器头。
-- 编译链固定三种，扫描只决定默认项和“已检测/未检测”提示，未检测到也可选择：
-  - **armgcc**：GNU 工具链 + `.ld` + GNU 启动文件；
-  - **armclang**（Keil / Arm Compiler 6）：armclang + `.sct` + fromelf；
-  - **clang**：按可用性优先选择 **Arm Toolchain for Embedded (ATfE)**（ARM 官方
-    通用嵌入式 LLVM，带 picolibc）→ **STARM clang**（STM32CubeIDE/CubeMX，
-    `starm-clang.cmake`）→ 独立 LLVM clang（LLD + `-nostdlib`）。
-- ATfE/STARM 自带 picolibc；独立 LLVM clang 需要 `lld` 且不提供标准 C 运行时。
-  armclang 使用 Arm C 库，`printf` 等函数需自行 retarget。
+- 编译链固定为 **GNU Arm GCC**（`arm-none-eabi-*` + `.ld` + GNU 启动文件）：扫描只决定
+  “已检测/未检测”提示；侧栏可直接下载安装，生成时写命令名或 `armGccPath` 下的绝对路径。
+  侧栏不再提供 armclang / clang 选项（生成器仍保留这两条分支，供已有工程沿用），
+  `cmakeForge.armGccPath` 指向哪套工具链就用哪套。
 - 侧栏烧录区：「检测探针」读 CPUID 与 DBGMCU IDCODE，显示内核/系列/DEV_ID，自动选中
   探测成功的探针接口，并按 DEV_ID 把 target 切到对应系列（未收录的芯片保留当前目标）；
   检测结果会写进「烧录输出」。固件默认取 `build/debug`、`build/release` 下最新的 ELF，
@@ -49,7 +45,10 @@ cmake --build --preset debug
 
 - VS Code 1.85+、CMake Tools、CMake ≥ 3.22、Ninja。
 - C/C++ 扩展推荐安装；不装也能生成工程，只是没有 IntelliSense 集成。
-- MCU 需要 Cortex-Debug 与 `arm-none-eabi-gdb`，以及三种编译链之一。
+- MCU 需要 Cortex-Debug 与 `arm-none-eabi-gdb`，编译链固定为 GNU Arm GCC。
+- 侧栏「编译与烧录工具」会检测 ARM GNU 工具链与 OpenOCD；缺少时点「下载」，扩展会
+  下载官方发布包（Arm 15.2.rel1、xpack OpenOCD 0.12.0-7）、解压到扩展全局存储并把路径
+  写进 `cmakeForge.armGccPath` / `cmakeForge.openocdPath`，带百分比进度。
 - Linux 需要对应前缀的 `gcc`/`g++`。
 
 **F5 立刻退出**：确认已装 Cortex-Debug、`arm-none-eabi-gdb` 在 `PATH`、先构建过

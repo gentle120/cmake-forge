@@ -1316,3 +1316,69 @@ input:disabled {
     display: none;
   }
 }
+
+/* Environment card: two tool rows plus a shared download progress bar. */
+.environment {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.env-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--vscode-panel-border, transparent);
+}
+
+.env-row.ready {
+  border-color: transparent;
+}
+
+.env-row.missing {
+  border-color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.env-name {
+  font-weight: 600;
+}
+
+.env-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ce-meta, var(--vscode-descriptionForeground));
+  font-size: 0.9em;
+}
+
+.env-row.ready .env-detail {
+  color: var(--vscode-testing-iconPassed, #73c991);
+}
+
+.env-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.env-progress-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--vscode-progressBar-background, rgba(128, 128, 128, 0.3));
+  overflow: hidden;
+}
+
+.env-progress-bar {
+  width: 0;
+  height: 100%;
+  background: var(--vscode-progressBar-background, #0e70c0);
+  transition: width 120ms linear;
+}
+
+.env-progress-text {
+  font-size: 0.9em;
+  color: var(--ce-meta, var(--vscode-descriptionForeground));
+}
