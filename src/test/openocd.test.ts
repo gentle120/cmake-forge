@@ -20,6 +20,17 @@ test('resolves an absolute OpenOCD path only when the file exists', async () => 
   }
 });
 
+test('accepts a quoted absolute path pasted from Explorer', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'openocd-quoted-'));
+  try {
+    const executable = join(root, 'openocd.exe');
+    await writeFile(executable, '');
+    assert.equal(resolveOpenOcdExecutable(`"${executable}"`), executable);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('finds a bare command name on PATH and honours the platform suffix', async () => {
   const root = await mkdtemp(join(tmpdir(), 'openocd-path-'));
   try {

@@ -373,12 +373,15 @@ function tarExecutable(): string {
   return existsSync(bundled) ? bundled : 'tar';
 }
 
-async function extractWithTar(archive: string, destination: string): Promise<void> {
-  mkdirSync(destination, { recursive: true });
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(tarExecutable(), ['-xf', archive, '-C', destination], {
-      windowsHide: true
-    });
+function powershellExecutable(): string {
+  const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
+  const bundled = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  return existsSync(bundled) ? bundled : 'powershell.exe';
+}
+
+function runExtractor(executable: string, args: string[]): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(executable, args, { windowsHide: true });
     let stderr = '';
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf8');
@@ -389,9 +392,45 @@ async function extractWithTar(archive: string, destination: string): Promise<voi
         resolve();
         return;
       }
-      reject(new Error(`解压失败（tar 退出码 ${code}）${stderr.trim() ? `：${stderr.trim()}` : ''}`));
+      reject(new Error(`${executable} 退出码 ${code}${stderr.trim() ? `：${stderr.trim()}` : ''}`));
     });
   });
+}
+
+function quotePowerShell(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+/**
+ * Extracts the archive with the bundled `tar.exe` and falls back to
+ * PowerShell's `Expand-Archive`.
+ *
+ * Windows only ships `tar.exe` since 10 1803; on older or trimmed-down
+ * machines a download would otherwise unpack into nothing and report a bare
+ * ENOENT. `Expand-Archive` exists since PowerShell 5 / .NET 4.5.
+ */
+async function extractWithTar(archive: string, destination: string): Promise<void> {
+  mkdirSync(destination, { recursive: true });
+  try {
+    await runExtractor(tarExecutable(), ['-xf', archive, '-C', destination]);
+    return;
+  } catch (first) {
+    try {
+      await runExtractor(powershellExecutable(), [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `Expand-Archive -LiteralPath ${quotePowerShell(archive)} -DestinationPath ${quotePowerShell(destination)} -Force`
+      ]);
+      return;
+    } catch (second) {
+      const primary = first instanceof Error ? first.message : String(first);
+      const fallback = second instanceof Error ? second.message : String(second);
+      throw new Error(`解压失败：${primary}；PowerShell 回退也失败：${fallback}`);
+    }
+  }
 }
 
 /**

@@ -10,6 +10,7 @@
 
 import { statSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
+import { normalizeConfiguredPath } from '../shared/configuredPath';
 
 function isFile(candidate: string): boolean {
   try {
@@ -33,7 +34,7 @@ export function resolveOpenOcdExecutable(
   configured: string,
   environment: NodeJS.ProcessEnv = process.env
 ): string | undefined {
-  const value = configured.trim();
+  const value = normalizeConfiguredPath(configured, environment);
   if (!value) {
     return undefined;
   }

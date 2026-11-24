@@ -38,6 +38,12 @@ test('maps an OpenOCD config file that cannot be opened', () => {
   }
 });
 
+test('maps a probe the debugger cannot find', () => {
+  const diagnosis = diagnose(['Error: unable to find a matching CMSIS-DAP device']);
+  assert.equal(diagnosis.title, '没有找到调试探针');
+  assert.match(diagnosis.detail, /CMSIS-DAP/);
+});
+
 test('maps a busy probe or driver failure', () => {
   for (const line of ['Error: LIBUSB_ERROR_ACCESS', 'Error: open failed', 'Error: debug port already in use']) {
     const diagnosis = diagnose([line]);

@@ -53,6 +53,20 @@ const LINE_PATTERNS: LinePattern[] = [
     ]
   },
   {
+    title: '没有找到调试探针',
+    matches: (line) =>
+      line.includes('unable to find a matching') ||
+      line.includes('no j-link found') ||
+      line.includes('no jlink found') ||
+      line.includes('no cmsis-dap') ||
+      line.includes("couldn't find an st-link") ||
+      line.includes('no device found'),
+    actions: [
+      '检查 USB 线是否插在调试口上，换一根数据线再试。',
+      'ST-Link / DAPLink 需要 WinUSB 驱动（可用 Zadig 安装）；J-Link 需先装 SEGGER 驱动。'
+    ]
+  },
+  {
     title: '探针被占用或驱动异常',
     matches: (line) =>
       line.includes('libusb_error') ||

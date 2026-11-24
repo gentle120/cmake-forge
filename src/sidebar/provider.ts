@@ -29,6 +29,7 @@ import {
 } from '../flash/backendProfiles';
 import type { FlashDeviceContext, FlashExecutablePaths } from '../generator/flashScriptGenerator';
 import { missingOpenOcdNotice, resolveOpenOcdExecutable } from '../flash/openocd';
+import { normalizeConfiguredPath } from '../shared/configuredPath';
 import {
   buildOpenOcdFlashArgs,
   detectChip,
@@ -359,10 +360,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
 
   /** `cmakeForge.armGccPath`: a bin directory or the compiler executable itself. */
   private configuredArmGccToolchain(): BuildToolchain | undefined {
-    const configured = vscode.workspace
-      .getConfiguration('cmakeForge')
-      .get<string>('armGccPath', '')
-      .trim();
+    const configured = normalizeConfiguredPath(
+      vscode.workspace.getConfiguration('cmakeForge').get<string>('armGccPath', '')
+    );
     if (!configured) {
       return undefined;
     }
@@ -1051,14 +1051,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     const configured = vscode.workspace
       .getConfiguration('cmakeForge')
       .get<string>('openocdPath', 'openocd');
-    return configured?.trim() || 'openocd';
+    return normalizeConfiguredPath(configured) || 'openocd';
   }
 
   private executablePaths(): FlashExecutablePaths {
     const configuration = vscode.workspace.getConfiguration('cmakeForge');
     return {
-      jlink: configuration.get<string>('jlinkPath', 'JLink')?.trim() || 'JLink',
-      pyocd: configuration.get<string>('pyocdPath', 'pyocd')?.trim() || 'pyocd'
+      jlink: normalizeConfiguredPath(configuration.get<string>('jlinkPath', 'JLink')) || 'JLink',
+      pyocd: normalizeConfiguredPath(configuration.get<string>('pyocdPath', 'pyocd')) || 'pyocd'
     };
   }
 
@@ -1458,13 +1458,51 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     this.post({ type: 'notification', level: 'info', message: `已选择固件：${basenamePath(firmwarePath)}` });
   }
 
+  /**
+   * `pip install --user` puts `pyocd.exe` in the user's Scripts directory,
+   * which is usually not on `PATH`. Ask Python where that is and remember the
+   * absolute path so the environment card flips to installed without a reload.
+   */
+  private async pyocdScriptPath(
+    python: string,
+    storageRoot: string
+  ): Promise<string | undefined> {
+    try {
+      const result = await runTool({
+        executable: python,
+        args: [
+          '-c',
+          'import sysconfig; print(sysconfig.get_path("scripts", "nt_user") or "")'
+        ],
+        cwd: storageRoot,
+        tailLines: 5
+      });
+      if (!result.ok) {
+        return undefined;
+      }
+      const directory = result.outputTail
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .at(-1);
+      if (!directory) {
+        return undefined;
+      }
+      const suffix = process.platform === 'win32' ? '.exe' : '';
+      const candidate = join(directory, `pyocd${suffix}`);
+      return existsSync(candidate) ? candidate : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Python executable: the setting wins, then the platform launcher. */
   private pythonPath(): string {
     const configured = vscode.workspace
       .getConfiguration('cmakeForge')
       .get<string>('pythonPath', '');
-    if (configured && configured.trim()) {
-      return configured.trim();
+    const normalized = normalizeConfiguredPath(configured);
+    if (normalized) {
+      return normalized;
     }
     return process.platform === 'win32' ? 'python' : 'python3';
   }
@@ -1978,14 +2016,31 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
               result: { ok: false, message: '已取消安装 pyOCD。', files: [] }
             });
           } else if (result.ok) {
-            this.post({
-              type: 'operationFinished',
-              result: {
-                ok: true,
-                message: 'pyOCD 已安装。若侧栏仍显示未安装，请重开窗口；路径特殊时填写 cmakeForge.pyocdPath。',
-                files: []
-              }
-            });
+            const installed = await this.pyocdScriptPath(executable, storageRoot);
+            if (installed) {
+              await vscode.workspace
+                .getConfiguration('cmakeForge')
+                .update('pyocdPath', installed, vscode.ConfigurationTarget.Global);
+              this.post({
+                type: 'operationFinished',
+                result: {
+                  ok: true,
+                  message: `pyOCD 已安装并可用：${installed}`,
+                  files: []
+                }
+              });
+            } else {
+              this.post({
+                type: 'operationFinished',
+                result: {
+                  ok: true,
+                  message:
+                    'pyOCD 已安装，但没找到 pyocd.exe：pip 的 Scripts 目录可能不在 PATH，请在 cmakeForge.pyocdPath 里填写它的完整路径。',
+                  files: []
+                }
+              });
+            }
+            this.postState();
           } else {
             const reason = result.spawnError ?? result.outputTail.filter(Boolean).at(-1) ?? '未知错误';
             this.post({
