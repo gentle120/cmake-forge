@@ -1811,6 +1811,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
             await vscode.workspace.getConfiguration('cmakeForge')
               .update('armGccPath', installed.binDir, vscode.ConfigurationTarget.Global);
             this.buildToolchainCache = undefined;
+            // The environment card must flip to "已安装" before the (possibly
+            // slow) workspace scan below starts, otherwise the sidebar keeps
+            // claiming the tool is missing while the toast says it is done.
+            this.toolInstallRunning = undefined;
+            this.toolProgress = undefined;
+            this.busy = false;
+            this.postState();
             this.post({
               type: 'operationFinished',
               result: {
@@ -1823,6 +1830,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
             const installed = await installOpenOcd(options);
             await vscode.workspace.getConfiguration('cmakeForge')
               .update('openocdPath', installed.executable, vscode.ConfigurationTarget.Global);
+            // Same as above: a tool that just finished installing must not be
+            // reported as missing while firmware detection catches up.
+            this.toolInstallRunning = undefined;
+            this.toolProgress = undefined;
+            this.busy = false;
+            this.postState();
             this.post({
               type: 'operationFinished',
               result: {
