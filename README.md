@@ -1,78 +1,84 @@
 # CMake Forge
 
-VS Code 插件：为 **MCU 固件**、**Linux / SoC 交叉编译**、**桌面 C/C++** 生成可直接构建的
-CMake 工程。插件生成文件，构建与调试交给 CMake Tools、Cortex-Debug；烧录在侧栏一键完成：
-OpenOCD 后端直接调用 `openocd`（不经过 `flash.py`），J-Link / pyOCD 后端使用生成的
-`flash.py`。
+在 VS Code 里生成**可直接构建**的 CMake 工程：ARM Cortex-M 固件、Linux/SoC 交叉编译、桌面 C/C++。芯片数据来自 CMSIS Pack，生成后交给 CMake Tools 与 Cortex-Debug 构建、调试，烧录在侧栏一键完成。
 
-## 快速开始
+## 功能
 
-活动栏打开 **CMake Forge** → 侧栏选择方向与目标 → 「生成工程」：
+- **向导式 MCU 工程**：侧栏按 厂商 → 系列 → Pack → 版本 → 型号 选择，生成 `CMakeLists.txt`、`CMakePresets.json`、工具链文件、链接脚本/分散加载、启动文件与 `syscalls`；CMSIS 头按内核裁剪后复制进工程。
+- **芯片数据来自 Pack**：支持本地 `.pack`、Keil 安装目录与 CMSIS 在线索引；未收录厂商导入后自动注册，无需手写芯片档案。
+- **一键烧录**：检测探针读取 CPUID 与 DBGMCU ID，自动匹配内核、系列与烧录 target；OpenOCD 后端直接调用 `openocd`，J-Link/pyOCD 后端使用生成的 `flash.py`，带阶段进度、输出与失败诊断。
+- **Cortex-Debug 配置**：生成 launch/attach 两条配置，可带 SVD、`preLaunchTask` 与工具链前缀。
+- **工具链只保留 GNU Arm GCC**：未检测到 `arm-none-eabi-gcc` 或 OpenOCD 时，通知栏提供下载；pyOCD 通过 pip 安装，J-Link 跳转 SEGGER 下载页。
+- **三种目标**：MCU 固件、Linux/SoC（loongarch64、aarch64、armv7hf、riscv64）、桌面 C/C++（编译器由 CMake Tools Kit 选择）。
+
+## 安装
+
+扩展市场搜索 **CMake Forge**，或安装 `cmake-forge-1.0.2.vsix`：
+
+```powershell
+code --install-extension cmake-forge-1.0.2.vsix
+```
+
+扩展把 `ms-vscode.cmake-tools` 与 `marus25.cortex-debug` 声明为扩展依赖，VS Code 会一并安装；离线环境需手动补装这两个 VSIX。
+
+## 快速开始（MCU）
+
+1. 活动栏打开 **CMake Forge**，选择厂商、系列、Pack、版本与型号。
+2. 点「生成工程」，选择工程根目录。
+3. 命令行构建：
 
 ```powershell
 cmake --preset debug
 cmake --build --preset debug
 ```
 
-## MCU 固件
-
-- 芯片数据全部来自 CMSIS Pack：内置 STM32、GD32、NXP、nRF、Microchip 系列，其它厂商
-  可导入本地 `.pack`、Keil 已安装目录或在线安装；缺少 `core_cm*.h` 时安装 `ARM.CMSIS`。
-- 生成时按内核裁剪 CMSIS 头，只复制器件头、`system_*.c` 与必需寄存器头。
-- 编译链固定为 **GNU Arm GCC**（`arm-none-eabi-*` + `.ld` + GNU 启动文件）：扫描只决定
-  “已检测/未检测”提示；侧栏可直接下载安装，生成时写命令名或 `armGccPath` 下的绝对路径。
-  侧栏不再提供 armclang / clang 选项（生成器仍保留这两条分支，供已有工程沿用），
-  `cmakeForge.armGccPath` 指向哪套工具链就用哪套。
-- 侧栏烧录区：「检测探针」读 CPUID 与 DBGMCU IDCODE，显示内核/系列/DEV_ID，自动选中
-  探测成功的探针接口，并按 DEV_ID 把 target 切到对应系列（未收录的芯片保留当前目标）；
-  检测结果会写进「烧录输出」。固件默认取 `build/debug`、`build/release` 下最新的 ELF，
-  构建目录为空时回退到工作区最新的 ELF，也可手动选择；一键烧录带阶段进度、输出与失败诊断。
-- 可选 `flash.py`（J-Link / pyOCD 后端）与 Cortex-Debug 配置（可带 SVD 与 `preLaunchTask`，
-  launch/attach 两条配置）。
-
-## Linux / SoC
-
-`loongarch64`、`aarch64`、`armv7hf`、`riscv64` 四种前缀，按
-`CROSS_COMPILE` → `CC`/`CXX` → `PATH` 查找，只写命令名；可选 `CMAKE_SYSROOT`。
-
-## 桌面 C/C++
-
-不提供编译链选择，由 CMake Tools 的 Kit 选择/切换编译器；CMakeLists 不写
-`CMAKE_C_COMPILER`，工程不绑定机器路径。CMake Tools 使用 Kit 模式，生成的
-`CMakePresets.json` 仅用于命令行构建。
+4. 侧栏点「检测探针」→「烧录」；需要调试时点「仅 Debug」生成 Cortex-Debug 配置后按 F5。
 
 ## 环境要求
 
-- VS Code 1.85+、CMake Tools、CMake ≥ 3.22、Ninja。
-- C/C++ 扩展推荐安装；不装也能生成工程，只是没有 IntelliSense 集成。
-- MCU 调试由 Cortex-Debug 提供（随扩展依赖自动安装），另需 `arm-none-eabi-gdb`；编译链固定为 GNU Arm GCC。
-- 侧栏「编译与烧录工具」会检测 ARM GNU 工具链与 OpenOCD；缺少时点「下载」，扩展会
-  下载官方发布包（GNU Arm GCC 15.2.1 与 xpack OpenOCD 0.12.0-7，默认走 `gh-proxy.com`
-  加速、失败回退官方直连），解压到扩展全局存储并把路径写进 `cmakeForge.armGccPath` /
-  `cmakeForge.openocdPath`，带百分比进度；支持分段时按 1 MB 分片、最多 24 路并发。
-  pyOCD 用 `python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pyocd`。
-- Linux 需要对应前缀的 `gcc`/`g++`。
+- VS Code 1.85+
+- CMake ≥ 3.22、Ninja、GNU Arm GCC（`arm-none-eabi-*`）
+- CMake Tools、Cortex-Debug（扩展依赖，自动安装）
+- 调试需要 `arm-none-eabi-gdb`；Linux 方向需要对应前缀的 `gcc`/`g++`
+- 烧录需要 OpenOCD、J-Link 或 pyOCD 之一，以及对应探针驱动
 
-**F5 立刻退出**：确认已装 Cortex-Debug、`arm-none-eabi-gdb` 在 `PATH`、先构建过
-`debug` 预设，并在调试下拉选中 `CMake Forge OpenOCD`。
+工具缺失时侧栏「编译与烧录工具」会给出下载入口，也支持在设置里填写自定义路径。
 
-## 命令与设置
+**F5 立即退出**：确认已安装 Cortex-Debug、`arm-none-eabi-gdb` 在 `PATH`、已构建 `debug` 预设，并在调试下拉中选择 `CMake Forge OpenOCD`。
 
-命令：`Generate MCU / Linux / C++ Project`、`Generate OpenOCD Flash Script`、
-`Generate Cortex-Debug Configuration`、`Import CMSIS Pack`、`Install Pack Online`、
-`Remove Imported CMSIS Pack`、`Install ARM CMSIS Core Pack`。
+## 设置
 
-设置：`cmakeForge.openocdPath`、`jlinkPath`、`pyocdPath`、`packMirror`。
+| 设置 | 说明 |
+| --- | --- |
+| `cmakeForge.armGccPath` | GNU Arm GCC 的 `bin` 目录或 `gcc` 路径；空值使用 `PATH` |
+| `cmakeForge.openocdPath` | `openocd` 可执行文件路径；空值使用 `PATH` |
+| `cmakeForge.jlinkPath` | `JLink.exe` 路径；空值使用 `PATH` |
+| `cmakeForge.pyocdPath` | `pyocd` 可执行文件路径；空值使用 `PATH` |
+| `cmakeForge.pythonPath` | 安装 pyOCD 使用的 Python；空值 `python`（Windows）/`python3` |
+| `cmakeForge.debugPreLaunchTask` | 生成调试配置时的 `preLaunchTask`，默认 `CMake: build`，空串不写 |
+| `cmakeForge.packMirror` | Pack 下载镜像的扁平目录地址，如 `https://example.com/packs/` |
+
+路径设置允许首尾空白、资源管理器「复制为路径」带出的引号、`%VAR%` 与开头的 `~`。
+
+## 命令
+
+`CMake Forge: Generate MCU Project`、`Generate Linux Project`、`Generate C++ Project`、`Generate OpenOCD Flash Script`、`Generate Cortex-Debug Configuration`、`Import CMSIS Pack`、`Install Pack Online`、`Remove Imported CMSIS Pack`、`Install ARM CMSIS Core Pack`。
 
 ## 开发
 
 ```powershell
 npm install
-npm test          # Node.js 22+
+npm run compile   # 清空 out 并编译
+npm test          # node --test，需 Node.js 22+
 npm run vsix      # 打包扩展
 ```
 
-修改后先 `npm run compile` 再按 F5。`fast-xml-parser` 是运行时依赖，打包时不要加
-`--no-dependencies`。
+`fast-xml-parser` 是运行时依赖，打包时不要加 `--no-dependencies`。修改后先 `npm run compile` 再按 F5 调试扩展。
 
-更多：[架构](docs/architecture.md) · [契约](docs/contracts.md) · [路线图](docs/roadmap.md)
+## 文档
+
+[架构](docs/architecture.md) · [契约](docs/contracts.md) · [路线图](docs/roadmap.md) · [变更记录](CHANGELOG.md) · [设计备注](docs/design-notes.md)
+
+## 许可证
+
+[MIT](LICENSE)

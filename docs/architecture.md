@@ -1,52 +1,52 @@
-# CMake Forge Architecture
+# Architecture
 
 ## Purpose
 
-VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可构建的 CMake 工程。芯片知识集中在数据注册表，生成器完全由档案（profile）驱动。
+VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可直接构建的 CMake 工程。芯片知识全部来自 CMSIS Pack，生成器由档案（`DeviceProfile`）驱动。
 
 ## System Context
 
-- 用户与外部系统：嵌入式开发者在 VS Code 侧边栏/命令面板选择方向与芯片；扩展读写工作区文件并生成 `.vscode/` 配置；配置与编译由 CMake Tools 负责，调试由 Cortex-Debug 负责（两者都声明为扩展依赖），烧录/调试还依赖用户 PATH 或设置中的 OpenOCD、arm-none-eabi、J-Link、pyOCD；CMSIS Pack 来自本地文件、Keil 安装库或 CMSIS 公开在线索引。
-- 运行与部署目标：VS Code 扩展宿主（Node，`engines.vscode ^1.85`），`main: ./out/extension.js`，tsc 编译，无打包器。
-- 信任与安全边界：生成文件落盘前有覆盖确认；烧录只由用户显式触发：OpenOCD 后端直接 spawn `openocd` 并回显完整命令行，J-Link/pyOCD 后端 spawn 生成的 `flash.py`；Pack 导入只读 zip 内容并复制到扩展 globalStorage。
+- 用户在侧栏或命令面板选择方向与芯片；扩展读写工作区文件并生成 `.vscode/` 配置。
+- 配置与编译由 CMake Tools 负责，调试由 Cortex-Debug 负责，两者是扩展依赖；烧录依赖 `PATH` 或设置里的 OpenOCD、J-Link、pyOCD。
+- 信任边界：生成文件落盘前有覆盖确认；烧录只在用户显式操作时执行（OpenOCD 直接 spawn，J-Link/pyOCD 走生成的 `flash.py`）；Pack 导入只读 zip 内容并复制到扩展 `globalStorage`。
 
-## Component Ownership
+## Components
 
-| Component | Responsibility | May depend on | Must not own |
-| --- | --- | --- | --- |
-| `src/devices/` | 芯片档案注册表（DeviceProfile）、厂商元数据、校验、Pack 导入持久化 | vendorRegistry、generator 契约 | UI、烧录细节 |
-| `src/packs/` | zip 读取、PDSC/SVD 解析、已安装 Pack 身份解析、厂商选项装配、在线索引 | 无 vscode 依赖 | 档案注册（交给 devices） |
-| `src/env/` | Keil Pack 目录发现、烧录/调试工具与编译链扫描算法（PATH 只读，不执行进程）、GNU Arm 工具链与 OpenOCD 的下载/解压/校验（`toolDownloads.ts`） | node fs、net（注入式）、系统 `tar` | 设置写入策略、身份解析（交给 packs） |
-| `src/generator/` | 纯函数字符串生成器（CMake/toolchain/linker/startup/flash/debug） | DeviceProfile、Flash*Profile 契约 | 文件系统、UI |
-| `src/generation/` | 生成工作流编排 | generator、scanner、integration、shared | 芯片数据、烧录执行、编译执行 |
-| `src/integration/` | 生成产物的宿主接线（C/C++ IntelliSense、工作区设置写入） | generator 契约、VS Code API | 生成器逻辑、芯片数据、编译执行 |
-| `src/flash/` | 烧录探针、target、后端注册表、固件发现、OpenOCD 直连参数与芯片标识解析、`flash.py` 子进程编排与失败诊断 | devices 档案（经 debugTarget 桥）、generator 的 flash.py 契约 | 编译执行、芯片数据 |
-| `src/scanner/` | 工作区源码/头文件/宏扫描 | vendorRegistry（宏前缀） | — |
-| `src/sidebar/` + `src/extension.ts` | 命令/QuickPick/Webview 交互层、状态持久化 | 全部下层注册表 API | 生成逻辑 |
-| `src/linux/`、`src/native/` | 独立的 Linux 交叉与桌面方向；桌面编译器由 CMake Tools 检测 | — | MCU 芯片数据 |
+| 目录 | 职责 | 不得拥有 |
+| --- | --- | --- |
+| `src/devices/` | DeviceProfile 注册表、厂商元数据、校验、导入记录持久化 | UI、烧录细节 |
+| `src/packs/` | zip 读取、PDSC/SVD 解析、Pack 身份、在线索引、下载 | 档案注册 |
+| `src/env/` | Keil 目录发现、工具链与烧录工具扫描（只读 PATH，不执行进程）、GNU Arm GCC 与 OpenOCD 下载/解压/校验 | 设置写入策略、身份解析 |
+| `src/generator/` | 纯字符串生成：CMake、工具链、链接脚本、启动文件、`flash.py`、调试配置 | 文件系统、UI |
+| `src/generation/` | 生成工作流编排、覆盖确认、旧文件清理 | 芯片数据、编译/烧录执行 |
+| `src/integration/` | 宿主接线：IntelliSense 配置、工作区设置写入 | 生成逻辑、芯片数据 |
+| `src/flash/` | 探针与 target 注册表、固件发现、OpenOCD 直连参数与芯片标识解析、失败诊断 | 编译执行、芯片数据 |
+| `src/scanner/` | 工作区源码/头文件/宏扫描 | — |
+| `src/sidebar/` + `src/extension.ts` | 命令、QuickPick、Webview 交互与状态持久化 | 生成逻辑 |
+| `src/linux/`、`src/native/` | Linux 交叉与桌面方向；桌面编译器交给 CMake Tools | MCU 芯片数据 |
 
 ## Dependency Direction
 
-生成路径：`sidebar/extension → generation → generator/scanner/integration → devices/flash/packs/env → shared`。插件没有构建路径：生成结束后由 CMake Tools 读取生成的 `CMakeLists.txt`、预设和工具链文件完成配置与编译。生成器与解析器无 vscode 依赖；宿主交互由 `sidebar/` 与 `extension.ts` 隔离。
+`sidebar/extension → generation → generator/scanner/integration → devices/flash/packs/env → shared`。插件没有构建路径：生成结束后由 CMake Tools 读取 `CMakeLists.txt`、预设与工具链文件完成配置与编译。生成器与解析器不依赖 `vscode`，宿主交互集中在 `sidebar/` 与 `extension.ts`。
 
 ## Data And Control Flow
 
-MCU 路径：目录加载（vendor→pack→version：已安装 PDSC 身份、已导入记录、在线版本）→ 选择版本激活并按其所有权取档案 → `getDeviceProfileForPack` → `generateMcuWorkflow` 生成 CMakeLists/toolchain/linker/startup/presets（flash.py 与 launch.json 经烧录后端 openocd/jlink/pyocd 参数化）→ 覆盖确认 → 写盘。烧录 target 经 `DeviceProfile.debugTarget` 桥接到 OpenOCD cfg；无映射的设备走 jlink/pyocd 后端。Pack 导入：zip 或解压目录→PDSC/SVD→DeviceProfile 合成→globalStorage 持久化→注册表注入；identity 与 profile 所有权都以导入存储路径为准。注册表无内置数据：`src/devices/` 只含运行时注册表，档案全部由 Pack 注入。
+**MCU 生成**：目录加载（vendor → series → pack → version）→ 激活版本并按所有权取档案 → `getDeviceProfileForPack` → `generateMcuWorkflow` 写 CMakeLists、工具链、链接脚本、启动文件、预设、`flash.py` 与调试配置 → 覆盖确认 → 写盘 → 复制 CMSIS/器件头 → 删除本次未产出的旧文件 → 失效旧构建缓存。
 
-编译路径：生成的工程文件交给 CMake Tools，由用户在其 UI 或 `cmake --preset` 中配置和编译；插件不启动编译器进程。
+**Pack 导入**：zip 或目录 → PDSC/SVD → DeviceProfile 合成 → 快照器件支持文件 → `globalStorage` 持久化 → 注入注册表。注册表无内置数据，档案全部由 Pack 注入。
 
-烧录路径：侧栏只读扫描 `build/debug`、`build/release` 下的 ELF，构建目录没有产物时回退到工作区最新的 ELF（或用户手选的 ELF）回填固件行 →「检测探针」用当前 target cfg 依次试探针接口，`init` 后读 CPUID 与两个 DBGMCU IDCODE 窗口，解析出「Cortex-Mx · STM32Fxx · DEV_ID」，把探测成功的接口写成当前探针、按 `chipTargets` 的 DEV_ID 表推导 target，并把三行芯片信息写进「烧录输出」 → 用户点「烧录」→ OpenOCD 后端由 `openocdDirect` 拼 `program … verify reset exit` 并 spawn `openocd`，J-Link/pyOCD 后端拼 `flash.py` 参数 → `flashRunner.runTool` 解析阶段行 → 进度/输出回灌 Webview → 失败经 `flashDiagnostics` 映射为可执行提示。
+**烧录**：侧栏只读扫描 `build/debug`、`build/release` 的 ELF，无产物时回退工作区最新 ELF（或手选）→「检测探针」用当前 target cfg 依次试探针，`init` 后读 CPUID 与两个 DBGMCU IDCODE 窗口 → 解析「Cortex-Mx · STM32Fxx · DEV_ID」，把探测成功的接口写成当前探针、按 DEV_ID 表推导 target，并把芯片信息写进「烧录输出」→「烧录」→ OpenOCD 后端拼 `program … verify reset exit` 并 spawn `openocd`，J-Link/pyOCD 拼 `flash.py` 参数 → 解析阶段行回灌进度，失败经 `flashDiagnostics` 映射为提示。
 
-工具链路径：MCU 方向只提供 GNU Arm GCC。`cmakeForge.armGccPath` 为空时生成文件写 `arm-none-eabi-*` 命令名，由 `PATH` 解析；该设置为已安装工具链的 bin 目录时，provider 合成一个已检测条目，生成文件改写绝对编译器路径。侧栏「编译与烧录工具」在缺少工具链或 OpenOCD 时提供「下载」：`toolDownloads` 取官方 zip（Arm 15.2.rel1、xpack OpenOCD 0.12.0-7），用系统 `tar` 解压到全局存储 `tools/<tool>-<version>/`，校验可执行文件后写设置并失效工具链缓存。
+**工具链**：MCU 只提供 GNU Arm GCC。`armGccPath` 为空时生成文件写 `arm-none-eabi-*` 命令名；设置为 bin 目录时合成已检测条目并写绝对路径。缺失时 `toolDownloads` 取官方 zip（GCC 15.2.1、OpenOCD 0.12.0-7），解压到 `tools/<tool>-<version>/`，校验可执行文件后写设置并失效缓存。
 
-## Cross-Cutting Constraints
+## Constraints
 
-- 错误处理：未知 part/target/probe/backend 抛显式 `Unsupported ...` 错误；不静默回退到其它档案。
-- 兼容性：`architecture` 仅 `'arm'`（RISC-V 排除）；生成文件名全部来自 profile 字段。
-- 性能/资源：注册表启动时构建并全量校验；Pack 解析在导入时一次性完成并持久化。
-- 信息卫生：生成内容中不含会话性文字。
+- 错误显式：未知 part/target/probe/backend 抛 `Unsupported …`，不静默回退。
+- 兼容：`architecture` 仅 `'arm'`；生成文件名全部来自档案字段。
+- 性能：注册表启动期构建并校验；Pack 在导入时解析一次并持久化。
+- 信息卫生：生成内容不含会话性文字，路径使用工程内相对路径或可移植命令名。
 
-## Verification Surfaces
+## Verification
 
-- 自动回归：`npm test`（node --test，纯函数层全覆盖，固件编译用例受 `CMAKE_EMBEDDED_SKIP_FIRMWARE_BUILDS=1` 门控）。
-- 操作面验收：VS Code 扩展宿主（F5）侧边栏生成流、生成产物的 cmake+ninja 真实构建、flash.py 语法检查、真实探针上的芯片检测与烧录。
+- 自动回归：`npm test`（`node --test`；真实固件编译用例由 `CMAKE_EMBEDDED_SKIP_FIRMWARE_BUILDS=1` 门控，CI 置位）。
+- 操作面：扩展宿主侧栏生成流、生成产物的 cmake + ninja 真实构建、`flash.py` 语法检查、真实探针上的检测与烧录。

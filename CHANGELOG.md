@@ -2,91 +2,25 @@
 
 ## 1.0.2
 
-- MCU 编译链固定 armgcc / armclang / clang 三种；clang 自动选择 ATfE、
-  STARM、独立 LLVM，工具链使用命令名（不写机器绝对路径），需把对应
-  `bin` 加入 PATH。
-- clang 目标三元组按内核生成：Cortex-M0/M1 `thumbv6m-none-eabi`、
-  M3/SC300 `thumbv7m-none-eabi`、M4/M7 `thumbv7em-none-eabi`、
-  M23 `thumbv8m.base-none-eabi`、M33/M35 `thumbv8m.main-none-eabi`；
-  GCC 仍使用 `arm-none-eabi-gcc`。
-- ATfE 使用 `clang` + picolibc（`-nostartfiles -fuse-ld=lld`），不写绝对
-  `clang.exe`；生成 `.vscode/settings.json` 的 `cmake.environment.PATH` 前置
-  ATfE bin，避免 CMake Tools 解析到普通 LLVM。STARM 使用 CubeMX 风格的
-  `starm-clang.cmake`，独立 LLVM 使用 `-nostdlib`。
-- 生成时自动清理 `build/debug|release` 中与本次编译链不一致的
-  `CMakeCache.txt`/`CMakeFiles`，避免切换后继续使用旧 `cl.exe` 或
-  `arm-none-eabi-gcc`。
-- 桌面方向使用 CMake Tools Kit 与 IntelliSense 配置提供器；C/C++ 扩展改为
-  推荐安装，兼容 VS Code 1.85（Node 18）。
-- 修复切换 ATfE/STARM 时旧 `cmake.environment.PATH` 残留、覆盖用户已有
-  `cmake.environment` 以及旧缓存仍解析到另一个 `clang` 的问题；切换回
-  GCC/桌面/Linux 时只移除本扩展写入的 PATH。
-- 修复编译器扫描在普通机器上同步遍历所有盘符导致激活卡顿（本机约 11 秒
-  降至约 0.1 秒），并保留对 PATH 外 ATfE / STARM / Keil 的识别。
-- 下载 `.pack` 时校验声明与实际 body 大小；扫描工作区跳过无权限目录/文件并
-  限制递归深度；设备快照目录过滤 legacy `..`；OpenOCD/J-Link 脚本正确转义
-  含 `$`、`[`、`]`、`"` 的路径。
-- 测试 462 项通过。
+- 侧栏一键检测探针：读 CPUID 与 DBGMCU IDCODE，显示内核/系列/DEV_ID，自动选中探针接口并按 DEV_ID 切换烧录 target。
+- 一键烧录：OpenOCD 后端直接调用 `openocd`（不经过 `flash.py`），带阶段进度、输出与失败诊断；J-Link/pyOCD 后端继续使用 `flash.py`。
+- 固件来源按「手选 > `build/<preset>` 最新 ELF > 工作区最新 ELF」解析；Cortex-Debug 生成 launch/attach 两条配置，可带 SVD 与 `preLaunchTask`。
+- MCU 编译链只保留 GNU Arm GCC；缺少工具链、OpenOCD、J-Link 或 pyOCD 时，通知栏提供下载入口、可取消进度与路径写回。
+- 工具下载走 GitHub 代理并回退官方地址，支持分段并发与超时兜底；解压在缺少 `tar` 时回退 PowerShell。
+- `marus25.cortex-debug` 声明为扩展依赖，随扩展安装。
+- 工具路径支持引号、`%VAR%` 与 `~` 展开；Pack 导入、生成、烧录的失败提示统一为可执行建议。
 
 ## 1.0.1
 
-- MCU 编译链固定提供 armgcc / armclang / LLVM clang 三种：扫描只决定默认项与
-  “已检测/未检测”提示，未检测到的家族仍可选择。
-- 新增 LLVM clang（`--target=arm-none-eabi`、LLD、`-nostdlib`）支持，并生成
-  `system/clang_runtime.c` 让 C++ 静态构造函数可运行；C++ 编译去掉
-  `-ffreestanding` 避免 `main` 被改名。
-- clang 优先使用 STM32CubeIDE 的 STARM clang：按 CubeMX 的
-  `cmake/starm-clang.cmake` 生成 picolibc（`-lcrt0-hosted -z norelro`）配置，
-  没有 STARM 时回退到 LLVM clang。
-- 修复含空格路径、armclang/LLVM C++、fromelf 缺失、跨家族 runtime 等构建问题。
-- 桌面方向改用 CMake Tools Kit 选择编译器，并用 CMake Tools 的 IntelliSense
-  配置提供器；C/C++ 扩展改为推荐安装，VS Code 1.85（Node 18）兼容。
-- 测试 447 项通过。
+- MCU 编译链固定 armgcc / armclang / LLVM clang，扫描只决定默认项与「已检测/未检测」提示。
+- clang 目标三元组按内核生成；ATfE 使用 picolibc，STARM 按 CubeMX 风格生成，独立 LLVM 使用 `-nostdlib`。
+- 生成时清理与本次编译链不一致的 `CMakeCache.txt` 与 `CMakeFiles`。
+- 桌面方向改用 CMake Tools Kit 选择编译器，C/C++ 扩展改为推荐安装。
+- 修复含空格路径、armclang/LLVM C++、clang 静态构造函数等构建问题。
 
 ## 1.0.0
 
-### 稳定性与安全修复
-
-- 修复 `.pack` 设备文件快照的路径穿越（Zip Slip）：含 `..`、绝对路径或盘符的
-  归档条目不再写进扩展存储；内核包/设备快照先写临时目录再替换，失败不破坏旧副本。
-- ZIP 读取限制条目数量与单条目解压大小，并校验 Zip64 声明的大小，避免压缩炸弹
-  或损坏包耗尽扩展宿主内存。
-- 含空格的工程路径、编译器路径与链接脚本/分散加载文件现在会被正确引用；
-  链接选项改由 `target_link_options` 交给 CMake 加引号。
-- armclang 工具链补上 `CMAKE_CXX_COMPILER_TARGET`；SC000/SC300 器件使用等价的
-  Cortex-M0/M3 `-mcpu`，不再生成无法编译的工程。
-- 生成流程先写新文件再删除旧文件；设备/编译链切换会清理旧的启动文件、链接脚本
-  与工具链文件，同时保留设备无关的 newlib stubs。
-- 修复侧栏「扫描工作区」在未选工程时进入永久 busy 的问题、目录重载失败清空
-  可用 Pack、OpenOCD 设置修改后不生效、多根工作区设置写错目标、多工程时下拉
-  显示与生成目标不一致，以及 J-Link `flash.py` 忽略 device/speed 参数与固件
-  路径未加引号的问题。
-
-
-首个公开版本。三个方向（MCU 固件 / Linux·SoC 交叉编译 / 桌面 C/C++）均可生成
-可直接用 CMake Tools 构建的工程，芯片数据全部来自 CMSIS Pack。
-
-- MCU：精选 5 家厂商（STM32、GD32、NXP、nRF、Microchip）与系列目录，其它厂商
-  导入 `.pack` 后自动注册；CMSIS 内核头按所选内核裁剪；器件头、`system_<stem>.h/.c`
-  与必需寄存器头按导入的 Pack 复制；生成可直接 F5 的 Cortex-Debug 配置与
-  `flash.py` 烧录脚本；支持 J-Link / ST-Link / DapLink 探针。
-- Linux：loongarch64 / aarch64 / armv7hf / riscv64 交叉工具链，可选 `CMAKE_SYSROOT`。
-- 桌面：本机工具链，可执行文件 / 静态库 / 动态库。
-- 侧栏按厂商→系列→Pack→版本→型号向导式生成，生成文件以树形展示。
-- 桌面方向移除编译链选择：编译器由 CMake Tools 的 Kit 选择，CMakeLists 不写
-  `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER`；桌面 `.vscode/settings.json` 设置
-  `cmake.useCMakePresets: never`，避免 CMake Tools 锁定预设而无法切换 Kit。
-- 不再把 C/C++ 扩展列为硬依赖：只保留 CMake Tools；没有 C/C++ 扩展时插件仍可
-  正常打开和生成工程（只是没有 IntelliSense 集成）。
-- LLVM clang 工程生成极简 `system/clang_runtime.c`（`__libc_init_array`）并在启动
-  文件调用，C++ 静态构造函数可运行；C++ 编译去掉 `-ffreestanding`，避免 clang
-  把 `main` 改名导致链接失败；armclang 未检测到 `fromelf` 时不再生成无效的
-  fromelf 转换命令。
-- 编译链选择：MCU 固定提供 Arm GNU Toolchain (armgcc)、Arm Compiler 6
-  (armclang/Keil) 与 LLVM clang (arm-none-eabi) 三种；扫描 PATH/Keil/
-  STM32CubeCLT/Program Files/LLVM 目录后只决定默认项与“已检测/未检测”提示，
-  未检测到的家族仍可选择；armclang 生成 `.sct`/fromelf 转换，armgcc 生成
-  `.ld`/GNU 启动，LLVM clang 生成 `.ld`/`-nostdlib -fuse-ld=lld` 启动变体。
-  选择按工作区保存。
-- Pack 解析支持 Zip64、`<variant>` 型号、`name=` 内存区、启动向量注释、
-  器件头选择宏推导、非整 KiB 链接区大小等厂商差异。
+- 首个公开版本：MCU、Linux/SoC、桌面三个方向均可生成可直接构建的 CMake 工程。
+- MCU 数据全部来自 CMSIS Pack，支持导入、Keil 目录与在线索引；内核头按内核裁剪复制。
+- 侧栏五级选择（vendor → series → pack → version → part），生成文件以树形展示。
+- 修复 Pack 快照路径穿越、ZIP 压缩炸弹、含空格路径引用与切链缓存残留等稳定性问题。
