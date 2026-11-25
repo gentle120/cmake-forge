@@ -30,7 +30,8 @@
     "firmware"
   ],
   "extensionDependencies": [
-    "ms-vscode.cmake-tools"
+    "ms-vscode.cmake-tools",
+    "marus25.cortex-debug"
   ],
   "main": "./out/extension.js",
   "icon": "images/icon.png",

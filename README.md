@@ -45,7 +45,7 @@ cmake --build --preset debug
 
 - VS Code 1.85+、CMake Tools、CMake ≥ 3.22、Ninja。
 - C/C++ 扩展推荐安装；不装也能生成工程，只是没有 IntelliSense 集成。
-- MCU 需要 Cortex-Debug 与 `arm-none-eabi-gdb`，编译链固定为 GNU Arm GCC。
+- MCU 调试由 Cortex-Debug 提供（随扩展依赖自动安装），另需 `arm-none-eabi-gdb`；编译链固定为 GNU Arm GCC。
 - 侧栏「编译与烧录工具」会检测 ARM GNU 工具链与 OpenOCD；缺少时点「下载」，扩展会
   下载官方发布包（GNU Arm GCC 15.2.1 与 xpack OpenOCD 0.12.0-7，默认走 `gh-proxy.com`
   加速、失败回退官方直连），解压到扩展全局存储并把路径写进 `cmakeForge.armGccPath` /

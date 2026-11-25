@@ -18,7 +18,7 @@ Before adding an entry, name the exact invariant future changes must preserve. I
 - 厂商必须先在 `vendorRegistry` 注册（id 唯一，`getVendorMetadata` 未知 id 抛错）。
 - 命令 ID：`cmakeForge.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/importPack/installPackOnline/removePack/installCorePack`；`package.json` 贡献的命令必须与 `extension.ts` 注册的命令一一对应。
 - 工作区可包含多个工程；扫描、生成、烧录与调试都以当前选中的工程根目录为边界，不跨工程合并源文件。目标工程按工作区持久化；发现结果只有一个时自动选择，多个时保留有效选择或等待用户选择。空工作区根目录仍作为可扫描目标保留；扫描返回零个源文件、头文件目录和宏，并明确提示没有 C/C++ 或汇编源文件。
-- 插件不提供构建命令或构建执行器；`cmakeForge.armGccPath` 只用于定位编译器，构建仍由 CMake Tools 拥有。配置、编译与调试分别由 CMake Tools 与 Cortex-Debug 拥有。armgcc 在 `PATH` 内时只写可移植命令名 `arm-none-eabi-gcc/g++/objcopy/size`，`cmakeForge.armGccPath` 指向已安装工具链时改写为该目录下的绝对路径；侧栏只提供 GNU Arm GCC 一个编译家族，不再提供 armclang/clang。
+- 插件不提供构建命令或构建执行器；`cmakeForge.armGccPath` 只用于定位编译器，构建仍由 CMake Tools 拥有。配置、编译与调试分别由 CMake Tools 与 Cortex-Debug 拥有；两者都写进 `extensionDependencies`（`ms-vscode.cmake-tools`、`marus25.cortex-debug`），由 VS Code 随扩展安装，生成调试配置前仍做运行时检查以覆盖被禁用、被卸载或离线手装的情况。armgcc 在 `PATH` 内时只写可移植命令名 `arm-none-eabi-gcc/g++/objcopy/size`，`cmakeForge.armGccPath` 指向已安装工具链时改写为该目录下的绝对路径；侧栏只提供 GNU Arm GCC 一个编译家族，不再提供 armclang/clang。
 - 生成文件落盘前必须经过覆盖确认（`shared/generatedFiles.ts`）：只有磁盘内容与新输出不同、或会被生成过程删除的文件才进入确认；内容完全一致的重新生成不提示、不重写。MCU/Linux/桌面三个方向与仅 flash.py 的生成共用这一判据。
 - 内核向量表 16 槽 + `interruptHandlers` 按序拼接，槽位 `'0'` 表示保留（`startupGenerator`）；异常槽按内核架构族选择：ARMv6-M（M0/M0+/M1/SC000 与 ARMv8-M baseline 的 M23）保留 M0 布局，ARMv7-M（M3/M4/M7）保留 UsageFault 后四个保留字，ARMv8-M mainline（M33/M35P/M55）首保留字为 `SecureFault_Handler`。
 

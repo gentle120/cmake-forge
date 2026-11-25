@@ -25,8 +25,10 @@ test('uses the extension name in command and settings display titles', () => {
   ));
   assert.equal(manifest.contributes.configuration.properties['cmakeForge.armToolchainPath'], undefined);
   assert.equal(manifest.contributes.configuration.title, 'CMake Forge');
+  // VS Code installs both adapters with the extension: a missing CMake Tools
+  // blocks the build, a missing Cortex-Debug makes every debug session close.
   assert.ok(manifest.extensionDependencies.includes('ms-vscode.cmake-tools'));
-  assert.ok(!manifest.extensionDependencies.includes('marus25.cortex-debug'));
+  assert.ok(manifest.extensionDependencies.includes('marus25.cortex-debug'));
 });
 
 test('exposes the Pack mirror as an optional setting', () => {

@@ -1,11 +1,14 @@
 /**
- * Guards the Cortex-Debug dependency at the point where a debug configuration
+ * Verifies the Cortex-Debug adapter at the point where a debug configuration
  * is generated.
  *
- * The debug adapter is deliberately not an `extensionDependencies` entry: an
- * install prompt is only relevant to users who actually debug, not to everyone
- * who generates a project. The command palette and the sidebar therefore offer
- * the install at the same moment instead.
+ * `package.json` declares the adapter as an `extensionDependencies` entry, so
+ * VS Code installs it together with this extension and blocks activation while
+ * it is missing. The checks below stay: a dependency can still be disabled for
+ * the window (`--disable-extensions`), uninstalled after the fact, or absent on
+ * an offline machine that installed the VSIX by hand, and F5 then closes the
+ * session within a second. Naming that case beats writing a configuration that
+ * cannot run.
  */
 
 import * as vscode from 'vscode';
