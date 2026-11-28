@@ -77,9 +77,20 @@ export function buildOpenOcdFlashArgs(options: OpenOcdFlashOptions, searchDirs?:
  * window still reports the other instead of aborting the session. The reads
  * never halt, reset or write the target.
  */
-export function buildOpenOcdDetectArgs(target: OpenOcdTarget, searchDirs?: readonly string[]): string[] {
+function identityReadArgs(): string[] {
   const read = (label: string, address: string): string =>
     `catch {echo "${label} [format %08X [lindex [read_memory ${address} 32 1] 0]]"} _ep_err`;
+  return [
+    '-c',
+    read('EP_CPUID', '0xE000ED00'),
+    '-c',
+    read('EP_IDCODE', '0xE0042000'),
+    '-c',
+    read('EP_IDCODE_ALT', '0x40015800')
+  ];
+}
+
+export function buildOpenOcdDetectArgs(target: OpenOcdTarget, searchDirs?: readonly string[]): string[] {
   return [
     ...searchDirArgs(searchDirs),
     '-f',
@@ -91,12 +102,49 @@ export function buildOpenOcdDetectArgs(target: OpenOcdTarget, searchDirs?: reado
     ...transportArgs(target.transport),
     '-c',
     'init',
+    ...identityReadArgs(),
     '-c',
-    read('EP_CPUID', '0xE000ED00'),
+    'shutdown'
+  ];
+}
+
+/** SWD transports an adapter may expose; a generic session needs one of them. */
+const GENERIC_DETECT_TRANSPORTS = ['swd', 'hla_swd', 'dapdirect_swd'] as const;
+
+export interface OpenOcdGenericTarget {
+  /** 形如 `interface/stlink.cfg` 或绝对路径。 */
+  interfaceConfig: string;
+  /** 要显式选择的传输层名，如 `hla_swd`。 */
+  transportName: string;
+  speedKHz: number;
+}
+
+/**
+ * A target-free SWD session: adapter interface, a generic Cortex-M DAP and the
+ * identity reads. It needs no `target/*.cfg`, so the probe can name the part
+ * before the user (or a previous detection) has chosen one.
+ */
+export function buildOpenOcdGenericDetectArgs(
+  probe: OpenOcdGenericTarget,
+  searchDirs?: readonly string[]
+): string[] {
+  return [
+    ...searchDirArgs(searchDirs),
+    '-f',
+    probe.interfaceConfig,
     '-c',
-    read('EP_IDCODE', '0xE0042000'),
+    `transport select ${probe.transportName}`,
     '-c',
-    read('EP_IDCODE_ALT', '0x40015800'),
+    'swd newdap _ep cpu -expected-id 0',
+    '-c',
+    'dap create _ep.dap -chain-position _ep.cpu',
+    '-c',
+    'target create _ep.core cortex_m -dap _ep.dap',
+    '-c',
+    `adapter speed ${Math.trunc(probe.speedKHz)}`,
+    '-c',
+    'init',
+    ...identityReadArgs(),
     '-c',
     'shutdown'
   ];
@@ -272,6 +320,12 @@ export interface DetectChipOptions {
   searchDirs?: readonly string[];
   cwd: string;
   timeoutMs?: number;
+  /**
+   * Try a target-free SWD session first (SWD only). It lets the probe identify
+   * the part without a `target/*.cfg`, and falls back to the target session
+   * below when the adapter cannot run one.
+   */
+  generic?: boolean;
   spawn?: typeof import('node:child_process').spawn;
 }
 
@@ -279,25 +333,26 @@ export interface DetectChipOptions {
  * Tries each probe interface until one completes a session and reports a
  * CPUID. An unsuccessful probe is not an error: the next interface is tried.
  */
+function transportUnsupported(outputTail: readonly string[]): boolean {
+  return outputTail.some(
+    (line) =>
+      /doesn'?t support .*transport/i.test(line) ||
+      /invalid command name ["']?swd["']?/i.test(line) ||
+      /transport .*not supported/i.test(line)
+  );
+}
+
 export async function detectChip(options: DetectChipOptions): Promise<DetectChipResult> {
   const timeoutMs = Math.max(1000, options.timeoutMs ?? 8000);
   let lastTail: string[] = [];
-  for (const probe of options.probes) {
+
+  const session = async (args: string[]): Promise<FlashRunResult> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let result: FlashRunResult;
     try {
-      result = await runTool({
+      return await runTool({
         executable: options.openocdPath,
-        args: buildOpenOcdDetectArgs(
-          {
-            interfaceConfig: probe.interfaceConfig,
-            targetConfig: options.targetConfig,
-            transport: options.transport,
-            speedKHz: options.speedKHz
-          },
-          options.searchDirs
-        ),
+        args,
         cwd: options.cwd,
         signal: controller.signal,
         spawn: options.spawn,
@@ -307,6 +362,44 @@ export async function detectChip(options: DetectChipOptions): Promise<DetectChip
     } finally {
       clearTimeout(timer);
     }
+  };
+
+  for (const probe of options.probes) {
+    if (options.generic && options.transport === 'swd') {
+      for (const transportName of GENERIC_DETECT_TRANSPORTS) {
+        const result = await session(
+          buildOpenOcdGenericDetectArgs(
+            { interfaceConfig: probe.interfaceConfig, transportName, speedKHz: options.speedKHz },
+            options.searchDirs
+          )
+        );
+        lastTail = result.outputTail;
+        if (result.cancelled) {
+          return { ok: false, outputTail: lastTail };
+        }
+        const genericIdentity = parseIdentityLines(result.outputTail);
+        if (result.ok && genericIdentity.cpuid !== undefined) {
+          return { ok: true, identity: genericIdentity, outputTail: lastTail, probeId: probe.id };
+        }
+        // An adapter that rejects this transport is asked again with the next
+        // spelling; any other failure falls through to the target session.
+        if (!transportUnsupported(result.outputTail)) {
+          break;
+        }
+      }
+    }
+
+    const result = await session(
+      buildOpenOcdDetectArgs(
+        {
+          interfaceConfig: probe.interfaceConfig,
+          targetConfig: options.targetConfig,
+          transport: options.transport,
+          speedKHz: options.speedKHz
+        },
+        options.searchDirs
+      )
+    );
     lastTail = result.outputTail;
     if (result.cancelled) {
       return { ok: false, outputTail: lastTail };

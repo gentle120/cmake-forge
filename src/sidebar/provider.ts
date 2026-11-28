@@ -1336,6 +1336,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         probes,
         targetConfig: options.target.targetConfig,
         transport: options.target.transport,
+        generic: options.target.transport === 'swd',
         speedKHz: 4000,
         cwd: options.cwd,
         timeoutMs: 10000
@@ -1441,6 +1442,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           probes: this.chipProbes(flash.probe.id),
           targetConfig: flash.target.targetConfig,
           transport: flash.target.transport,
+          generic: flash.target.transport === 'swd',
           speedKHz: 2000,
           cwd: root,
           timeoutMs: 5000

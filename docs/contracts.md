@@ -49,7 +49,7 @@
 - 「导入 Pack 包」「在线安装 Pack」按钮分别触发 `importPack` 与 `installPackOnline`；成功后按厂商切换语义刷新（优先激活服务当前系列的 imported/installed 版本，否则取最新；可下载版本不自动下载），失败不改变有效选择。显式切换厂商时同样自动激活服务当前系列的版本（同版本 imported 优先；无系列匹配取最新），启动时的目录刷新不自动激活。
 - 仅切换侧栏模式（mcu/linux/native）的保存按消息保留模式；MCU 字段重算不改写模式。调试器列表只提供当前后端支持的探针，切换后端不保留不兼容探针。
 - 固件来源顺序：手选 > `build/<preset>` 最新产物 > 工作区其余位置最新 ELF；手选路径不存在时烧录禁用并说明原因，构建目录为空时回退工作区扫描。
-- 探针探测成功会把当前探针改成探测成功的接口；烧录 target 由读到的 DBGMCU DEV_ID 推导（`src/flash/chipTargets.ts`），未收录时保留当前目标而不是按内核猜。检测结果（芯片/目标/探针）写进「烧录输出」，侧栏不提供 target 手选或后端细节面板。检测不需要工程：未打开工程时也能读芯片并在侧栏显示结果，只是没有固件可烧（提示打开工程选择或构建固件）。检测结果只对当前工程有效：切换工程或重开窗口后目标显示「自动」，本次检测成功前不复用旧 target，也不允许 OpenOCD 后端烧录或生成（提示先「检测探针」）；J-Link/pyOCD 用器件名而非 target 配置，不受限。
+- 探针探测成功会把当前探针改成探测成功的接口；烧录 target 由读到的 DBGMCU DEV_ID 推导（`src/flash/chipTargets.ts`），未收录时保留当前目标而不是按内核猜。检测结果（芯片/目标/探针）写进「烧录输出」，侧栏不提供 target 手选或后端细节面板。检测不需要工程：未打开工程时也能读芯片并在侧栏显示结果，只是没有固件可烧（提示打开工程选择或构建固件）。检测先用不需要 `target/*.cfg` 的通用 Cortex-M SWD 会话（`swd newdap` + `target create cortex_m`）读 CPUID/DEV_ID，适配器不支持该传输层时才退回当前目标配置——所以「先选型号才能检测」不成立，型号是检测的产物而不是前提。检测结果只对当前工程有效：切换工程或重开窗口后目标显示「自动」，本次检测成功前不复用旧 target，也不允许 OpenOCD 后端烧录或生成（提示先「检测探针」）；J-Link/pyOCD 用器件名而非 target 配置，不受限。
 
 ## Performance And Resources
 
@@ -57,7 +57,7 @@
 
 ## Safety And Failure Behavior
 
-- 生成器本身不执行外部工具。扩展只在用户显式操作时执行烧录：OpenOCD 后端由 `src/flash/openocdDirect.ts` 直接拼参数 spawn `openocd`（不依赖 Python，命令行原样回显），J-Link/pyOCD 仍 spawn 生成的 `flash.py`（`src/flash/flashRunner.ts`）；两者可见、可取消、失败给诊断，不静默重试、不改写脚本。侧栏的固件/目标/探针扫描只读工作区与已导入档案，不写盘；「检测探针」只做 `init` + `read_memory` 读 CPUID/DBGMCU ID，不 halt、不复位、不写目标。
+- 生成器本身不执行外部工具。扩展只在用户显式操作时执行烧录：OpenOCD 后端由 `src/flash/openocdDirect.ts` 直接拼参数 spawn `openocd`（不依赖 Python，命令行原样回显），J-Link/pyOCD 仍 spawn 生成的 `flash.py`（`src/flash/flashRunner.ts`）；两者可见、可取消、失败给诊断，不静默重试、不改写脚本。侧栏的固件/目标/探针扫描只读工作区与已导入档案，不写盘；「检测探针」只做 `init` + `read_memory` 读 CPUID/DBGMCU ID（优先通用 Cortex-M 会话，不需要 `target/*.cfg`），不 halt、不复位、不写目标。
 - zip 读取器遇 Zip64/加密条目抛显式错误，不部分解压。
 - 校验失败的设备进入 skipped 并给出原因，不中断整包导入。
 - 内核包安装只写 `CMSIS/Core/Include/**/*.h`，拒绝绝对路径与含 `..` 的条目；安装目录名把只含点的身份字段归一为 `_`，安装前删除只作用于该版本目录。

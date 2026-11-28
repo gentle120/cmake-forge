@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import {
   buildOpenOcdDetectArgs,
   buildOpenOcdFlashArgs,
+  buildOpenOcdGenericDetectArgs,
   coreFromCpuid,
   describeIdentity,
   familyFromDeviceId,
@@ -187,4 +188,90 @@ test('no probe answering means a failed detection rather than an exception', asy
   assert.equal(result.ok, false);
   assert.equal(result.identity, undefined);
   assert.ok(result.outputTail.some((line) => line.includes('open failed')));
+});
+
+test('generic detection sessions need no target config', () => {
+  const args = buildOpenOcdGenericDetectArgs({
+    interfaceConfig: 'interface/stlink.cfg',
+    transportName: 'hla_swd',
+    speedKHz: 4000
+  });
+  assert.deepEqual(args.slice(0, 6), [
+    '-f', 'interface/stlink.cfg',
+    '-c', 'transport select hla_swd',
+    '-c', 'swd newdap _ep cpu -expected-id 0'
+  ]);
+  assert.ok(args.includes('dap create _ep.dap -chain-position _ep.cpu'));
+  assert.ok(args.includes('target create _ep.core cortex_m -dap _ep.dap'));
+  assert.ok(args.includes('adapter speed 4000'));
+  assert.ok(!args.some((arg) => arg.startsWith('target/')), 'generic sessions must not require a target cfg');
+  assert.equal(args.at(-1), 'shutdown');
+});
+
+test('a generic session identifies the chip before any target is selected', async () => {
+  const child = new FakeChild();
+  const detecting = detectChip({
+    openocdPath: 'openocd',
+    probes: [{ id: 'stlink', interfaceConfig: 'interface/stlink.cfg' }],
+    targetConfig: 'target/stm32f4x.cfg',
+    transport: 'swd',
+    generic: true,
+    speedKHz: 2000,
+    cwd: 'C:/project',
+    spawn: spawnSequence([child])
+  });
+  await nextTurn();
+  child.stdout.emit('data', Buffer.from('EP_CPUID 410FC241\nEP_IDCODE 10076413\n'));
+  child.emit('close', 0, null);
+  const result = await detecting;
+  assert.equal(result.ok, true);
+  assert.equal(result.probeId, 'stlink');
+  assert.equal(result.identity?.family, 'STM32F4x');
+});
+
+test('an adapter that rejects the swd transport is retried with hla_swd', async () => {
+  const unsupported = new FakeChild();
+  const working = new FakeChild();
+  const detecting = detectChip({
+    openocdPath: 'openocd',
+    probes: [{ id: 'stlink', interfaceConfig: 'interface/stlink.cfg' }],
+    targetConfig: 'target/stm32f4x.cfg',
+    transport: 'swd',
+    generic: true,
+    speedKHz: 2000,
+    cwd: 'C:/project',
+    spawn: spawnSequence([unsupported, working])
+  });
+  await nextTurn();
+  unsupported.stderr.emit('data', Buffer.from("Error: Debug adapter doesn't support 'swd' transport\n"));
+  unsupported.emit('close', 1, null);
+  await nextTurn();
+  working.stdout.emit('data', Buffer.from('EP_CPUID 410FC241\nEP_IDCODE 10076413\n'));
+  working.emit('close', 0, null);
+  const result = await detecting;
+  assert.equal(result.ok, true);
+  assert.equal(result.identity?.core, 'Cortex-M4');
+});
+
+test('a generic session that cannot connect falls back to the target session', async () => {
+  const genericFailure = new FakeChild();
+  const targetSession = new FakeChild();
+  const detecting = detectChip({
+    openocdPath: 'openocd',
+    probes: [{ id: 'stlink', interfaceConfig: 'interface/stlink.cfg' }],
+    targetConfig: 'target/stm32f4x.cfg',
+    transport: 'swd',
+    generic: true,
+    speedKHz: 2000,
+    cwd: 'C:/project',
+    spawn: spawnSequence([genericFailure, targetSession])
+  });
+  await nextTurn();
+  genericFailure.stderr.emit('data', Buffer.from('Error: open failed\n'));
+  genericFailure.emit('close', 1, null);
+  await nextTurn();
+  targetSession.stdout.emit('data', Buffer.from('EP_CPUID 410FC241\nEP_IDCODE 10076413\n'));
+  targetSession.emit('close', 0, null);
+  const result = await detecting;
+  assert.equal(result.ok, true);
 });
