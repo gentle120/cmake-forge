@@ -89,14 +89,11 @@ export interface SidebarEnvironmentChoice {
 }
 
 /** Tools the environment card can install without leaving VS Code. */
-export type SidebarToolId = 'armgcc' | 'openocd' | 'cmake' | 'ninja' | 'jlink' | 'pyocd';
+export type SidebarToolId = 'armgcc' | 'openocd' | 'jlink' | 'pyocd';
 
 export interface SidebarEnvironment {
   armGcc: SidebarToolStatus;
   openocd: SidebarToolStatus;
-  /** CMake Tools needs these two to configure and build; neither is bundled. */
-  cmake: SidebarToolStatus;
-  ninja: SidebarToolStatus;
   /** Compiler toolchains and flash backends, rendered as two dropdowns. */
   toolchains: SidebarEnvironmentChoice[];
   backends: SidebarEnvironmentChoice[];

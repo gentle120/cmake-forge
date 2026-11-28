@@ -66,13 +66,7 @@ import {
   findBuildToolchain,
   type BuildToolchain
 } from '../env/buildToolchains';
-import {
-  PYPI_MIRROR,
-  installArmGcc,
-  installCMake,
-  installNinja,
-  installOpenOcd
-} from '../env/toolDownloads';
+import { PYPI_MIRROR, installArmGcc, installOpenOcd } from '../env/toolDownloads';
 import { renderSidebarHtml } from './html';
 import { parseIncomingMessage, type SidebarIncomingMessage } from './messages';
 import {
@@ -1064,42 +1058,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     return normalizeConfiguredPath(configured) || 'openocd';
   }
 
-  /** CMake from the settings, else the first one on PATH. */
-  private configuredCMakePath(): string | undefined {
-    const configured = normalizeConfiguredPath(
-      vscode.workspace.getConfiguration('cmakeForge').get<string>('cmakePath', '')
-    );
-    return resolveConfiguredExecutable(configured, 'cmake');
-  }
-
-  private configuredNinjaPath(): string | undefined {
-    const configured = normalizeConfiguredPath(
-      vscode.workspace.getConfiguration('cmakeForge').get<string>('ninjaPath', '')
-    );
-    return resolveConfiguredExecutable(configured, 'ninja');
-  }
-
-  /**
-   * Makes a freshly installed Ninja visible to CMake Tools, which launches the
-   * build in its own process environment instead of inheriting PATH edits.
-   */
-  private async prependCmakePath(binDir: string): Promise<void> {
-    const configuration = vscode.workspace.getConfiguration('cmake');
-    const existing = configuration.get<Record<string, string>>('environment') ?? {};
-    const delimiter = process.platform === 'win32' ? ';' : ':';
-    const normalize = (value: string): string =>
-      value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-    const segments = (existing.PATH ?? '').split(delimiter).map((part) => part.trim()).filter(Boolean);
-    if (segments.some((segment) => normalize(segment) === normalize(binDir))) {
-      return;
-    }
-    await configuration.update(
-      'environment',
-      { ...existing, PATH: [binDir, ...segments].join(delimiter) },
-      vscode.ConfigurationTarget.Global
-    );
-  }
-
   private executablePaths(): FlashExecutablePaths {
     const configuration = vscode.workspace.getConfiguration('cmakeForge');
     return {
@@ -1830,19 +1788,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     const executables = this.executablePaths();
     const jlink = resolveConfiguredExecutable(executables.jlink ?? '', 'JLink.exe');
     const pyocd = resolveConfiguredExecutable(executables.pyocd ?? '', 'pyocd');
-    const cmakeExecutable = this.configuredCMakePath();
-    const ninjaExecutable = this.configuredNinjaPath();
     const environment: SidebarEnvironment = {
       armGcc,
       openocd: openocdExecutable
         ? { ready: true, detail: openocdExecutable }
         : { ready: false, detail: '未找到 openocd.exe' },
-      cmake: cmakeExecutable
-        ? { ready: true, detail: cmakeExecutable }
-        : { ready: false, detail: '未找到 cmake.exe' },
-      ninja: ninjaExecutable
-        ? { ready: true, detail: ninjaExecutable }
-        : { ready: false, detail: '未找到 ninja.exe' },
       toolchains: toolchainChoices,
       backends: [
         {
@@ -1882,12 +1832,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     if (tool === 'openocd') {
       return environment.openocd.ready;
     }
-    if (tool === 'cmake') {
-      return environment.cmake.ready && environment.ninja.ready;
-    }
-    if (tool === 'ninja') {
-      return environment.ninja.ready;
-    }
     return environment.backends.find((choice) => choice.value === tool)?.ready === true;
   }
 
@@ -1906,19 +1850,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     const missing: { tool: SidebarToolId; label: string }[] = [];
     if (!environment.armGcc.ready) {
       missing.push({ tool: 'armgcc', label: 'ARM GNU 工具链' });
-    }
-    // CMake Tools ships neither CMake nor Ninja, so a compiler alone still
-    // stops at "configure". Mention only what is actually absent, and reuse an
-    // existing CMake when only Ninja is missing.
-    if (!environment.cmake.ready || !environment.ninja.ready) {
-      const parts = [
-        environment.cmake.ready ? '' : 'CMake',
-        environment.ninja.ready ? '' : 'Ninja'
-      ].filter(Boolean);
-      missing.push({
-        tool: environment.cmake.ready ? 'ninja' : 'cmake',
-        label: parts.join(' 与 ')
-      });
     }
     // OpenOCD only matters when it is the selected backend; offering it while
     // the user flashes through J-Link or pyOCD is noise.
@@ -1977,7 +1908,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.post({
         type: 'notification',
         level: 'warning',
-        message: '自动下载目前只支持 Windows：请用系统包管理器安装 ARM GNU 工具链、CMake/Ninja 与 OpenOCD，并在设置里填写路径。'
+        message: '自动下载目前只支持 Windows：请用系统包管理器安装 ARM GNU 工具链与 OpenOCD，并在设置里填写路径。'
       });
       return;
     }
@@ -1993,8 +1924,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     const labels: Record<SidebarToolId, string> = {
       armgcc: 'ARM GNU 工具链',
       openocd: 'OpenOCD',
-      cmake: 'CMake 与 Ninja',
-      ninja: 'Ninja',
       jlink: 'J-Link',
       pyocd: 'pyOCD'
     };
@@ -2054,33 +1983,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
             const installed = await installOpenOcd(options);
             await settings.update('openocdPath', installed.executable, vscode.ConfigurationTarget.Global);
             finishInstalled(`OpenOCD ${installed.version} 已安装：${installed.executable}`);
-          } else if (tool === 'cmake') {
-            // Record CMake as soon as it lands: Ninja is a separate archive and
-            // a failed second download must not hide a working CMake.
-            const cmake = await installCMake(options);
-            await settings.update('cmakePath', cmake.cmakePath, vscode.ConfigurationTarget.Global);
-            await vscode.workspace.getConfiguration('cmake')
-              .update('cmakePath', cmake.cmakePath, vscode.ConfigurationTarget.Global);
-            let ninja;
-            try {
-              ninja = await installNinja(options);
-            } catch (error) {
-              const detail = error instanceof Error ? error.message : String(error);
-              finishInstalled(`CMake ${cmake.version} 已安装，但 Ninja 安装失败：${detail}`);
-              return;
-            }
-            await settings.update('ninjaPath', ninja.ninjaPath, vscode.ConfigurationTarget.Global);
-            // CMake Tools launches builds itself, so the Ninja directory has to
-            // travel through cmake.environment instead of our process PATH.
-            await this.prependCmakePath(ninja.binDir);
-            finishInstalled(
-              `CMake ${cmake.version} 与 Ninja ${ninja.version} 已安装：${cmake.binDir}`
-            );
-          } else {
-            const installed = await installNinja(options);
-            await settings.update('ninjaPath', installed.ninjaPath, vscode.ConfigurationTarget.Global);
-            await this.prependCmakePath(installed.binDir);
-            finishInstalled(`Ninja ${installed.version} 已安装：${installed.binDir}`);
           }
           logLine(`[tools] installed ${label}`);
           await this.refreshFlashDetection();

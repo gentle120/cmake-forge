@@ -8,16 +8,10 @@ import {
   ARM_GCC_OFFICIAL_URL,
   ARM_GCC_URL,
   ARM_GCC_VERSION,
-  CMAKE_URL,
-  CMAKE_VERSION,
-  NINJA_URL,
-  NINJA_VERSION,
   OPENOCD_URL,
   OPENOCD_VERSION,
   findBelow,
   installArmGcc,
-  installCMake,
-  installNinja,
   installOpenOcd
 } from '../env/toolDownloads';
 
@@ -159,63 +153,6 @@ test('a failed verification removes the extracted directory', async () => {
       /没有找到 openocd\.exe/
     );
     assert.equal(existsSync(join(dir, 'tools', `openocd-${OPENOCD_VERSION}`)), false);
-  });
-});
-
-test('the build tools come from the same proxy and pin a known version', () => {
-  assert.match(CMAKE_URL, /^https:\/\/gh-proxy\.com\/https:\/\/github\.com\/Kitware\/CMake\//);
-  assert.match(CMAKE_URL, new RegExp(`cmake-${CMAKE_VERSION.replace(/\./g, '\\.')}-windows-x86_64\\.zip$`));
-  assert.match(NINJA_URL, /^https:\/\/gh-proxy\.com\/https:\/\/github\.com\/ninja-build\/ninja\//);
-  assert.match(NINJA_URL, new RegExp(`/v${NINJA_VERSION.replace(/\./g, '\\.')}/ninja-win\\.zip$`));
-});
-
-test('installCMake unpacks cmake.exe and later finds it again without downloading', async () => {
-  await withTempDir(async (dir) => {
-    let downloads = 0;
-    const installed = await installCMake({
-      storageRoot: dir,
-      fetchImpl: async () => {
-        downloads += 1;
-        return archiveResponse();
-      },
-      extractImpl: async (_archive, destination) => {
-        const bin = join(destination, 'cmake-4.2.3-windows-x86_64', 'bin');
-        mkdirSync(bin, { recursive: true });
-        writeFileSync(join(bin, 'cmake.exe'), '');
-      }
-    });
-    assert.equal(installed.version, CMAKE_VERSION);
-    assert.equal(existsSync(join(installed.binDir, 'cmake.exe')), true);
-    // One probe request plus the actual body; a second install must reuse it.
-    const firstDownloads = downloads;
-    const again = await installCMake({
-      storageRoot: dir,
-      fetchImpl: async () => {
-        downloads += 1;
-        return archiveResponse();
-      },
-      extractImpl: async () => {
-        throw new Error('should reuse the installed copy');
-      }
-    });
-    assert.equal(again.cmakePath, installed.cmakePath);
-    assert.equal(downloads, firstDownloads);
-  });
-});
-
-test('installNinja unpacks the single executable', async () => {
-  await withTempDir(async (dir) => {
-    const installed = await installNinja({
-      storageRoot: dir,
-      fetchImpl: async () => archiveResponse(),
-      extractImpl: async (_archive, destination) => {
-        mkdirSync(destination, { recursive: true });
-        writeFileSync(join(destination, 'ninja.exe'), '');
-      }
-    });
-    assert.equal(installed.version, NINJA_VERSION);
-    assert.equal(existsSync(installed.ninjaPath), true);
-    assert.equal(existsSync(join(dir, 'tools', `ninja-${NINJA_VERSION}`, '.ready')), true);
   });
 });
 

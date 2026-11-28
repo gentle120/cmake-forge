@@ -23,7 +23,7 @@ import {
   rmSync,
   statSync
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
 /**
  * Arm's own CDN is the canonical source but is very slow from mainland China,
@@ -56,29 +56,6 @@ export const OPENOCD_SOURCES = [
 export const ARM_GCC_EXPECTED_BYTES = 296_000_000;
 export const OPENOCD_EXPECTED_BYTES = 3_300_000;
 
-/**
- * CMake Tools does not bundle CMake or Ninja; a machine without them stops at
- * "configure". The portable zip is extracted under the user data directory and
- * pointed at through `cmake.cmakePath`, so no PATH edit is needed for CMake.
- */
-export const CMAKE_VERSION = '4.2.3';
-export const CMAKE_URL =
-  `${GITHUB_PROXY}https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/`
-  + `cmake-${CMAKE_VERSION}-windows-x86_64.zip`;
-export const CMAKE_SOURCES = [
-  CMAKE_URL,
-  `https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-windows-x86_64.zip`
-];
-export const CMAKE_EXPECTED_BYTES = 50_391_842;
-
-/** Ninja ships as a single executable inside its zip. */
-export const NINJA_VERSION = '1.13.2';
-export const NINJA_URL =
-  `${GITHUB_PROXY}https://github.com/ninja-build/ninja/releases/download/v${NINJA_VERSION}/ninja-win.zip`;
-export const NINJA_SOURCES = [
-  NINJA_URL,
-  `https://github.com/ninja-build/ninja/releases/download/v${NINJA_VERSION}/ninja-win.zip`
-];
 export const NINJA_EXPECTED_BYTES = 291_570;
 
 /** Python package index mirror used by the pyOCD install step. */
@@ -114,22 +91,6 @@ export interface InstalledOpenOcd {
   version: string;
   /** Full path to `openocd.exe`. */
   executable: string;
-}
-
-export interface InstalledCMake {
-  version: string;
-  /** Full path to `cmake.exe`. */
-  cmakePath: string;
-  /** Directory containing `cmake.exe`. */
-  binDir: string;
-}
-
-export interface InstalledNinja {
-  version: string;
-  /** Full path to `ninja.exe`. */
-  ninjaPath: string;
-  /** Directory containing `ninja.exe`. */
-  binDir: string;
 }
 
 function report(
@@ -578,54 +539,4 @@ export async function installOpenOcd(options: InstallOptions): Promise<Installed
   mkdirSync(join(target, '.ready'), { recursive: true });
   report(options, 'done', 'OpenOCD 已安装。', 100);
   return { version: OPENOCD_VERSION, executable };
-}
-
-export async function installCMake(options: InstallOptions): Promise<InstalledCMake> {
-  const target = toolDirectory(options.storageRoot, 'cmake', CMAKE_VERSION);
-  const archive = join(options.storageRoot, 'downloads', `cmake-${CMAKE_VERSION}.zip`);
-  if (existsSync(join(target, '.ready'))) {
-    const existing = findBelow(target, join('bin', 'cmake.exe'));
-    if (existing) {
-      return { version: CMAKE_VERSION, cmakePath: existing, binDir: dirname(existing) };
-    }
-  }
-  rmSync(target, { recursive: true, force: true });
-  await downloadArchive(options, CMAKE_SOURCES, archive, CMAKE_EXPECTED_BYTES, 'CMake');
-  report(options, 'extract', '正在解压 CMake…');
-  await (options.extractImpl ?? extractWithTar)(archive, target);
-  rmSync(archive, { force: true });
-  report(options, 'verify', '正在确认 cmake.exe…');
-  const cmakePath = findBelow(target, join('bin', 'cmake.exe'));
-  if (!cmakePath) {
-    rmSync(target, { recursive: true, force: true });
-    throw new Error('解压后没有找到 cmake.exe，下载包可能不完整。');
-  }
-  mkdirSync(join(target, '.ready'), { recursive: true });
-  report(options, 'done', 'CMake 已安装。', 100);
-  return { version: CMAKE_VERSION, cmakePath, binDir: dirname(cmakePath) };
-}
-
-export async function installNinja(options: InstallOptions): Promise<InstalledNinja> {
-  const target = toolDirectory(options.storageRoot, 'ninja', NINJA_VERSION);
-  const archive = join(options.storageRoot, 'downloads', `ninja-${NINJA_VERSION}.zip`);
-  if (existsSync(join(target, '.ready'))) {
-    const existing = findBelow(target, 'ninja.exe', 1);
-    if (existing) {
-      return { version: NINJA_VERSION, ninjaPath: existing, binDir: dirname(existing) };
-    }
-  }
-  rmSync(target, { recursive: true, force: true });
-  await downloadArchive(options, NINJA_SOURCES, archive, NINJA_EXPECTED_BYTES, 'Ninja');
-  report(options, 'extract', '正在解压 Ninja…');
-  await (options.extractImpl ?? extractWithTar)(archive, target);
-  rmSync(archive, { force: true });
-  report(options, 'verify', '正在确认 ninja.exe…');
-  const ninjaPath = findBelow(target, 'ninja.exe', 1);
-  if (!ninjaPath) {
-    rmSync(target, { recursive: true, force: true });
-    throw new Error('解压后没有找到 ninja.exe，下载包可能不完整。');
-  }
-  mkdirSync(join(target, '.ready'), { recursive: true });
-  report(options, 'done', 'Ninja 已安装。', 100);
-  return { version: NINJA_VERSION, ninjaPath, binDir: dirname(ninjaPath) };
 }
