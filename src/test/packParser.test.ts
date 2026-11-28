@@ -463,3 +463,55 @@ test('derives the register-file selector define from the device header', () => {
   // `x` is the vendor's package-letter wildcard: PY32F001Cx4 -> PY32F001x4.
   assert.deepEqual(pack.devices[0].defines, ['PY32F001x4']);
 });
+
+test('skips __initial_sp and parses Keil-style __Vectors labels without a colon', () => {
+  const pdsc = wrapPdsc(`      <device Dname="MS32F031A6A0ZW" Dcore="CM0">
+        <memory id="ROM" start="0x08000000" size="0x8000"/>
+        <memory id="RAM" start="0x20000000" size="0x2000"/>
+      </device>`);
+  const startup = `
+__Vectors       DCD     __initial_sp
+                DCD     Reset_Handler
+                DCD     NMI_Handler
+                DCD     HardFault_Handler
+                DCD     0
+                DCD     0
+                DCD     0
+                DCD     0
+                DCD     0
+                DCD     0
+                DCD     0
+                DCD     SVC_Handler
+                DCD     0
+                DCD     0
+                DCD     PendSV_Handler
+                DCD     SysTick_Handler
+                DCD     WWDG_IRQHandler
+
+        AREA    |.text|, CODE, READONLY
+`;
+  const pack = parsePack(buildZip([{ name: 'MS32F031.pdsc', data: pdsc }, { name: 'startup_MS32F031A6A0ZW.s', data: startup }]));
+  assert.equal(pack.devices[0].error, undefined);
+  assert.deepEqual(pack.devices[0].interruptHandlers, ['WWDG_IRQHandler']);
+});
+
+test('prefers the SVD named after the device when <debug svd> is absent', () => {
+  const pdsc = wrapPdsc(`      <device Dname="MS32F031A6A0ZW" Dcore="CM0">
+        <memory id="ROM" start="0x08000000" size="0x8000"/>
+        <memory id="RAM" start="0x20000000" size="0x2000"/>
+      </device>`);
+  const otherSvd = `<?xml version="1.0" encoding="utf-8"?>
+<device><peripherals><peripheral><name>NVIC</name>
+  <interrupt><name>FOO</name><value>0</value></interrupt>
+</peripheral></peripherals></device>`;
+  const matching = `<?xml version="1.0" encoding="utf-8"?>
+<device><peripherals><peripheral><name>NVIC</name>
+  <interrupt><name>WWDG</name><value>0</value></interrupt>
+</peripheral></peripherals></device>`;
+  const pack = parsePack(buildZip([
+    { name: 'MS32F031.pdsc', data: pdsc },
+    { name: 'aaa_other.svd', data: otherSvd },
+    { name: 'MS32F031A6A0ZW.svd', data: matching }
+  ]));
+  assert.deepEqual(pack.devices[0].interruptHandlers, ['WWDG_IRQHandler']);
+});

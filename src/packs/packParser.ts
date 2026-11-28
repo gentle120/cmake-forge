@@ -70,6 +70,7 @@ const CORE_VECTOR_SYMBOLS: Record<string, true> = {
   PendSV_Handler: true,
   SysTick_Handler: true,
   _estack: true,
+  __initial_sp: true,
   Reset_Handler: true
 };
 
@@ -557,7 +558,21 @@ function collectSvdCandidates(
   const svdAttribute = textOf(asNodeArray(device.debug)[0]?.['@_svd']);
   const svdEntries = entries.filter((entry) => entry.name.toLowerCase().endsWith('.svd'));
   if (!svdAttribute) {
-    return svdEntries;
+    // Without an explicit <debug svd>, prefer the file named after the device:
+    // a DFP that ships SVDs for a whole family would otherwise contribute the
+    // interrupt table of whichever file happens to sort first.
+    const part = (textOf(device['@_Dname']) ?? '').trim().toLowerCase();
+    if (part.length === 0 || svdEntries.length < 2) {
+      return svdEntries;
+    }
+    const score = (entry: { name: string }): number => {
+      const base = (entry.name.split('/').pop() ?? entry.name).toLowerCase();
+      if (base.includes(part)) {
+        return 0;
+      }
+      return base.startsWith(part.slice(0, 4)) ? 1 : 2;
+    };
+    return [...svdEntries].sort((left, right) => score(left) - score(right));
   }
   const normalized = svdAttribute.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
   const exact = svdEntries.find((entry) => entry.name.replace(/\\/g, '/').toLowerCase() === normalized);
@@ -625,7 +640,9 @@ function interruptsFromStartupFile(startup: string): string[] {
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/\/\/.*$/gm, '')
     .split(/\r?\n/);
-  const startIndex = lines.findIndex((line) => /^\s*(g_pfnVectors|__Vectors):/.test(line));
+  // GNU startup files use `g_pfnVectors:`; Keil/armclang ones write
+  // `__Vectors` without a colon, so the colon is optional here.
+  const startIndex = lines.findIndex((line) => /^\s*(g_pfnVectors|__Vectors)\b/i.test(line));
   if (startIndex < 0) {
     return [];
   }

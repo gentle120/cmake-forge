@@ -601,6 +601,11 @@ async function resolvedCachedCompiler(buildDir: string): Promise<string | undefi
   return undefined;
 }
 
+/** Resolves a path from CMakeCache.txt, which may have been written relative. */
+function resolveAbsoluteOrRelative(value: string, base: string): string {
+  return (isAbsolute(value) ? value : resolve(base, value)).replace(/\\/g, '/');
+}
+
 async function clearStaleMcuBuildCaches(
   root: string,
   toolchainPath: string,
@@ -621,10 +626,14 @@ async function clearStaleMcuBuildCaches(
     } catch {
       continue;
     }
-    const cachedToolchain = /^CMAKE_TOOLCHAIN_FILE(?::[^=]+)?=(.+)$/m.exec(content)?.[1]
+    const cachedToolchainRaw = /^CMAKE_TOOLCHAIN_FILE(?::[^=]+)?=(.+)$/m.exec(content)?.[1]
       ?.trim()
-      .replace(/\\/g, '/')
-      .toLowerCase();
+      .replace(/\\/g, '/');
+    // CMake reads a relative toolchain path relative to the build directory, so
+    // resolving it against the process cwd would compare against the wrong file.
+    const cachedToolchain = cachedToolchainRaw === undefined
+      ? undefined
+      : resolveAbsoluteOrRelative(cachedToolchainRaw, buildDir).toLowerCase();
     const cachedCompiler = /^CMAKE_C_COMPILER(?::[^=]+)?=(.+)$/m.exec(content)?.[1]
       ?.trim()
       .toLowerCase();

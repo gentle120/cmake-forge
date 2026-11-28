@@ -36,7 +36,10 @@ export interface PreparedDataRoot {
   migrated: boolean;
 }
 
-const storageEntries = ['packs.json', 'packs', 'tools'] as const;
+// `packs.json` is the migration marker and must be copied last: if moving the
+// archives or tools fails halfway, the next start still retries instead of
+// treating a half-populated data directory as complete.
+const storageEntries = ['tools', 'packs', 'packs.json'] as const;
 
 async function exists(path: string): Promise<boolean> {
   try {

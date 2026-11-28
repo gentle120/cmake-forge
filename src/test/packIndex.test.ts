@@ -227,3 +227,12 @@ test('repeated index entries are collapsed', async () => {
   assert.equal(new Set(identities).size, identities.length);
   assert.equal(packs.filter((pack) => pack.name === 'GD32F4xx_DFP').length, 1);
 });
+
+test('an explicit deprecated="false" attribute does not hide an entry', async () => {
+  const xml = `<index><pindex>
+    <pdsc url="https://www.keil.com/pack/" vendor="Keil" name="Current_DFP" version="1.0.0" deprecated="false" />
+  </pindex></index>`;
+  const { fetcher } = createFetcher({ [INDEX_ORIGIN_URL]: { ok: true, status: 200, textBody: xml } });
+  const packs = await listPackIndexPacks(fetcher);
+  assert.deepEqual(packs.map((pack) => pack.name), ['Current_DFP']);
+});

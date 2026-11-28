@@ -85,20 +85,10 @@ export function createTimeoutFetcher(
     for (let attempt = 0; ; attempt += 1) {
       const controller = new AbortController();
       let timedOut = false;
-      const timer = setTimeout(() => {
-        timedOut = true;
-        controller.abort();
-      }, timeoutMs);
-      const forwardAbort = (): void => controller.abort();
-      const callerSignal = init?.signal;
-      if (callerSignal) {
-        if (callerSignal.aborted) {
-          controller.abort();
-        } else {
-          callerSignal.addEventListener('abort', forwardAbort, { once: true });
-        }
-      }
       let cleanedUp = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const callerSignal = init?.signal;
+      const forwardAbort = (): void => controller.abort();
       const cleanup = (): void => {
         if (cleanedUp) {
           return;
@@ -107,6 +97,20 @@ export function createTimeoutFetcher(
         clearTimeout(timer);
         callerSignal?.removeEventListener('abort', forwardAbort);
       };
+      timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+      // Any abort (timeout or caller) ends the attempt; drop the timer and the
+      // caller listener then too, even if no body read is pending.
+      controller.signal.addEventListener('abort', cleanup, { once: true });
+      if (callerSignal) {
+        if (callerSignal.aborted) {
+          controller.abort();
+        } else {
+          callerSignal.addEventListener('abort', forwardAbort, { once: true });
+        }
+      }
       try {
         const response = await fetchImpl(url, { ...init, signal: controller.signal });
         // fetch() resolves on the response headers. Keep the timeout armed until
@@ -150,12 +154,14 @@ function watchResponseBody(
     try {
       return await work;
     } catch (error) {
+      // A failed body read ends the attempt: stop the timer and drop the caller
+      // listener. A successful partial read must NOT clean up, or the transfer
+      // would be left without a timeout after its first chunk.
+      cleanup();
       if (timedOut() && !(error instanceof RequestTimeoutError)) {
         throw new RequestTimeoutError(timeoutMs);
       }
       throw error;
-    } finally {
-      cleanup();
     }
   };
   const body = response.body;
@@ -172,13 +178,19 @@ function watchResponseBody(
         reader = reader ?? body.getReader();
         const current = reader;
         return {
-          read: () => guard(current.read()),
+          read: async () => {
+            const result = await guard(current.read());
+            if (result.done) {
+              cleanup();
+            }
+            return result;
+          },
           releaseLock: () => current.releaseLock()
         };
       }
     } : null,
-    text: () => guard(response.text()),
-    arrayBuffer: () => guard(response.arrayBuffer())
+    text: () => guard(response.text()).finally(cleanup),
+    arrayBuffer: () => guard(response.arrayBuffer()).finally(cleanup)
   };
 }
 

@@ -51,6 +51,11 @@ function markerContainerRoot(directory: string, root: string, containers: Set<st
   let current = directory;
   while (current !== root && posixPath(current) !== posixPath(root)) {
     const parent = dirname(current);
+    if (parent === current) {
+      // Reached a file-system root without meeting the workspace root; stop
+      // rather than spinning forever on drive roots.
+      return directory;
+    }
     if (containers.has(basename(current).toLowerCase())) {
       return parent;
     }
@@ -100,7 +105,10 @@ async function discoverRoot(
       }
       const path = join(directory, entry.name);
       if (entry.isDirectory) {
-        if (!ignoredDirectories.has(entry.name) && !entry.name.startsWith('cmake-build-')) {
+        // Windows file systems are case-insensitive; `Build` or `Objects` must be
+        // skipped exactly like their lower-case spellings.
+        const lowerName = entry.name.toLowerCase();
+        if (!ignoredDirectories.has(lowerName) && !lowerName.startsWith('cmake-build-')) {
           await walk(path, depth + 1);
         }
         continue;

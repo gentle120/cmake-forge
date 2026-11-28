@@ -6,6 +6,7 @@ import {
   pyocdTargetName,
   type FlashBackendId
 } from '../flash/backendProfiles';
+import { parseJsoncText } from '../shared/jsonc';
 
 const generatedConfigurationName = 'CMake Forge OpenOCD';
 const attachConfigurationName = 'CMake Forge OpenOCD (attach)';
@@ -45,91 +46,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function removeJsonComments(source: string): string {
-  let result = '';
-  let inString = false;
-  let escaped = false;
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    const next = source[index + 1];
-    if (inString) {
-      result += character;
-      if (escaped) {
-        escaped = false;
-      } else if (character === '\\') {
-        escaped = true;
-      } else if (character === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (character === '"') {
-      inString = true;
-      result += character;
-    } else if (character === '/' && next === '/') {
-      index += 1;
-      while (index + 1 < source.length && source[index + 1] !== '\n') {
-        index += 1;
-      }
-      result += '\n';
-    } else if (character === '/' && next === '*') {
-      index += 2;
-      while (index + 1 < source.length && !(source[index] === '*' && source[index + 1] === '/')) {
-        index += 1;
-      }
-      index += 1;
-      result += ' ';
-    } else {
-      result += character;
-    }
-  }
-  return result;
-}
-
-function removeTrailingCommas(source: string): string {
-  let result = '';
-  let inString = false;
-  let escaped = false;
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    if (inString) {
-      result += character;
-      if (escaped) {
-        escaped = false;
-      } else if (character === '\\') {
-        escaped = true;
-      } else if (character === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (character === '"') {
-      inString = true;
-      result += character;
-      continue;
-    }
-    if (character === ',') {
-      let lookahead = index + 1;
-      while (/\s/.test(source[lookahead] ?? '')) {
-        lookahead += 1;
-      }
-      if (source[lookahead] === '}' || source[lookahead] === ']') {
-        continue;
-      }
-    }
-    result += character;
-  }
-  return result;
-}
-
 function parseJsonc(source: string): Record<string, unknown> {
-  let value: unknown;
-  try {
-    value = JSON.parse(removeTrailingCommas(removeJsonComments(source)));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Unable to parse .vscode/launch.json: ${message}`);
-  }
+  const value = parseJsoncText(source, '.vscode/launch.json');
   if (!isRecord(value)) {
     throw new Error('Unable to parse .vscode/launch.json: the root must be an object');
   }

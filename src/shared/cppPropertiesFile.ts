@@ -18,6 +18,8 @@ export interface CppProperties {
 export const compileCommandsPath = 'build/debug/compile_commands.json';
 export const compileCommandsWorkspacePath = `\${workspaceFolder}/${compileCommandsPath}`;
 
+import { parseJsoncText } from './jsonc';
+
 /**
  * Rewrites every configuration entry, creating one when the document has none.
  * Throws when the existing document is not a JSON object with an array of
@@ -28,8 +30,11 @@ export function rewriteCppProperties(
   rewriteEntry: (entry: CppConfiguration) => CppConfiguration,
   newEntryName: string
 ): string {
+  // `c_cpp_properties.json` is JSONC: comments and trailing commas are legal
+  // in the file VS Code itself writes, so parsing it as strict JSON would break
+  // on a perfectly valid user document.
   const properties: CppProperties = content
-    ? JSON.parse(content) as CppProperties
+    ? parseJsoncText(content, '.vscode/c_cpp_properties.json') as CppProperties
     : { version: 4 };
 
   if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {

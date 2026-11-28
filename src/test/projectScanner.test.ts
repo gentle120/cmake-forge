@@ -118,3 +118,14 @@ test('reports every visited directory for progress reporting', async () => {
   assert.equal(visited[0], root);
   assert.ok(visited.some((directory) => directory.endsWith('src')));
 });
+
+test('skips ignored directories with different capitalization', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mcu-cmake-'));
+  await mkdir(join(root, 'Core', 'Src'), { recursive: true });
+  await mkdir(join(root, 'Build', 'Objects'), { recursive: true });
+  await writeFile(join(root, 'Core', 'Src', 'main.c'), 'int main(void) { return 0; }');
+  await writeFile(join(root, 'Build', 'Objects', 'stale.c'), '');
+
+  const project = await scanProject(root);
+  assert.deepEqual(project.sources, ['Core/Src/main.c']);
+});

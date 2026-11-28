@@ -47,7 +47,9 @@ export function generateCMakeLists(
     // earlier GCC generation; they must not be compiled into an Arm C library
     // image.
     if (!gnuRuntimeFamily && runtimeBasenames.has(name)) return false;
-    return !(name.startsWith('startup') && /\.s$/.test(name));
+    // Any other vendor startup (assembly or Arm Compiler C) would define
+    // Reset_Handler a second time next to the generated startup file.
+    return !(name.startsWith('startup') && /\.(s|c)$/.test(name));
   });
   sources.push(profile.gnuStartupFileName);
   // Arm Compiler 6 uses its own C library retargeting and does not need the

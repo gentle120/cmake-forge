@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- 修复下载超时只在首个数据块生效的问题：传输中途停滞会正确超时，取消也立即生效。
+- `.vscode/c_cpp_properties.json` 与 `launch.json` 按 JSONC 解析，带注释或尾逗号不再中断生成。
+- 解析 Pack 启动文件时跳过 `__initial_sp`、接受不带冒号的 `__Vectors` 标签，向量表不再整体错位。
+- 同一 Pack 内有多个 SVD 时优先选与器件同名的文件，避免拿到别的型号的中断表。
+- clang 目标三元组先判断 Armv8-M/Armv8.1-M，`cortex-m33` 不再被 `m3` 误匹配。
+- 生成 CMake 工程时排除厂商的 `startup*.c`，避免与生成的启动文件重复定义 `Reset_Handler`。
+- Windows 下扫描与工程发现忽略目录改为大小写不敏感（`Build`、`Objects` 等不再被扫描）。
+- 切换工程时清空手动选择的固件；`packs.json` 迁移改为最后写标记，迁移失败可重试。
+- 侧栏忙碌时仍可选择固件文件；提示 OpenOCD 下载时只在它被选为后端的情况下弹出。
+- 修复 CMakeCache 中相对工具链路径按错误目录解析导致的缓存误删。
+
 ## 1.0.2
 
 - 侧栏一键检测探针：读 CPUID 与 DBGMCU IDCODE，显示内核/系列/DEV_ID，自动选中探针接口并按 DEV_ID 切换烧录 target。

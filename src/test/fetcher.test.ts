@@ -199,3 +199,45 @@ test('passes the real response status through the body-tracking wrapper', async 
   assert.equal(response.status, 503);
   assert.equal(typeof response.headers.get, 'function');
 });
+
+test('the timeout still fires when a body stalls after its first chunk', async () => {
+  // `fetch()` resolves on headers; a body that yields one chunk and then hangs
+  // must still hit the timeout. Clearing the timer after the first read would
+  // leave the transfer hanging forever.
+  const fetchImpl = (async (_url: string, init?: { signal?: AbortSignal }) => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    body: {
+      getReader: () => {
+        let reads = 0;
+        return {
+          read: () => {
+            reads += 1;
+            if (reads === 1) {
+              return Promise.resolve({ done: false, value: new Uint8Array([1, 2, 3]) });
+            }
+            return new Promise<never>((_resolve, reject) => {
+              init?.signal?.addEventListener('abort', () => {
+                const error = new Error('aborted');
+                error.name = 'AbortError';
+                reject(error);
+              }, { once: true });
+            });
+          },
+          releaseLock: () => undefined
+        };
+      }
+    },
+    text: async () => '',
+    arrayBuffer: async () => new ArrayBuffer(0)
+  })) as unknown as FetchLike;
+
+  const fetcher = createTimeoutFetcher(30, fetchImpl);
+  const response = await fetcher('https://example.test/pack.pack');
+  const reader = response.body?.getReader();
+  assert.ok(reader);
+  const first = await reader.read();
+  assert.equal(first.done, false);
+  await assert.rejects(reader.read(), RequestTimeoutError);
+});

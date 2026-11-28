@@ -76,3 +76,28 @@ test('every direction shares one settings and integration description', () => {
     }
   });
 });
+
+test('rewriteCppProperties accepts comments and trailing commas', () => {
+  // c_cpp_properties.json is JSONC; VS Code itself writes comments into it.
+  const content = `{
+    // user note
+    "version": 4,
+    "configurations": [
+      {
+        "name": "Win32",
+        "includePath": [ "include", ], /* keep me */
+      },
+    ],
+  }`;
+  const result = JSON.parse(rewriteCppProperties(content, (entry) => ({ ...entry, name: 'Rewritten' }), 'New'));
+  assert.equal(result.configurations.length, 1);
+  assert.deepEqual(result.configurations[0].includePath, ['include']);
+  assert.equal(result.configurations[0].name, 'Rewritten');
+});
+
+test('rewriteCppProperties reports a truly broken file', () => {
+  assert.throws(
+    () => rewriteCppProperties('{ "configurations": [ }', () => ({}), 'New'),
+    /c_cpp_properties\.json/
+  );
+});

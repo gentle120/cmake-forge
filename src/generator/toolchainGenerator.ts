@@ -117,12 +117,14 @@ set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 /** Clang target triple for the selected core (GCC keeps arm-none-eabi-*). */
 function clangTargetTriple(profile: DeviceProfile): string {
   const core = profile.core.trim().toLowerCase();
-  if (/m0|m1|sc000|v6m/.test(core)) return 'thumbv6m-none-eabi';
-  if (/m3|sc300|v7m/.test(core)) return 'thumbv7m-none-eabi';
-  if (/m4|m7|v7em/.test(core)) return 'thumbv7em-none-eabi';
+  // Order matters: `cortex-m33` also contains `m3`, so the Armv8-M and
+  // Armv8.1-M checks must run before the Armv7-M ones.
+  if (/m55|m85|v8\.1m/.test(core)) return 'thumbv8.1m.main-none-eabi';
   if (/m23|v8m\.base/.test(core)) return 'thumbv8m.base-none-eabi';
   if (/m33|m35|v8m\.main/.test(core)) return 'thumbv8m.main-none-eabi';
-  if (/m55|m85|v8\.1m/.test(core)) return 'thumbv8.1m.main-none-eabi';
+  if (/m4|m7|v7em/.test(core)) return 'thumbv7em-none-eabi';
+  if (/m3|sc300|v7m/.test(core)) return 'thumbv7m-none-eabi';
+  if (/m0|m1|sc000|v6m/.test(core)) return 'thumbv6m-none-eabi';
   return 'arm-none-eabi';
 }
 

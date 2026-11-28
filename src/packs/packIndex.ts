@@ -107,7 +107,13 @@ export async function listPackIndexPacks(
     const vendor = textField(node, 'vendor');
     const name = textField(node, 'name');
     const version = textField(node, 'version');
-    if (!url || !vendor || !name || !version || textField(node, 'deprecated')) {
+    // The attribute carries a date; a bare `<deprecated/>` element also marks
+    // the entry. Only an explicit `false` means "still current".
+    const deprecatedField = node['@_deprecated'] ?? node['deprecated'];
+    const deprecated = deprecatedField === undefined
+      ? ''
+      : String((deprecatedField as { '#text'?: string })?.['#text'] ?? deprecatedField).trim().toLowerCase();
+    if (!url || !vendor || !name || !version || (deprecatedField !== undefined && deprecated !== 'false')) {
       continue;
     }
     const identity = `${vendor}\u0000${name}\u0000${version}`;

@@ -349,3 +349,13 @@ test('ATfE clang CMake uses picolibc and our startup', () => {
   assert.doesNotMatch(cmake, /"-nostdlib"/);
   assert.match(cmake, /system\/syscalls\.c/);
 });
+
+test('drops a vendor C startup next to the generated GNU startup', () => {
+  const cmake = generateCMakeLists('demo', {
+    sources: ['Core/Src/main.c', 'startup_stm32f103xb.c', 'system_stm32f1xx.c'],
+    includeDirs: [],
+    defines: []
+  }, fixtureDeviceProfile());
+  assert.doesNotMatch(cmake, /startup_stm32f103xb\.c/);
+  assert.match(cmake, /startup_stm32f103xb\.S/);
+});

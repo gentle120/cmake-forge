@@ -113,7 +113,10 @@ async function walk(
   for (const entry of entries) {
     throwIfScanCancelled(options);
     if (entry.isDirectory()) {
-      if (!ignoredDirectories.has(entry.name) && !entry.name.startsWith('cmake-build-')) {
+      // Windows file systems are case-insensitive; `Build` or `Objects` must be
+        // skipped exactly like their lower-case spellings.
+        const lowerName = entry.name.toLowerCase();
+        if (!ignoredDirectories.has(lowerName) && !lowerName.startsWith('cmake-build-')) {
         await walk(root, join(directory, entry.name), sources, includeDirs, defines, options, depth + 1);
       }
       continue;

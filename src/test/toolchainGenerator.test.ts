@@ -129,3 +129,26 @@ test('ATfE clang toolchain keeps picolibc and replaces only the startup file', (
   assert.doesNotMatch(toolchain, /-nostdlib/);
   assert.doesNotMatch(toolchain, /starm-/);
 });
+
+test('Armv8-M cores are not mistaken for Armv7-M by the m3 substring', () => {
+  const m33 = generateToolchainFile(fixtureDeviceProfile({
+    core: 'cortex-m33',
+    toolchainFamily: 'clang',
+    mcuCompiler: 'clang',
+    mcuCxxCompiler: 'clang++',
+    mcuObjcopy: 'llvm-objcopy',
+    mcuSize: 'llvm-size'
+  }));
+  assert.match(m33, /CMAKE_C_COMPILER_TARGET thumbv8m\.main-none-eabi/);
+  assert.match(m33, /CMAKE_CXX_COMPILER_TARGET thumbv8m\.main-none-eabi/);
+
+  const m23 = generateToolchainFile(fixtureDeviceProfile({
+    core: 'cortex-m23',
+    toolchainFamily: 'clang',
+    mcuCompiler: 'clang',
+    mcuCxxCompiler: 'clang++',
+    mcuObjcopy: 'llvm-objcopy',
+    mcuSize: 'llvm-size'
+  }));
+  assert.match(m23, /CMAKE_C_COMPILER_TARGET thumbv8m\.base-none-eabi/);
+});

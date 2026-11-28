@@ -1735,7 +1735,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.post({ type: 'flashProgress', stage: 'done', message: '烧录完成。', percent: 100 });
       this.post({
         type: 'operationFinished',
-        result: { ok: true, message: '烧录完成。', files: ['flash.py'] }
+        result: { ok: true, message: `烧录完成：${basenamePath(firmwarePath)}`, files: [firmwarePath] }
       });
     } finally {
       this.flashController = undefined;
@@ -1964,10 +1964,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     if (!environment.armGcc.ready) {
       missing.push({ tool: 'armgcc', label: 'ARM GNU 工具链' });
     }
-    if (!environment.openocd.ready) {
+    const backend = this.selectionValue.flash.backend;
+    // OpenOCD only matters when it is the selected backend; offering to install
+    // it while the user flashes through J-Link or pyOCD is just noise.
+    if (!environment.openocd.ready && backend === 'openocd') {
       missing.push({ tool: 'openocd', label: 'OpenOCD' });
     }
-    const backend = this.selectionValue.flash.backend;
     if (backend === 'jlink' && backendReady.get('jlink') !== true) {
       missing.push({ tool: 'jlink', label: 'J-Link' });
     }
@@ -2143,7 +2145,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.cancelFlash();
       return;
     }
-    if (this.busy && message.type !== 'ready' && message.type !== 'openSettings') {
+    if (
+      this.busy
+      && message.type !== 'ready'
+      && message.type !== 'openSettings'
+      // Choosing a firmware file only opens a dialog; the running build/flash
+      // does not conflict with it.
+      && message.type !== 'pickFirmware'
+    ) {
       // Clicks during a running operation must never feel dead: answer with a
       // throttled wait hint instead of silently dropping the message.
       const now = Date.now();
@@ -2242,8 +2251,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       if (!this.discoveredProjects.some((project) => project.root === message.root)) {
         return;
       }
+      // A manually chosen firmware belongs to the project it was picked from;
+      // carrying it into another project would flash the wrong ELF.
+      const rootChanged = this.selectionValue.projectRoot !== message.root;
+      const nextSelection = rootChanged
+        ? {
+            ...this.selectionValue,
+            projectRoot: message.root,
+            flash: { ...this.selectionValue.flash, firmwarePath: '' }
+          }
+        : { ...this.selectionValue, projectRoot: message.root };
       this.selectionValue = sanitizeSidebarSelection(
-        { ...this.selectionValue, projectRoot: message.root },
+        nextSelection,
         this.selectionValue,
         this.packOptions,
         // Switching projects must not drop the Pack/part while the catalog for
