@@ -659,3 +659,48 @@ test('keeps the flash verify and reset defaults unless the user opts out', () =>
   assert.equal(repaired.flash.verify, true);
   assert.equal(repaired.flash.resetAfterFlash, true);
 });
+
+test('switching projects keeps the Pack while its catalog has not loaded', () => {
+  const packFile = 'packs/STM/STM32F1xx_DFP.pack';
+  const packOptions = [{
+    packId: 'STM:STM32F1xx_DFP',
+    vendorId: 'STM',
+    name: 'STM32F1xx_DFP',
+    version: '2.4.1',
+    origin: 'imported' as const,
+    packFile
+  }];
+  registerDeviceProfiles([fixtureDeviceProfile()], packFile);
+  try {
+    const persisted = sanitizeSidebarSelection({
+      mcu: {
+        vendor: 'STM',
+        packId: 'STM:STM32F1xx_DFP',
+        version: '2.4.1',
+        sourcePack: packFile,
+        series: 'F1x',
+        part: 'STM32F103C8T6'
+      },
+      flash: { targetId: 'stm32f1xx', probeId: 'stlink', backend: 'openocd' }
+    }, defaultSidebarSelection(), packOptions);
+    assert.equal(persisted.mcu.packId, 'STM:STM32F1xx_DFP');
+
+    // The window reloads into another project: state is read before any catalog
+    // request has finished, so the selection is sanitized against an empty pool.
+    const switched = sanitizeSidebarSelection(
+      { ...persisted, projectRoot: 'D:/work/other' },
+      persisted,
+      [],
+      true
+    );
+
+    assert.equal(switched.mcu.packId, 'STM:STM32F1xx_DFP');
+    assert.equal(switched.mcu.version, '2.4.1');
+    assert.equal(switched.mcu.part, 'STM32F103C8T6');
+    assert.equal(switched.mcu.sourcePack, packFile);
+    assert.equal(switched.projectRoot, 'D:/work/other');
+
+  } finally {
+    unregisterDeviceProfilesByPack(packFile);
+  }
+});

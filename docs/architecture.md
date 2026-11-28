@@ -8,7 +8,7 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 
 - 用户在侧栏或命令面板选择方向与芯片；扩展读写工作区文件并生成 `.vscode/` 配置。
 - 配置与编译由 CMake Tools 负责，调试由 Cortex-Debug 负责，两者是扩展依赖；烧录依赖 `PATH` 或设置里的 OpenOCD、J-Link、pyOCD。
-- 信任边界：生成文件落盘前有覆盖确认；烧录只在用户显式操作时执行（OpenOCD 直接 spawn，J-Link/pyOCD 走生成的 `flash.py`）；Pack 导入只读 zip 内容并复制到扩展 `globalStorage`。
+- 信任边界：生成文件落盘前有覆盖确认；烧录只在用户显式操作时执行（OpenOCD 直接 spawn，J-Link/pyOCD 走生成的 `flash.py`）；Pack 导入只读 zip 内容并复制到用户数据目录（`%APPDATA%\cmake-forge`，首次启动从 `globalStorage` 迁移）。
 
 ## Components
 
@@ -33,11 +33,11 @@ VS Code 扩展：为桌面 C/C++、MCU 固件、Linux/SoC 交叉编译生成可�
 
 **MCU 生成**：目录加载（vendor → series → pack → version）→ 激活版本并按所有权取档案 → `getDeviceProfileForPack` → `generateMcuWorkflow` 写 CMakeLists、工具链、链接脚本、启动文件、预设、`flash.py` 与调试配置 → 覆盖确认 → 写盘 → 复制 CMSIS/器件头 → 删除本次未产出的旧文件 → 失效旧构建缓存。
 
-**Pack 导入**：zip 或目录 → PDSC/SVD → DeviceProfile 合成 → 快照器件支持文件 → `globalStorage` 持久化 → 注入注册表。注册表无内置数据，档案全部由 Pack 注入。
+**Pack 导入**：zip 或目录 → PDSC/SVD → DeviceProfile 合成 → 快照器件支持文件 → 用户数据目录持久化 → 注入注册表。注册表无内置数据，档案全部由 Pack 注入。
 
 **烧录**：侧栏只读扫描 `build/debug`、`build/release` 的 ELF，无产物时回退工作区最新 ELF（或手选）→「检测探针」用当前 target cfg 依次试探针，`init` 后读 CPUID 与两个 DBGMCU IDCODE 窗口 → 解析「Cortex-Mx · STM32Fxx · DEV_ID」，把探测成功的接口写成当前探针、按 DEV_ID 表推导 target，并把芯片信息写进「烧录输出」→「烧录」→ OpenOCD 后端拼 `program … verify reset exit` 并 spawn `openocd`，J-Link/pyOCD 拼 `flash.py` 参数 → 解析阶段行回灌进度，失败经 `flashDiagnostics` 映射为提示。
 
-**工具链**：MCU 只提供 GNU Arm GCC。`armGccPath` 为空时生成文件写 `arm-none-eabi-*` 命令名；设置为 bin 目录时合成已检测条目并写绝对路径。缺失时 `toolDownloads` 取官方 zip（GCC 15.2.1、OpenOCD 0.12.0-7），解压到 `tools/<tool>-<version>/`，校验可执行文件后写设置并失效缓存。
+**工具链**：MCU 只提供 GNU Arm GCC。`armGccPath` 为空时生成文件写 `arm-none-eabi-*` 命令名；设置为 bin 目录时合成已检测条目并写绝对路径。缺失时 `toolDownloads` 取官方 zip（GCC 15.2.1、OpenOCD 0.12.0-7），解压到用户数据目录 `tools/<tool>-<version>/`，校验可执行文件后写设置并失效缓存。
 
 ## Constraints
 

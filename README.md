@@ -44,6 +44,8 @@ cmake --build --preset debug
 
 工具缺失时侧栏「编译与烧录工具」会给出下载入口，也支持在设置里填写自定义路径。
 
+导入的 Pack 与下载的工具存放在用户数据目录（Windows `%APPDATA%\cmake-forge`，其他平台 `$XDG_DATA_HOME/cmake-forge`）。旧版本放在扩展全局存储里的内容会在首次启动时自动迁移。
+
 **F5 立即退出**：确认已安装 Cortex-Debug、`arm-none-eabi-gdb` 在 `PATH`、已构建 `debug` 预设，并在调试下拉中选择 `CMake Forge OpenOCD`。
 
 ## 设置

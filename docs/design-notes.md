@@ -42,3 +42,9 @@
 
 问题：历史计划与设计文档累积到 1700+ 行，与实际行为漂移。
 决策：保留架构、契约、路线图、变更记录四份，历史决策合并成本文件；术语按开源产品文档书写，不使用教程口吻。
+
+## 2026-11 — 数据目录独立于扩展安装
+
+问题：导入的 Pack 与下载的工具放在 `globalStorage`，卸载重装（或开发版与发布版并存）时 VS Code 会删除该目录，表现为「更新后芯片包丢失」；Windows 上 `packs.json` 覆盖失败留下的备份也没有恢复路径。
+决策：Pack 与工具改存用户数据目录（`%APPDATA%\cmake-forge`，其他平台 `$XDG_DATA_HOME`），首次启动迁移旧目录；`packs.json` 缺失时恢复最新备份。探针检测不再要求工程，只有烧录需要固件。
+落点：`src/devices/packStorage.ts`、`src/devices/importedProfiles.ts`、`src/sidebar/provider.ts`。

@@ -1,5 +1,5 @@
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, isAbsolute, join, resolve, sep } from 'node:path';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import {
   parsePackEntries,
   isPackDeviceSourceEntry,
@@ -495,6 +495,48 @@ async function ensureVendor(
   store.vendors.push(vendor);
 }
 
+/**
+ * `writeStore` moves the old store to `<target>.<pid>.<ts>.bak` on Windows
+ * because it cannot rename over a file. A crash between the two renames leaves
+ * the main file missing and the backup orphaned; restoring the newest backup
+ * keeps every imported Pack instead of showing an empty library.
+ */
+async function recoverStoreBackup(target: string): Promise<boolean> {
+  let entries: string[];
+  try {
+    entries = await readdir(dirname(target));
+  } catch {
+    return false;
+  }
+  const prefix = `${basename(target)}.`;
+  const backups = entries.filter((entry) => entry.startsWith(prefix) && entry.endsWith('.bak'));
+  if (backups.length === 0) {
+    return false;
+  }
+  const dated = await Promise.all(
+    backups.map(async (entry) => {
+      const path = join(dirname(target), entry);
+      try {
+        return { path, modified: (await stat(path)).mtimeMs };
+      } catch {
+        return undefined;
+      }
+    })
+  );
+  const newest = dated
+    .filter((candidate): candidate is { path: string; modified: number } => candidate !== undefined)
+    .sort((left, right) => right.modified - left.modified)[0];
+  if (!newest) {
+    return false;
+  }
+  try {
+    await rename(newest.path, target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function readStore(storageRoot: string): Promise<PackStoreFile> {
   const storePath = join(storageRoot, 'packs.json');
   let raw: string;
@@ -502,6 +544,9 @@ async function readStore(storageRoot: string): Promise<PackStoreFile> {
     raw = await readFile(storePath, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (await recoverStoreBackup(storePath)) {
+        return readStore(storageRoot);
+      }
       return { ...EMPTY_STORE, packs: [], vendors: [], profiles: [] };
     }
     throw error;

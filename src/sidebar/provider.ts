@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { existsSync, statSync } from 'node:fs';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { CommandResult } from '../shared/commandResult';
 import { randomBytes } from 'node:crypto';
 import {
@@ -538,7 +539,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       value,
       previous,
       this.packOptions,
-      false,
+      this.packOptions.length === 0,
       this.buildToolchains()
     );
     const mcu = requested.mcu;
@@ -563,7 +564,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
           }, this.packOptions),
           previous,
           this.packOptions,
-          false,
+          this.packOptions.length === 0,
           this.buildToolchains()
         )
       : requested;
@@ -971,7 +972,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
    */
   private detectedChipLabel(): string {
     const root = this.projectRoot();
-    return root !== undefined && this.chipDetectionRoot === root
+    // Reading a chip does not depend on a workspace, so a session without a
+    // project keeps the identity it just read; with a project the result must
+    // belong to that project to avoid claiming another board's silicon.
+    return root === undefined || this.chipDetectionRoot === root
       ? this.flashDetection?.chipLabel ?? ''
       : '';
   }
@@ -1137,7 +1141,30 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
   private async refreshFlashDetection(): Promise<void> {
     const root = this.projectRoot();
     if (!root) {
-      this.flashDetection = undefined;
+      // Detection is workspace-independent: keep the chip the probe read and
+      // only mark flashing as unavailable until a project supplies a firmware.
+      const selection = this.selectionValue.flash;
+      const probe = getFlashProbeProfile(selection.probeId);
+      const chipLabel = this.detectedChipLabel();
+      let targetLabel = '自动（点「检测探针」确定）';
+      if (chipLabel !== '') {
+        targetLabel = selection.targetId;
+        try {
+          targetLabel = getFlashTargetProfile(selection.targetId).label;
+        } catch {
+          // A stale target id is repaired by sanitize; keep the raw value.
+        }
+      }
+      this.flashDetection = {
+        firmwarePath: '',
+        firmwareLabel: '',
+        firmwareDetail: '',
+        targetLabel,
+        probeLabel: probe.label,
+        chipLabel,
+        available: false,
+        blockedReason: '打开工程后才能选择或构建固件并烧录；检测探针不需要工程。'
+      };
       return;
     }
     const selection = this.selectionValue.flash;
@@ -1286,25 +1313,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     if (this.busy) {
       return;
     }
-    const root = this.projectRoot();
-    if (!root) {
-      this.post({ type: 'notification', level: 'warning', message: '先选择一个工程，再检测探针。' });
-      return;
-    }
-    let flash: ReturnType<SidebarProvider['flashGenerationOptions']>;
+    let options: ReturnType<SidebarProvider['detectionOptions']>;
     try {
-      flash = this.flashGenerationOptions();
+      options = this.detectionOptions();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.post({ type: 'notification', level: 'warning', message });
       return;
     }
-    const openocdPath = resolveOpenOcdExecutable(flash.openocdPath);
+    const openocdPath = resolveOpenOcdExecutable(options.openocdPath);
     if (!openocdPath) {
-      this.post({ type: 'notification', level: 'warning', message: missingOpenOcdNotice(flash.openocdPath) });
+      this.post({ type: 'notification', level: 'warning', message: missingOpenOcdNotice(options.openocdPath) });
       return;
     }
-    const probes = this.chipProbes(flash);
+    const probes = options.probes;
     this.busy = true;
     this.post({ type: 'operationStarted', operation: '正在检测探针' });
     try {
@@ -1312,10 +1334,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       const result = await detectChip({
         openocdPath,
         probes,
-        targetConfig: flash.target.targetConfig,
-        transport: flash.target.transport,
+        targetConfig: options.target.targetConfig,
+        transport: options.target.transport,
         speedKHz: 4000,
-        cwd: root,
+        cwd: options.cwd,
         timeoutMs: 10000
       });
       if (!result.ok || !result.identity) {
@@ -1362,12 +1384,31 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
 
   /** 当前探针优先、其余支持 OpenOCD 的接口随后：探测成功即可自动改选。 */
   private chipProbes(
-    flash: ReturnType<SidebarProvider['flashGenerationOptions']>
+    selectedProbe: FlashProbeId
   ): Array<{ id: FlashProbeId; interfaceConfig: string }> {
     return listFlashProbeProfiles()
       .filter((candidate) => backendSupportsProbe('openocd', candidate.id))
-      .sort((left, right) => (left.id === flash.probe.id ? 0 : 1) - (right.id === flash.probe.id ? 0 : 1))
+      .sort((left, right) => (left.id === selectedProbe ? 0 : 1) - (right.id === selectedProbe ? 0 : 1))
       .map((candidate) => ({ id: candidate.id, interfaceConfig: candidate.interfaceConfig }));
+  }
+
+  /**
+   * Everything detecting a chip needs. Reading the identity only requires the
+   * probe, so this deliberately skips the device profile: detection must work
+   * before a project (or a Pack) is selected.
+   */
+  private detectionOptions() {
+    const selection = this.selectionValue.flash;
+    const probe = getFlashProbeProfile(selection.probeId);
+    return {
+      target: getFlashTargetProfile(selection.targetId),
+      probe,
+      openocdPath: selection.openocdPath === 'openocd'
+        ? this.configuredOpenOcdPath()
+        : selection.openocdPath,
+      probes: this.chipProbes(probe.id),
+      cwd: this.projectRoot() ?? this.dependencies.toolStorageRoot?.() ?? tmpdir()
+    };
   }
 
   /**
@@ -1397,7 +1438,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       try {
         const result = await detectChip({
           openocdPath,
-          probes: this.chipProbes(flash),
+          probes: this.chipProbes(flash.probe.id),
           targetConfig: flash.target.targetConfig,
           transport: flash.target.transport,
           speedKHz: 2000,
@@ -2199,10 +2240,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       if (!this.discoveredProjects.some((project) => project.root === message.root)) {
         return;
       }
-      this.selectionValue = sanitizeSidebarSelection({
-        ...this.selectionValue,
-        projectRoot: message.root
-      });
+      this.selectionValue = sanitizeSidebarSelection(
+        { ...this.selectionValue, projectRoot: message.root },
+        this.selectionValue,
+        this.packOptions,
+        // Switching projects must not drop the Pack/part while the catalog for
+        // the new project has not loaded yet: an empty catalog is not a reason
+        // to forget what the user imported.
+        this.packOptions.length === 0,
+        this.buildToolchains()
+      );
       await this.context.workspaceState.update(selectionKey, this.selectionValue);
       this.postState();
       void this.refreshFlashDetection().then(() => {

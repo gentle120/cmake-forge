@@ -63,6 +63,7 @@ import {
   RequestTimeoutError
 } from './packs/fetcher';
 import { curatedVendors } from './devices/curatedVendors';
+import { prepareDataRoot, resolveDataRoot } from './devices/packStorage';
 import { findCatalogSeries, seriesDownloadPage } from './devices/seriesCatalog';
 import { existsSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -1598,7 +1599,11 @@ async function generateNativeProject(): Promise<void> {
 export function activate(context: vscode.ExtensionContext): void {
   workspaceStateMemento = context.workspaceState;
   const host = createWorkflowHost();
-  packStorageRoot = context.globalStorageUri.fsPath;
+  // Packs and downloaded tools no longer live in globalStorageUri: VS Code
+  // deletes that directory when the extension is uninstalled, which made a
+  // reinstall look like the imported Packs had vanished.
+  const legacyStorageRoot = context.globalStorageUri.fsPath;
+  packStorageRoot = resolveDataRoot();
   const sidebarProvider = new SidebarProvider(context, {
     workflow: host,
     confirmOverwrite: async (files) => {
@@ -1632,12 +1637,18 @@ export function activate(context: vscode.ExtensionContext): void {
     activatePack: (vendor, packId, version) => activateDevicePack(vendor, packId, version)
   });
   activeSidebar = sidebarProvider;
-  void loadImportedProfiles(packStorageRoot)
+  void prepareDataRoot(legacyStorageRoot, packStorageRoot)
+    .then((prepared) => {
+      if (prepared.root !== packStorageRoot) {
+        // The migration could not finish; the old directory stays authoritative
+        // rather than showing an empty Pack library.
+        packStorageRoot = prepared.root;
+      }
+      return loadImportedProfiles(packStorageRoot);
+    })
     .then(async (profiles) => {
       await syncPackFileIndex();
-      if (profiles.length > 0) {
-        sidebarProvider.refresh();
-      }
+      sidebarProvider.refresh();
     })
     // A corrupt `packs.json` must not become an unhandled rejection that
     // silently leaves every imported Pack missing; report it once and keep the
