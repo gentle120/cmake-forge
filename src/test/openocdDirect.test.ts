@@ -275,3 +275,48 @@ test('a generic session that cannot connect falls back to the target session', a
   const result = await detecting;
   assert.equal(result.ok, true);
 });
+
+test('escapes Tcl metacharacters in the firmware path', () => {
+  const args = buildOpenOcdFlashArgs({
+    target: { interfaceConfig: 'interface/stlink.cfg', targetConfig: 'target/stm32f1x.cfg', transport: 'swd', speedKHz: 4000 },
+    firmwarePath: 'C:\\work [1]\\a$b.elf',
+    verify: true,
+    reset: true
+  });
+  const program = args[args.length - 1];
+  assert.equal(program, 'program "C:/work \\[1\\]/a\\$b.elf" verify reset exit');
+});
+
+test('a mismatched selected target is retried with common target scripts', async () => {
+  const generic = new FakeChild();
+  const selected = new FakeChild();
+  const wrong = new FakeChild();
+  const right = new FakeChild();
+  const detecting = detectChip({
+    openocdPath: 'openocd',
+    probes: [{ id: 'stlink', interfaceConfig: 'interface/stlink.cfg' }],
+    targetConfig: 'target/stm32h7x.cfg',
+    transport: 'swd',
+    generic: true,
+    speedKHz: 2000,
+    cwd: 'C:/project',
+    fallbackTargets: ['target/stm32f1x.cfg', 'target/stm32l4x.cfg'],
+    spawn: spawnSequence([generic, selected, wrong, right])
+  });
+  await nextTurn();
+  generic.stderr.emit('data', Buffer.from('Error: open failed\n'));
+  generic.emit('close', 1, null);
+  await nextTurn();
+  selected.stderr.emit('data', Buffer.from('Error: init mode failed (unable to connect to the target)\n'));
+  selected.emit('close', 1, null);
+  await nextTurn();
+  wrong.stderr.emit('data', Buffer.from('Error: init mode failed (unable to connect to the target)\n'));
+  wrong.emit('close', 1, null);
+  await nextTurn();
+  right.stdout.emit('data', Buffer.from('EP_CPUID 410FC241\nEP_IDCODE 10076413\n'));
+  right.emit('close', 0, null);
+  const result = await detecting;
+  assert.equal(result.ok, true);
+  assert.equal(result.identity?.family, 'STM32F4x');
+  assert.equal(result.targetConfig, 'target/stm32l4x.cfg');
+});

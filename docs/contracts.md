@@ -12,7 +12,7 @@
 - 命令 ID 固定为 `cmakeForge.generateMcu/generateLinux/generateNative/generateFlashScript/generateDebugConfiguration/importPack/installPackOnline/removePack/installCorePack`，`package.json` 的贡献与 `extension.ts` 的注册必须一一对应。
 - 工作区可含多个工程；扫描、生成、烧录、调试都以当前选中的工程根为边界，不跨工程合并源文件。持久化选择只在本工作区有效；发现唯一工程时自动选中，多个时保留有效选择或等待用户选择。空工作区根目录仍可扫描，返回零源文件并明确提示没有 C/C++ 或汇编源。
 - 插件不提供构建命令或构建执行器：配置/编译归 CMake Tools，调试归 Cortex-Debug。两者写进 `extensionDependencies`（`ms-vscode.cmake-tools`、`marus25.cortex-debug`），由 VS Code 随扩展安装；生成调试配置前仍做运行时检查，覆盖被禁用、被卸载或离线手装的情况。
-- 生成文件落盘前必须经过覆盖确认（`shared/generatedFiles.ts`）：只有内容与新输出不同、或会被生成过程删除的文件才进入确认；内容一致的重新生成不提示、不重写。MCU/Linux/桌面与仅 `flash.py` 的生成共用同一判据。
+- 生成文件落盘前必须经过确认（`shared/generatedFiles.ts`）：只有内容与新输出不同、或会被生成过程删除的文件才进入确认；内容一致的重新生成不提示、不重写。覆盖与删除分开告知（数量 + 前若干个路径），不得把删除说成覆盖。MCU/Linux/桌面与仅 `flash.py` 的生成共用同一判据。
 - 启动向量表固定 16 槽 + `interruptHandlers` 依序拼接，`'0'` 表示保留（`startupGenerator`）：ARMv6-M（M0/M0+/M1/SC000 与 v8-M baseline 的 M23）用 M0 布局；ARMv7-M（M3/M4/M7）在 UsageFault 后保留四个字；ARMv8-M mainline（M33/M35P/M55）首保留字为 `SecureFault_Handler`。
 
 ## Data And Persistence
@@ -49,7 +49,7 @@
 - 「导入 Pack 包」「在线安装 Pack」按钮分别触发 `importPack` 与 `installPackOnline`；成功后按厂商切换语义刷新（优先激活服务当前系列的 imported/installed 版本，否则取最新；可下载版本不自动下载），失败不改变有效选择。显式切换厂商时同样自动激活服务当前系列的版本（同版本 imported 优先；无系列匹配取最新），启动时的目录刷新不自动激活。
 - 仅切换侧栏模式（mcu/linux/native）的保存按消息保留模式；MCU 字段重算不改写模式。调试器列表只提供当前后端支持的探针，切换后端不保留不兼容探针。
 - 固件来源顺序：手选 > `build/<preset>` 最新产物 > 工作区其余位置最新 ELF；手选路径不存在时烧录禁用并说明原因，构建目录为空时回退工作区扫描。
-- 探针探测成功会把当前探针改成探测成功的接口；烧录 target 由读到的 DBGMCU DEV_ID 推导（`src/flash/chipTargets.ts`），未收录时保留当前目标而不是按内核猜。检测结果（芯片/目标/探针）写进「烧录输出」，侧栏不提供 target 手选或后端细节面板。检测不需要工程：未打开工程时也能读芯片并在侧栏显示结果，只是没有固件可烧（提示打开工程选择或构建固件）。检测先用不需要 `target/*.cfg` 的通用 Cortex-M SWD 会话（`swd newdap` + `target create cortex_m`）读 CPUID/DEV_ID，适配器不支持该传输层时才退回当前目标配置——所以「先选型号才能检测」不成立，型号是检测的产物而不是前提。检测结果只对当前工程有效：切换工程或重开窗口后目标显示「自动」，本次检测成功前不复用旧 target，也不允许 OpenOCD 后端烧录或生成（提示先「检测探针」）；J-Link/pyOCD 用器件名而非 target 配置，不受限。
+- 探针探测成功会把当前探针改成探测成功的接口；烧录 target 由读到的 DBGMCU DEV_ID 推导（`src/flash/chipTargets.ts`），未收录时保留当前目标而不是按内核猜。检测结果（芯片/目标/探针）写进「烧录输出」，侧栏不提供 target 手选或后端细节面板。检测不需要工程：未打开工程时也能读芯片并在侧栏显示结果，只是没有固件可烧（提示打开工程选择或构建固件）。检测先用不需要 `target/*.cfg` 的通用 Cortex-M SWD 会话（`swd newdap` + `target create cortex_m`）读 CPUID/DEV_ID，适配器不支持该传输层时才退回当前目标配置，再按常见 STM32 `target/*.cfg` 逐个试探（ST-Link 的 `hla_swd` 无法开无目标会话）——所以「先选型号才能检测」不成立，型号是检测的产物而不是前提。检测结果只对当前工程有效：切换工程或重开窗口后目标显示「自动」，本次检测成功前不复用旧 target，也不允许 OpenOCD 后端烧录或生成（提示先「检测探针」）；J-Link/pyOCD 用器件名而非 target 配置，不受限。
 
 ## Performance And Resources
 

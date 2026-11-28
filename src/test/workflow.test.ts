@@ -32,7 +32,7 @@ async function withWorkspace(run: (root: string) => Promise<void>): Promise<void
 
 function createHost(
   root: string,
-  confirmOverwrite: (files: string[]) => Promise<boolean> = async () => true
+  confirmOverwrite: (files: string[], removedFiles?: string[]) => Promise<boolean> = async () => true
 ): ProjectWorkflowHost {
   return {
     workspaceRoot: () => root,
@@ -649,5 +649,30 @@ test('MCU workflow clears a build cache left by the previous compiler', async ()
     assert.equal(result.ok, true);
     assert.equal(existsSync(join(root, 'build', 'debug', 'CMakeCache.txt')), false);
     assert.ok((result.warnings ?? []).some((warning) => warning.includes('旧编译器缓存')));
+  });
+});
+
+test('reports deletions separately from overwrites in the confirmation', async () => {
+  await withWorkspace(async (root) => {
+    const first = await generateMcuWorkflow(createHost(root), fixtureDeviceProfile(), {});
+    assert.equal(first.ok, true);
+
+    // Pretend an older generation produced a file this one no longer writes.
+    const configPath = join(root, '.mcu-cmake.json');
+    const config = JSON.parse(await readFile(configPath, 'utf8')) as { generatedFiles: string[] };
+    await writeFile(join(root, 'cmake', 'legacy.cmake'), '# old\n');
+    config.generatedFiles = [...config.generatedFiles, 'cmake/legacy.cmake'];
+    await writeFile(configPath, JSON.stringify(config, null, 2));
+
+    const calls: { files: string[]; removed: string[] }[] = [];
+    const host = createHost(root, async (files, removed = []) => {
+      calls.push({ files, removed });
+      return false;
+    });
+    const second = await generateMcuWorkflow(host, fixtureDeviceProfile(), {});
+    assert.equal(second.cancelled, true);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].files, []);
+    assert.deepEqual(calls[0].removed, [join(root, 'cmake', 'legacy.cmake')]);
   });
 });

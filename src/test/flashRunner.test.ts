@@ -196,3 +196,23 @@ test('tailLines 0 disables the retained tail', async () => {
   assert.deepEqual(result.outputTail, []);
   assert.equal(result.ok, true);
 });
+
+test('a cancelled process that never exits still settles after the grace period', async () => {
+  const { runTool } = await import('../flash/flashRunner');
+  const child = new FakeChild();
+  const controller = new AbortController();
+  const running = runTool({
+    executable: 'openocd',
+    args: ['-f', 'board.cfg'],
+    cwd,
+    signal: controller.signal,
+    spawn: spawnReturning(child),
+    abortGraceMs: 20
+  } as Parameters<typeof runTool>[0]);
+  await nextTurn();
+  controller.abort();
+  const result = await running;
+  assert.equal(result.cancelled, true);
+  assert.equal(result.ok, false);
+  assert.equal(child.killCalls, 1);
+});

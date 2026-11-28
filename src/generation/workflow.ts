@@ -65,7 +65,12 @@ import type { FlashDeviceContext, FlashExecutablePaths } from '../generator/flas
 export interface ProjectWorkflowHost {
   workspaceRoot(): string | undefined;
   scanWorkspace(root: string): Promise<ProjectDescription | undefined>;
-  confirmOverwrite(existingFiles: string[]): Promise<boolean>;
+  /**
+   * `existingFiles` are written again; `removedFiles` are files this tool
+   * generated earlier and no longer needs. Both need consent, but the dialog
+   * must not pretend a deletion is an overwrite.
+   */
+  confirmOverwrite(existingFiles: string[], removedFiles?: string[]): Promise<boolean>;
   updateSettings(
     settings: Record<string, string | boolean | Record<string, string>>,
     projectRoot?: string
@@ -828,14 +833,17 @@ export async function generateMcuWorkflow(
     [...corePlan.map((entry) => entry.relative), ...deviceSupport.map((file) => file.relative)],
     managedPrefixes
   );
-  const overwrittenFiles = [...new Set([
+  const changedTargets = [...new Set([
     ...changedFiles,
     ...changedCorePlan.map((entry) => entry.target),
-    ...changedDeviceFiles.map((file) => join(root, file.relative)),
-    ...obsoleteCopies,
-    ...staleGeneratedFiles
+    ...changedDeviceFiles.map((file) => join(root, file.relative))
   ])];
-  if (overwrittenFiles.length > 0 && !(await host.confirmOverwrite(overwrittenFiles))) {
+  const removedTargets = [...new Set([...obsoleteCopies, ...staleGeneratedFiles])];
+  const overwrittenFiles = [...changedTargets, ...removedTargets];
+  if (
+    (changedTargets.length > 0 || removedTargets.length > 0)
+    && !(await host.confirmOverwrite(changedTargets, removedTargets))
+  ) {
     return {
       kind: 'mcu',
       ok: false,

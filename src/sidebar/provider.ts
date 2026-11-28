@@ -98,7 +98,7 @@ const scanHost: SidebarScanHost = {
 
 export interface SidebarProviderDependencies {
   workflow: ProjectWorkflowHost;
-  confirmOverwrite(files: string[]): Promise<boolean>;
+  confirmOverwrite(files: string[], removedFiles?: string[]): Promise<boolean>;
   discoverToolchains(): ReturnType<typeof discoverLinuxToolchains>;
   /** Installed MCU compiler families; absent means "scan the real machine". */
   discoverMcuBuildToolchains?(): BuildToolchain[];
@@ -985,15 +985,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     return backend === 'openocd' && this.detectedChipLabel() === '';
   }
 
-  private async confirmOverwrite(files: string[]): Promise<boolean> {
-    return this.dependencies.confirmOverwrite(files);
+  private async confirmOverwrite(files: string[], removedFiles?: string[]): Promise<boolean> {
+    return this.dependencies.confirmOverwrite(files, removedFiles);
   }
 
   private workflowHost(): ProjectWorkflowHost {
     return {
       ...this.dependencies.workflow,
       workspaceRoot: () => this.projectRoot(),
-      confirmOverwrite: (files) => this.confirmOverwrite(files)
+      confirmOverwrite: (files, removedFiles) => this.confirmOverwrite(files, removedFiles)
     };
   }
 
@@ -1831,7 +1831,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       return;
     }
     if (tool === 'pyocd') {
+      if (this.busy) {
+        return;
+      }
       await this.installPyocd();
+      return;
+    }
+    if (this.busy) {
+      // An install already owns the busy flag; a second one would race it.
       return;
     }
     if (process.platform !== 'win32') {
@@ -1988,6 +1995,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       );
       if (answer === '下载') {
         await this.installTool(item.tool);
+        // Cancelled or failed installs stay out of the way, but the next
+        // refresh should be allowed to ask again instead of never offering.
+        const ready = this.environment();
+        const stillMissing = item.tool === 'armgcc'
+          ? !ready.armGcc.ready
+          : item.tool === 'openocd'
+            ? !ready.openocd.ready
+            : ready.backends.find((choice) => choice.value === item.tool)?.ready !== true;
+        if (stillMissing) {
+          this.promptedTools.delete(item.tool);
+        }
       }
     }
   }

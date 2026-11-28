@@ -346,16 +346,19 @@ function createWorkflowHost(fixedRoot?: string): ProjectWorkflowHost {
   return {
     workspaceRoot: () => fixedRoot ?? activeSidebar?.selection().projectRoot ?? undefined,
     scanWorkspace,
-    confirmOverwrite: async (files) => {
+    confirmOverwrite: async (files, removedFiles = []) => {
+      const message = removedFiles.length > 0
+        ? `将覆盖 ${files.length} 个生成文件，并删除 ${removedFiles.length} 个早先生成、此次不再需要的文件。是否继续？`
+        : `已有 ${files.length} 个生成文件存在，是否覆盖？`;
       // Modal: a non-modal notification can be collapsed into the notification
       // centre, leaving the generation waiting for an answer the user cannot see.
       const action = await vscode.window.showWarningMessage(
-        `已有 ${files.length} 个生成文件存在，是否覆盖？`,
-        { modal: true },
-        '覆盖',
+        message,
+        { modal: true, detail: describeOverwrite(files, removedFiles) },
+        '继续',
         '取消'
       );
-      return action === '覆盖';
+      return action === '继续';
     },
     updateSettings: async (settings, root) => {
       try {
@@ -366,6 +369,24 @@ function createWorkflowHost(fixedRoot?: string): ProjectWorkflowHost {
       }
     }
   };
+}
+
+/** Modal detail: the first few paths, so a 200-file regeneration stays readable. */
+function describeOverwrite(files: string[], removedFiles: string[]): string {
+  const shown = 6;
+  const lines: string[] = [];
+  for (const file of files.slice(0, shown)) {
+    lines.push(`覆盖 ${file.replace(/\\/g, '/')}`);
+  }
+  for (const file of removedFiles.slice(0, shown)) {
+    lines.push(`删除 ${file.replace(/\\/g, '/')}`);
+  }
+  const hidden = files.length + removedFiles.length
+    - Math.min(files.length, shown) - Math.min(removedFiles.length, shown);
+  if (hidden > 0) {
+    lines.push(`…另有 ${hidden} 个文件`);
+  }
+  return lines.join('\n');
 }
 
 function reportWorkflowResult(result: WorkflowResult): void {
@@ -1606,16 +1627,19 @@ export function activate(context: vscode.ExtensionContext): void {
   packStorageRoot = resolveDataRoot();
   const sidebarProvider = new SidebarProvider(context, {
     workflow: host,
-    confirmOverwrite: async (files) => {
+    confirmOverwrite: async (files, removedFiles = []) => {
+      const message = removedFiles.length > 0
+        ? `将覆盖 ${files.length} 个生成文件，并删除 ${removedFiles.length} 个早先生成、此次不再需要的文件。是否继续？`
+        : `已有 ${files.length} 个生成文件存在，是否覆盖？`;
       // Modal: a non-modal notification can be collapsed into the notification
       // centre, leaving the generation waiting for an answer the user cannot see.
       const action = await vscode.window.showWarningMessage(
-        `已有 ${files.length} 个生成文件存在，是否覆盖？`,
-        { modal: true },
-        '覆盖',
+        message,
+        { modal: true, detail: describeOverwrite(files, removedFiles) },
+        '继续',
         '取消'
       );
-      return action === '覆盖';
+      return action === '继续';
     },
     discoverToolchains: () => cachedLinuxToolchains(),
     scanProject: (root, options) => scanProject(root, options),

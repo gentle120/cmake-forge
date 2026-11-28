@@ -42,7 +42,11 @@ function transportArgs(transport: 'swd' | 'jtag'): string[] {
 }
 
 function quotePath(value: string): string {
-  return `"${value.replace(/\\/g, '/')}"`;
+  // OpenOCD runs these through a Tcl interpreter, so `$`, `[` and `]` would be
+  // substituted inside a plain quoted string. Escape them; backslashes are
+  // normalised first because OpenOCD accepts forward slashes on every platform.
+  const normalized = value.replace(/\\/g, '/');
+  return `"${normalized.replace(/[\\"$[\]]/g, (character) => `\\${character}`)}"`;
 }
 
 /** `program "<elf>" [verify] [reset] exit` — OpenOCD's one-shot flash. */
@@ -165,6 +169,8 @@ export interface DetectChipResult {
   outputTail: string[];
   /** 探测成功的探针 id；失败时为空。 */
   probeId?: string;
+  /** 回退探测时命中的 target 脚本，供调用方顺手修正选择。 */
+  targetConfig?: string;
 }
 
 const CPUID_PARTS: Record<number, string> = {
@@ -326,13 +332,44 @@ export interface DetectChipOptions {
    * below when the adapter cannot run one.
    */
   generic?: boolean;
+  /** Common target scripts tried when the selected one does not match the part. */
+  fallbackTargets?: readonly string[];
   spawn?: typeof import('node:child_process').spawn;
 }
+
+/**
+ * Target scripts shipped with OpenOCD for the parts this extension generates.
+ * A wrong one fails during `init`, so the list is only a lookup table: the
+ * identity still comes from the probe.
+ */
+export const DETECT_FALLBACK_TARGETS: readonly string[] = [
+  'target/stm32f1x.cfg',
+  'target/stm32f4x.cfg',
+  'target/stm32f0x.cfg',
+  'target/stm32l4x.cfg',
+  'target/stm32g4x.cfg',
+  'target/stm32f7x.cfg',
+  'target/stm32g0x.cfg',
+  'target/stm32h7x.cfg',
+  'target/stm32l5x.cfg',
+  'target/stm32u5x.cfg'
+];
 
 /**
  * Tries each probe interface until one completes a session and reports a
  * CPUID. An unsuccessful probe is not an error: the next interface is tried.
  */
+/**
+ * A script that does not match the part fails while attaching; an adapter that
+ * is absent or busy fails earlier. Only the former is worth retrying with
+ * another `target/*.cfg`.
+ */
+function targetMismatch(outputTail: readonly string[]): boolean {
+  return outputTail.some((line) =>
+    /init mode failed|unable to connect to the target|target not examined|examination failed/i.test(line)
+  );
+}
+
 function transportUnsupported(outputTail: readonly string[]): boolean {
   return outputTail.some(
     (line) =>
@@ -346,9 +383,9 @@ export async function detectChip(options: DetectChipOptions): Promise<DetectChip
   const timeoutMs = Math.max(1000, options.timeoutMs ?? 8000);
   let lastTail: string[] = [];
 
-  const session = async (args: string[]): Promise<FlashRunResult> => {
+  const session = async (args: string[], timeout = timeoutMs): Promise<FlashRunResult> => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeout);
     try {
       return await runTool({
         executable: options.openocdPath,
@@ -364,7 +401,7 @@ export async function detectChip(options: DetectChipOptions): Promise<DetectChip
     }
   };
 
-  for (const probe of options.probes) {
+  for (const [probeIndex, probe] of options.probes.entries()) {
     if (options.generic && options.transport === 'swd') {
       for (const transportName of GENERIC_DETECT_TRANSPORTS) {
         const result = await session(
@@ -407,6 +444,43 @@ export async function detectChip(options: DetectChipOptions): Promise<DetectChip
     const identity = parseIdentityLines(result.outputTail);
     if (result.ok && identity.cpuid !== undefined) {
       return { ok: true, identity, outputTail: lastTail, probeId: probe.id };
+    }
+    // The selected target script is only a guess before a chip was ever read:
+    // ST-Link in particular cannot open a target-free session, so a handful of
+    // common scripts is tried before declaring the probe unusable.
+    if (probeIndex === 0 && options.transport === 'swd' && targetMismatch(result.outputTail)) {
+      const candidates = options.fallbackTargets ?? DETECT_FALLBACK_TARGETS;
+      for (const candidate of candidates) {
+        if (candidate === options.targetConfig) {
+          continue;
+        }
+        const attempt = await session(
+          buildOpenOcdDetectArgs(
+            {
+              interfaceConfig: probe.interfaceConfig,
+              targetConfig: candidate,
+              transport: options.transport,
+              speedKHz: options.speedKHz
+            },
+            options.searchDirs
+          ),
+          Math.min(timeoutMs, 4000)
+        );
+        lastTail = attempt.outputTail;
+        if (attempt.cancelled) {
+          return { ok: false, outputTail: lastTail };
+        }
+        const found = parseIdentityLines(attempt.outputTail);
+        if (attempt.ok && found.cpuid !== undefined) {
+          return {
+            ok: true,
+            identity: found,
+            outputTail: lastTail,
+            probeId: probe.id,
+            targetConfig: candidate
+          };
+        }
+      }
     }
   }
   return { ok: false, outputTail: lastTail };

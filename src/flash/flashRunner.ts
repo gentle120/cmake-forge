@@ -42,6 +42,12 @@ export interface ToolRunOptions {
   tailLines?: number;
   /** 覆盖默认阶段行匹配：不同后端的进度文案不同。 */
   matchLine?(line: string): StageMatch | undefined;
+  /**
+   * How long to wait for the process to exit after a cancel before settling
+   * anyway. A stuck driver can ignore the kill and would otherwise leave the
+   * side bar busy forever.
+   */
+  abortGraceMs?: number;
 }
 
 export interface FlashRunResult {
@@ -130,6 +136,10 @@ export async function runTool(options: ToolRunOptions): Promise<FlashRunResult> 
   const spawnFn = options.spawn ?? spawn;
   const allowTaskkill = options.spawn === undefined;
   const tailLimit = Math.max(0, Math.trunc(options.tailLines ?? DEFAULT_TAIL_LINES));
+  // Only the tail is ever reported, so a chatty session must not keep every line
+  // in memory.
+  const outputLimit = Math.max(tailLimit * 5, 200);
+  const abortGraceMs = Math.max(0, options.abortGraceMs ?? 5000);
 
   if (options.signal?.aborted) {
     return {
@@ -147,6 +157,7 @@ export async function runTool(options: ToolRunOptions): Promise<FlashRunResult> 
     let spawnError: string | undefined;
     let pending = '';
     let child: ChildProcess | undefined;
+    let abortTimer: ReturnType<typeof setTimeout> | undefined;
 
     function handleLine(raw: string): void {
       const line = stripAnsi(raw).replace(/\r$/, '').trim();
@@ -154,6 +165,9 @@ export async function runTool(options: ToolRunOptions): Promise<FlashRunResult> 
         return;
       }
       output.push(line);
+      if (output.length > outputLimit) {
+        output.splice(0, output.length - outputLimit);
+      }
       const match = (options.matchLine ?? matchStage)(line);
       if (!match) {
         return;
@@ -188,6 +202,9 @@ export async function runTool(options: ToolRunOptions): Promise<FlashRunResult> 
       cancelled = true;
       if (child) {
         terminate(child, allowTaskkill);
+        // Killing a process tree is not guaranteed (driver hangs, taskkill
+        // missing); report the cancellation instead of staying busy forever.
+        abortTimer = setTimeout(() => settle(null), abortGraceMs);
       }
     }
 
@@ -196,6 +213,10 @@ export async function runTool(options: ToolRunOptions): Promise<FlashRunResult> 
         return;
       }
       settled = true;
+      if (abortTimer !== undefined) {
+        clearTimeout(abortTimer);
+        abortTimer = undefined;
+      }
       if (pending.length > 0) {
         const rest = pending;
         pending = '';
