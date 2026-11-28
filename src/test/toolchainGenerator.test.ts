@@ -152,3 +152,18 @@ test('Armv8-M cores are not mistaken for Armv7-M by the m3 substring', () => {
   }));
   assert.match(m23, /CMAKE_C_COMPILER_TARGET thumbv8m\.base-none-eabi/);
 });
+
+test('normalizes Windows backslash compiler paths for CMake', () => {
+  const profile = fixtureDeviceProfile();
+  const toolchain = generateToolchainFile({
+    ...profile,
+    mcuCompiler: 'C:\\tools\\arm\\bin\\arm-none-eabi-gcc.exe',
+    mcuCxxCompiler: 'C:\\tools\\arm\\bin\\arm-none-eabi-g++.exe'
+  });
+
+  // A raw `\` inside a quoted CMake argument reads as an escape sequence and
+  // aborts configure with "Invalid character escape '\U'".
+  assert.match(toolchain, /set\(CMAKE_C_COMPILER "C:\/tools\/arm\/bin\/arm-none-eabi-gcc\.exe"\)/);
+  assert.match(toolchain, /set\(CMAKE_CXX_COMPILER "C:\/tools\/arm\/bin\/arm-none-eabi-g\+\+\.exe"\)/);
+  assert.doesNotMatch(toolchain, /C:\\tools/);
+});

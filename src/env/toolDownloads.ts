@@ -1,6 +1,7 @@
 /**
- * Downloads the two tools a generated STM32 project actually needs: the GNU
- * Arm toolchain that compiles it and OpenOCD that flashes it.
+ * Downloads the tools a generated MCU project actually needs: the GNU Arm
+ * toolchain that compiles it, CMake and Ninja that drive the build, and OpenOCD
+ * that flashes it.
  *
  * Both are plain zip archives on purpose — asking a user without a compiler to
  * click through vendor installers (and possibly an admin prompt) is the step
@@ -9,6 +10,8 @@
  */
 
 import { spawn } from 'node:child_process';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import {
   appendFileSync,
   createWriteStream,
@@ -20,7 +23,7 @@ import {
   rmSync,
   statSync
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 /**
  * Arm's own CDN is the canonical source but is very slow from mainland China,
@@ -52,6 +55,31 @@ export const OPENOCD_SOURCES = [
 /** Rough sizes, used for a percentage before the server reports a length. */
 export const ARM_GCC_EXPECTED_BYTES = 296_000_000;
 export const OPENOCD_EXPECTED_BYTES = 3_300_000;
+
+/**
+ * CMake Tools does not bundle CMake or Ninja; a machine without them stops at
+ * "configure". The portable zip is extracted under the user data directory and
+ * pointed at through `cmake.cmakePath`, so no PATH edit is needed for CMake.
+ */
+export const CMAKE_VERSION = '4.2.3';
+export const CMAKE_URL =
+  `${GITHUB_PROXY}https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/`
+  + `cmake-${CMAKE_VERSION}-windows-x86_64.zip`;
+export const CMAKE_SOURCES = [
+  CMAKE_URL,
+  `https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-windows-x86_64.zip`
+];
+export const CMAKE_EXPECTED_BYTES = 50_391_842;
+
+/** Ninja ships as a single executable inside its zip. */
+export const NINJA_VERSION = '1.13.2';
+export const NINJA_URL =
+  `${GITHUB_PROXY}https://github.com/ninja-build/ninja/releases/download/v${NINJA_VERSION}/ninja-win.zip`;
+export const NINJA_SOURCES = [
+  NINJA_URL,
+  `https://github.com/ninja-build/ninja/releases/download/v${NINJA_VERSION}/ninja-win.zip`
+];
+export const NINJA_EXPECTED_BYTES = 291_570;
 
 /** Python package index mirror used by the pyOCD install step. */
 export const PYPI_MIRROR = 'https://pypi.tuna.tsinghua.edu.cn/simple';
@@ -86,6 +114,22 @@ export interface InstalledOpenOcd {
   version: string;
   /** Full path to `openocd.exe`. */
   executable: string;
+}
+
+export interface InstalledCMake {
+  version: string;
+  /** Full path to `cmake.exe`. */
+  cmakePath: string;
+  /** Directory containing `cmake.exe`. */
+  binDir: string;
+}
+
+export interface InstalledNinja {
+  version: string;
+  /** Full path to `ninja.exe`. */
+  ninjaPath: string;
+  /** Directory containing `ninja.exe`. */
+  binDir: string;
 }
 
 function report(
@@ -200,6 +244,7 @@ const CHUNK_BYTES = 1024 * 1024;
 const CHUNK_WORKERS = 24;
 /** 单个请求的兜底超时：代理偶尔挂住连接，不能让一个分片拖死整次下载。 */
 const REQUEST_TIMEOUT_MS = 30_000;
+const CHUNK_ATTEMPTS = 3;
 
 async function downloadChunks(
   options: InstallOptions,
@@ -214,19 +259,29 @@ async function downloadChunks(
   const signal = options.signal
     ? AbortSignal.any([options.signal, controller.signal])
     : controller.signal;
-  const parts: string[] = [];
-  let completed = 0;
-  let lastPercent = -1;
+  const parts: (string | undefined)[] = new Array(chunks);
   let nextChunk = 0;
+  let completedBytes = 0;
+  let lastPercent = -1;
   let failure: unknown;
+
+  /**
+   * A proxy that drops the connection mid-body used to leave a short part file
+   * behind, and awaiting `drain` on a dead stream could hang the whole download.
+   * `pipeline` propagates stream errors and honours the abort signal, and the
+   * byte count check turns a truncated part into a retry instead of a corrupt
+   * archive.
+   */
   const worker = async (): Promise<void> => {
     for (;;) {
-      const index = nextChunk++;
+      const index = nextChunk;
+      nextChunk += 1;
       if (index >= chunks || failure) {
         return;
       }
       const start = index * CHUNK_BYTES;
       const end = Math.min(total - 1, start + CHUNK_BYTES - 1);
+      const expected = end - start + 1;
       const partPath = `${destination}.part${index}`;
       try {
         for (let attempt = 1; ; attempt += 1) {
@@ -239,35 +294,27 @@ async function downloadChunks(
             if (response.status !== 206 || !response.body) {
               throw new Error(`分片 ${index} 返回 HTTP ${response.status}`);
             }
-            const stream = createWriteStream(partPath);
-            const reader = response.body.getReader();
-            try {
-              for (;;) {
-                const chunk = await reader.read();
-                if (chunk.done) {
-                  break;
-                }
-                if (!stream.write(chunk.value)) {
-                  await new Promise<void>((resolve) => stream.once('drain', resolve));
-                }
-              }
-            } finally {
-              await new Promise<void>((resolve, reject) => {
-                stream.end((error?: Error | null) => (error ? reject(error) : resolve()));
-              });
+            await pipeline(
+              Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),
+              createWriteStream(partPath),
+              { signal }
+            );
+            const received = statSync(partPath).size;
+            if (received !== expected) {
+              throw new Error(`分片 ${index} 只收到 ${received}/${expected} 字节`);
             }
             break;
           } catch (error) {
             rmSync(partPath, { force: true });
-            if (signal.aborted || attempt >= 3) {
+            if (failure || signal.aborted || attempt >= CHUNK_ATTEMPTS) {
               throw error;
             }
             await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
           }
         }
         parts[index] = partPath;
-        completed += end - start + 1;
-        const percent = Math.min(99, Math.floor((completed / total) * 100));
+        completedBytes += expected;
+        const percent = Math.min(99, Math.floor((completedBytes / total) * 100));
         if (percent !== lastPercent) {
           lastPercent = percent;
           report(options, 'download', `正在下载 ${label}… ${percent}%`, percent);
@@ -276,11 +323,13 @@ async function downloadChunks(
         if (!failure) {
           failure = error;
         }
+        // Stop the other workers instead of letting them finish a doomed download.
         controller.abort();
         return;
       }
     }
   };
+
   try {
     await Promise.all(Array.from({ length: Math.min(CHUNK_WORKERS, chunks) }, () => worker()));
     if (failure) {
@@ -289,8 +338,12 @@ async function downloadChunks(
     const assembled = `${destination}.part`;
     rmSync(assembled, { force: true });
     for (let index = 0; index < chunks; index += 1) {
-      appendFileSync(assembled, readFileSync(parts[index]));
-      rmSync(parts[index], { force: true });
+      const part = parts[index];
+      if (!part) {
+        throw new Error(`分片 ${index} 缺失，下载未完成。`);
+      }
+      appendFileSync(assembled, readFileSync(part));
+      rmSync(part, { force: true });
     }
     renameSync(assembled, destination);
   } finally {
@@ -525,4 +578,54 @@ export async function installOpenOcd(options: InstallOptions): Promise<Installed
   mkdirSync(join(target, '.ready'), { recursive: true });
   report(options, 'done', 'OpenOCD 已安装。', 100);
   return { version: OPENOCD_VERSION, executable };
+}
+
+export async function installCMake(options: InstallOptions): Promise<InstalledCMake> {
+  const target = toolDirectory(options.storageRoot, 'cmake', CMAKE_VERSION);
+  const archive = join(options.storageRoot, 'downloads', `cmake-${CMAKE_VERSION}.zip`);
+  if (existsSync(join(target, '.ready'))) {
+    const existing = findBelow(target, join('bin', 'cmake.exe'));
+    if (existing) {
+      return { version: CMAKE_VERSION, cmakePath: existing, binDir: dirname(existing) };
+    }
+  }
+  rmSync(target, { recursive: true, force: true });
+  await downloadArchive(options, CMAKE_SOURCES, archive, CMAKE_EXPECTED_BYTES, 'CMake');
+  report(options, 'extract', '正在解压 CMake…');
+  await (options.extractImpl ?? extractWithTar)(archive, target);
+  rmSync(archive, { force: true });
+  report(options, 'verify', '正在确认 cmake.exe…');
+  const cmakePath = findBelow(target, join('bin', 'cmake.exe'));
+  if (!cmakePath) {
+    rmSync(target, { recursive: true, force: true });
+    throw new Error('解压后没有找到 cmake.exe，下载包可能不完整。');
+  }
+  mkdirSync(join(target, '.ready'), { recursive: true });
+  report(options, 'done', 'CMake 已安装。', 100);
+  return { version: CMAKE_VERSION, cmakePath, binDir: dirname(cmakePath) };
+}
+
+export async function installNinja(options: InstallOptions): Promise<InstalledNinja> {
+  const target = toolDirectory(options.storageRoot, 'ninja', NINJA_VERSION);
+  const archive = join(options.storageRoot, 'downloads', `ninja-${NINJA_VERSION}.zip`);
+  if (existsSync(join(target, '.ready'))) {
+    const existing = findBelow(target, 'ninja.exe', 1);
+    if (existing) {
+      return { version: NINJA_VERSION, ninjaPath: existing, binDir: dirname(existing) };
+    }
+  }
+  rmSync(target, { recursive: true, force: true });
+  await downloadArchive(options, NINJA_SOURCES, archive, NINJA_EXPECTED_BYTES, 'Ninja');
+  report(options, 'extract', '正在解压 Ninja…');
+  await (options.extractImpl ?? extractWithTar)(archive, target);
+  rmSync(archive, { force: true });
+  report(options, 'verify', '正在确认 ninja.exe…');
+  const ninjaPath = findBelow(target, 'ninja.exe', 1);
+  if (!ninjaPath) {
+    rmSync(target, { recursive: true, force: true });
+    throw new Error('解压后没有找到 ninja.exe，下载包可能不完整。');
+  }
+  mkdirSync(join(target, '.ready'), { recursive: true });
+  report(options, 'done', 'Ninja 已安装。', 100);
+  return { version: NINJA_VERSION, ninjaPath, binDir: dirname(ninjaPath) };
 }

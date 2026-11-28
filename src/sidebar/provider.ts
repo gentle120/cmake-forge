@@ -66,7 +66,13 @@ import {
   findBuildToolchain,
   type BuildToolchain
 } from '../env/buildToolchains';
-import { PYPI_MIRROR, installArmGcc, installOpenOcd } from '../env/toolDownloads';
+import {
+  PYPI_MIRROR,
+  installArmGcc,
+  installCMake,
+  installNinja,
+  installOpenOcd
+} from '../env/toolDownloads';
 import { renderSidebarHtml } from './html';
 import { parseIncomingMessage, type SidebarIncomingMessage } from './messages';
 import {
@@ -1058,6 +1064,42 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     return normalizeConfiguredPath(configured) || 'openocd';
   }
 
+  /** CMake from the settings, else the first one on PATH. */
+  private configuredCMakePath(): string | undefined {
+    const configured = normalizeConfiguredPath(
+      vscode.workspace.getConfiguration('cmakeForge').get<string>('cmakePath', '')
+    );
+    return resolveConfiguredExecutable(configured, 'cmake');
+  }
+
+  private configuredNinjaPath(): string | undefined {
+    const configured = normalizeConfiguredPath(
+      vscode.workspace.getConfiguration('cmakeForge').get<string>('ninjaPath', '')
+    );
+    return resolveConfiguredExecutable(configured, 'ninja');
+  }
+
+  /**
+   * Makes a freshly installed Ninja visible to CMake Tools, which launches the
+   * build in its own process environment instead of inheriting PATH edits.
+   */
+  private async prependCmakePath(binDir: string): Promise<void> {
+    const configuration = vscode.workspace.getConfiguration('cmake');
+    const existing = configuration.get<Record<string, string>>('environment') ?? {};
+    const delimiter = process.platform === 'win32' ? ';' : ':';
+    const normalize = (value: string): string =>
+      value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const segments = (existing.PATH ?? '').split(delimiter).map((part) => part.trim()).filter(Boolean);
+    if (segments.some((segment) => normalize(segment) === normalize(binDir))) {
+      return;
+    }
+    await configuration.update(
+      'environment',
+      { ...existing, PATH: [binDir, ...segments].join(delimiter) },
+      vscode.ConfigurationTarget.Global
+    );
+  }
+
   private executablePaths(): FlashExecutablePaths {
     const configuration = vscode.workspace.getConfiguration('cmakeForge');
     return {
@@ -1788,11 +1830,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     const executables = this.executablePaths();
     const jlink = resolveConfiguredExecutable(executables.jlink ?? '', 'JLink.exe');
     const pyocd = resolveConfiguredExecutable(executables.pyocd ?? '', 'pyocd');
+    const cmakeExecutable = this.configuredCMakePath();
+    const ninjaExecutable = this.configuredNinjaPath();
     const environment: SidebarEnvironment = {
       armGcc,
       openocd: openocdExecutable
         ? { ready: true, detail: openocdExecutable }
         : { ready: false, detail: '未找到 openocd.exe' },
+      cmake: cmakeExecutable
+        ? { ready: true, detail: cmakeExecutable }
+        : { ready: false, detail: '未找到 cmake.exe' },
+      ninja: ninjaExecutable
+        ? { ready: true, detail: ninjaExecutable }
+        : { ready: false, detail: '未找到 ninja.exe' },
       toolchains: toolchainChoices,
       backends: [
         {
@@ -1824,6 +1874,88 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
     return environment;
   }
 
+  /** Which missing tools the environment card's single notification offers. */
+  private toolReady(environment: SidebarEnvironment, tool: SidebarToolId): boolean {
+    if (tool === 'armgcc') {
+      return environment.armGcc.ready;
+    }
+    if (tool === 'openocd') {
+      return environment.openocd.ready;
+    }
+    if (tool === 'cmake') {
+      return environment.cmake.ready && environment.ninja.ready;
+    }
+    if (tool === 'ninja') {
+      return environment.ninja.ready;
+    }
+    return environment.backends.find((choice) => choice.value === tool)?.ready === true;
+  }
+
+  /**
+   * One notification for everything missing, so a first run does not stack a
+   * toast per tool. Accepting installs them in order; nothing is downloaded
+   * before the user answers.
+   */
+  private async promptMissingTools(): Promise<void> {
+    // Unit tests run the provider without a VS Code UI to answer the prompt.
+    if (typeof vscode.window?.showInformationMessage !== 'function') {
+      return;
+    }
+    const environment = this.environment();
+    const backend = this.selectionValue.flash.backend;
+    const missing: { tool: SidebarToolId; label: string }[] = [];
+    if (!environment.armGcc.ready) {
+      missing.push({ tool: 'armgcc', label: 'ARM GNU 工具链' });
+    }
+    // CMake Tools ships neither CMake nor Ninja, so a compiler alone still
+    // stops at "configure". Mention only what is actually absent, and reuse an
+    // existing CMake when only Ninja is missing.
+    if (!environment.cmake.ready || !environment.ninja.ready) {
+      const parts = [
+        environment.cmake.ready ? '' : 'CMake',
+        environment.ninja.ready ? '' : 'Ninja'
+      ].filter(Boolean);
+      missing.push({
+        tool: environment.cmake.ready ? 'ninja' : 'cmake',
+        label: parts.join(' 与 ')
+      });
+    }
+    // OpenOCD only matters when it is the selected backend; offering it while
+    // the user flashes through J-Link or pyOCD is noise.
+    if (!environment.openocd.ready && backend === 'openocd') {
+      missing.push({ tool: 'openocd', label: 'OpenOCD' });
+    }
+    if (backend === 'jlink' && !this.toolReady(environment, 'jlink')) {
+      missing.push({ tool: 'jlink', label: 'J-Link' });
+    }
+    if (backend === 'pyocd' && !this.toolReady(environment, 'pyocd')) {
+      missing.push({ tool: 'pyocd', label: 'pyOCD' });
+    }
+    const pending = missing.filter((item) => !this.promptedTools.has(item.tool));
+    if (pending.length === 0) {
+      return;
+    }
+    for (const item of pending) {
+      this.promptedTools.add(item.tool);
+    }
+    const answer = await vscode.window.showInformationMessage(
+      `没有找到 ${pending.map((item) => item.label).join('、')}，编译或烧录需要它们。`,
+      '下载',
+      '稍后'
+    );
+    if (answer !== '下载') {
+      return;
+    }
+    for (const item of pending) {
+      await this.installTool(item.tool);
+      if (!this.toolReady(this.environment(), item.tool)) {
+        // Cancelled or failed: stop the queue and offer this one again later.
+        this.promptedTools.delete(item.tool);
+        return;
+      }
+    }
+  }
+
   /** Installs (or opens the download page for) whichever tool the user picked. */
   private async installTool(tool: SidebarToolId): Promise<void> {
     if (tool === 'jlink') {
@@ -1845,7 +1977,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       this.post({
         type: 'notification',
         level: 'warning',
-        message: '自动下载目前只支持 Windows：请用系统包管理器安装 ARM GNU 工具链与 OpenOCD，并在设置里填写路径。'
+        message: '自动下载目前只支持 Windows：请用系统包管理器安装 ARM GNU 工具链、CMake/Ninja 与 OpenOCD，并在设置里填写路径。'
       });
       return;
     }
@@ -1858,7 +1990,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
       });
       return;
     }
-    const label = tool === 'armgcc' ? 'ARM GNU 工具链' : 'OpenOCD';
+    const labels: Record<SidebarToolId, string> = {
+      armgcc: 'ARM GNU 工具链',
+      openocd: 'OpenOCD',
+      cmake: 'CMake 与 Ninja',
+      ninja: 'Ninja',
+      jlink: 'J-Link',
+      pyocd: 'pyOCD'
+    };
+    const label = labels[tool];
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
@@ -1894,44 +2034,53 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
               }
             }
           };
+          // The environment card must flip to "已安装" before the (possibly
+          // slow) workspace scan below starts, otherwise the sidebar keeps
+          // claiming the tool is missing while the toast says it is done.
+          const finishInstalled = (message: string): void => {
+            this.toolInstallRunning = undefined;
+            this.toolProgress = undefined;
+            this.busy = false;
+            this.postState();
+            this.post({ type: 'operationFinished', result: { ok: true, message, files: [] } });
+          };
+          const settings = vscode.workspace.getConfiguration('cmakeForge');
           if (tool === 'armgcc') {
             const installed = await installArmGcc(options);
-            await vscode.workspace.getConfiguration('cmakeForge')
-              .update('armGccPath', installed.binDir, vscode.ConfigurationTarget.Global);
+            await settings.update('armGccPath', installed.binDir, vscode.ConfigurationTarget.Global);
             this.buildToolchainCache = undefined;
-            // The environment card must flip to "已安装" before the (possibly
-            // slow) workspace scan below starts, otherwise the sidebar keeps
-            // claiming the tool is missing while the toast says it is done.
-            this.toolInstallRunning = undefined;
-            this.toolProgress = undefined;
-            this.busy = false;
-            this.postState();
-            this.post({
-              type: 'operationFinished',
-              result: {
-                ok: true,
-                message: `ARM GNU 工具链 ${installed.version} 已安装：${installed.binDir}`,
-                files: []
-              }
-            });
-          } else {
+            finishInstalled(`ARM GNU 工具链 ${installed.version} 已安装：${installed.binDir}`);
+          } else if (tool === 'openocd') {
             const installed = await installOpenOcd(options);
-            await vscode.workspace.getConfiguration('cmakeForge')
-              .update('openocdPath', installed.executable, vscode.ConfigurationTarget.Global);
-            // Same as above: a tool that just finished installing must not be
-            // reported as missing while firmware detection catches up.
-            this.toolInstallRunning = undefined;
-            this.toolProgress = undefined;
-            this.busy = false;
-            this.postState();
-            this.post({
-              type: 'operationFinished',
-              result: {
-                ok: true,
-                message: `OpenOCD ${installed.version} 已安装：${installed.executable}`,
-                files: []
-              }
-            });
+            await settings.update('openocdPath', installed.executable, vscode.ConfigurationTarget.Global);
+            finishInstalled(`OpenOCD ${installed.version} 已安装：${installed.executable}`);
+          } else if (tool === 'cmake') {
+            // Record CMake as soon as it lands: Ninja is a separate archive and
+            // a failed second download must not hide a working CMake.
+            const cmake = await installCMake(options);
+            await settings.update('cmakePath', cmake.cmakePath, vscode.ConfigurationTarget.Global);
+            await vscode.workspace.getConfiguration('cmake')
+              .update('cmakePath', cmake.cmakePath, vscode.ConfigurationTarget.Global);
+            let ninja;
+            try {
+              ninja = await installNinja(options);
+            } catch (error) {
+              const detail = error instanceof Error ? error.message : String(error);
+              finishInstalled(`CMake ${cmake.version} 已安装，但 Ninja 安装失败：${detail}`);
+              return;
+            }
+            await settings.update('ninjaPath', ninja.ninjaPath, vscode.ConfigurationTarget.Global);
+            // CMake Tools launches builds itself, so the Ninja directory has to
+            // travel through cmake.environment instead of our process PATH.
+            await this.prependCmakePath(ninja.binDir);
+            finishInstalled(
+              `CMake ${cmake.version} 与 Ninja ${ninja.version} 已安装：${cmake.binDir}`
+            );
+          } else {
+            const installed = await installNinja(options);
+            await settings.update('ninjaPath', installed.ninjaPath, vscode.ConfigurationTarget.Global);
+            await this.prependCmakePath(installed.binDir);
+            finishInstalled(`Ninja ${installed.version} 已安装：${installed.binDir}`);
           }
           logLine(`[tools] installed ${label}`);
           await this.refreshFlashDetection();
@@ -1957,57 +2106,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider, vscode.Dispo
         }
       }
     );
-  }
-
-  /** One notification per missing tool, so the card keeps showing plain states. */
-  private async promptMissingTools(): Promise<void> {
-    // Unit tests run the provider without a VS Code UI to answer the prompt.
-    if (typeof vscode.window?.showInformationMessage !== 'function') {
-      return;
-    }
-    const environment = this.environment();
-    const backendReady = new Map(environment.backends.map((choice) => [choice.value, choice.ready]));
-    const missing: { tool: SidebarToolId; label: string }[] = [];
-    if (!environment.armGcc.ready) {
-      missing.push({ tool: 'armgcc', label: 'ARM GNU 工具链' });
-    }
-    const backend = this.selectionValue.flash.backend;
-    // OpenOCD only matters when it is the selected backend; offering to install
-    // it while the user flashes through J-Link or pyOCD is just noise.
-    if (!environment.openocd.ready && backend === 'openocd') {
-      missing.push({ tool: 'openocd', label: 'OpenOCD' });
-    }
-    if (backend === 'jlink' && backendReady.get('jlink') !== true) {
-      missing.push({ tool: 'jlink', label: 'J-Link' });
-    }
-    if (backend === 'pyocd' && backendReady.get('pyocd') !== true) {
-      missing.push({ tool: 'pyocd', label: 'pyOCD' });
-    }
-    for (const item of missing) {
-      if (this.promptedTools.has(item.tool)) {
-        continue;
-      }
-      this.promptedTools.add(item.tool);
-      const answer = await vscode.window.showInformationMessage(
-        `没有找到 ${item.label}，编译或烧录需要它。`,
-        '下载',
-        '稍后'
-      );
-      if (answer === '下载') {
-        await this.installTool(item.tool);
-        // Cancelled or failed installs stay out of the way, but the next
-        // refresh should be allowed to ask again instead of never offering.
-        const ready = this.environment();
-        const stillMissing = item.tool === 'armgcc'
-          ? !ready.armGcc.ready
-          : item.tool === 'openocd'
-            ? !ready.openocd.ready
-            : ready.backends.find((choice) => choice.value === item.tool)?.ready !== true;
-        if (stillMissing) {
-          this.promptedTools.delete(item.tool);
-        }
-      }
-    }
   }
 
   /** J-Link ships as a GUI installer, so the honest "download" is its page. */

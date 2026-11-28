@@ -8,10 +8,16 @@ import {
   ARM_GCC_OFFICIAL_URL,
   ARM_GCC_URL,
   ARM_GCC_VERSION,
+  CMAKE_URL,
+  CMAKE_VERSION,
+  NINJA_URL,
+  NINJA_VERSION,
   OPENOCD_URL,
   OPENOCD_VERSION,
   findBelow,
   installArmGcc,
+  installCMake,
+  installNinja,
   installOpenOcd
 } from '../env/toolDownloads';
 
@@ -153,5 +159,126 @@ test('a failed verification removes the extracted directory', async () => {
       /没有找到 openocd\.exe/
     );
     assert.equal(existsSync(join(dir, 'tools', `openocd-${OPENOCD_VERSION}`)), false);
+  });
+});
+
+test('the build tools come from the same proxy and pin a known version', () => {
+  assert.match(CMAKE_URL, /^https:\/\/gh-proxy\.com\/https:\/\/github\.com\/Kitware\/CMake\//);
+  assert.match(CMAKE_URL, new RegExp(`cmake-${CMAKE_VERSION.replace(/\./g, '\\.')}-windows-x86_64\\.zip$`));
+  assert.match(NINJA_URL, /^https:\/\/gh-proxy\.com\/https:\/\/github\.com\/ninja-build\/ninja\//);
+  assert.match(NINJA_URL, new RegExp(`/v${NINJA_VERSION.replace(/\./g, '\\.')}/ninja-win\\.zip$`));
+});
+
+test('installCMake unpacks cmake.exe and later finds it again without downloading', async () => {
+  await withTempDir(async (dir) => {
+    let downloads = 0;
+    const installed = await installCMake({
+      storageRoot: dir,
+      fetchImpl: async () => {
+        downloads += 1;
+        return archiveResponse();
+      },
+      extractImpl: async (_archive, destination) => {
+        const bin = join(destination, 'cmake-4.2.3-windows-x86_64', 'bin');
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(join(bin, 'cmake.exe'), '');
+      }
+    });
+    assert.equal(installed.version, CMAKE_VERSION);
+    assert.equal(existsSync(join(installed.binDir, 'cmake.exe')), true);
+    // One probe request plus the actual body; a second install must reuse it.
+    const firstDownloads = downloads;
+    const again = await installCMake({
+      storageRoot: dir,
+      fetchImpl: async () => {
+        downloads += 1;
+        return archiveResponse();
+      },
+      extractImpl: async () => {
+        throw new Error('should reuse the installed copy');
+      }
+    });
+    assert.equal(again.cmakePath, installed.cmakePath);
+    assert.equal(downloads, firstDownloads);
+  });
+});
+
+test('installNinja unpacks the single executable', async () => {
+  await withTempDir(async (dir) => {
+    const installed = await installNinja({
+      storageRoot: dir,
+      fetchImpl: async () => archiveResponse(),
+      extractImpl: async (_archive, destination) => {
+        mkdirSync(destination, { recursive: true });
+        writeFileSync(join(destination, 'ninja.exe'), '');
+      }
+    });
+    assert.equal(installed.version, NINJA_VERSION);
+    assert.equal(existsSync(installed.ninjaPath), true);
+    assert.equal(existsSync(join(dir, 'tools', `ninja-${NINJA_VERSION}`, '.ready')), true);
+  });
+});
+
+function rangedFetcher(total: number, mutate: (index: number, start: number, end: number) => Response): typeof fetch {
+  return (async (_input: string | URL | Request, init?: RequestInit) => {
+    const range = new Headers(init?.headers).get('range');
+    if (range === 'bytes=0-0') {
+      return new Response(null, {
+        status: 206,
+        headers: { 'content-range': `bytes 0-0/${total}` }
+      });
+    }
+    const match = /bytes=(\d+)-(\d+)/.exec(range ?? '');
+    const start = Number(match?.[1]);
+    const end = Number(match?.[2]);
+    return mutate(Math.floor(start / (1024 * 1024)), start, end);
+  }) as typeof fetch;
+}
+
+test('a truncated chunk is retried before the archive is assembled', async () => {
+  const total = 3 * 1024 * 1024;
+  let truncatedOnce = false;
+  const fetchImpl = rangedFetcher(total, (index, start, end) => {
+    if (index === 1 && !truncatedOnce) {
+      truncatedOnce = true;
+      return new Response(new Uint8Array(10), { status: 206 });
+    }
+    return new Response(new Uint8Array(end - start + 1), { status: 206 });
+  });
+  await withTempDir(async (dir) => {
+    let extracted = 0;
+    await installOpenOcd({
+      storageRoot: dir,
+      fetchImpl,
+      extractImpl: async (archive, destination) => {
+        extracted = statSync(archive).size;
+        const bin = join(destination, 'bin');
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(join(bin, 'openocd.exe'), '');
+      }
+    });
+    assert.equal(truncatedOnce, true);
+    assert.equal(extracted, total);
+  });
+});
+
+test('a chunk that stays short fails the download and leaves no parts behind', async () => {
+  const total = 2 * 1024 * 1024;
+  const fetchImpl = rangedFetcher(total, (_index, _start, end) => (
+    new Response(new Uint8Array(5), { status: 206 })
+  ));
+  await withTempDir(async (dir) => {
+    await assert.rejects(
+      installOpenOcd({
+        storageRoot: dir,
+        fetchImpl,
+        extractImpl: async () => {
+          throw new Error('should not extract');
+        }
+      }),
+      /只收到/
+    );
+    const leftovers = (await import('node:fs')).readdirSync(join(dir, 'downloads'));
+    assert.deepEqual(leftovers.filter((name) => name.includes('.part')), []);
   });
 });

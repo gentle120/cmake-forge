@@ -124,6 +124,16 @@
           "default": "",
           "description": "ARM GNU 工具链的 bin 目录（或 arm-none-eabi-gcc 的完整路径）。留空时只在 PATH 中查找；侧栏可一键下载安装。"
         },
+        "cmakeForge.cmakePath": {
+          "type": "string",
+          "default": "",
+          "description": "CMake 可执行文件（或所在 bin 目录）的完整路径。留空时先在 PATH 中查找；侧栏可一键下载安装 CMake 与 Ninja。"
+        },
+        "cmakeForge.ninjaPath": {
+          "type": "string",
+          "default": "",
+          "description": "Ninja 可执行文件（或所在目录）的完整路径。留空时先在 PATH 中查找；侧栏可一键下载。"
+        },
         "cmakeForge.pythonPath": {
           "type": "string",
           "default": "",

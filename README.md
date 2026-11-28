@@ -8,7 +8,7 @@
 - **芯片数据来自 Pack**：支持本地 `.pack`、Keil 安装目录与 CMSIS 在线索引；未收录厂商导入后自动注册，无需手写芯片档案。
 - **一键烧录**：检测探针读取 CPUID 与 DBGMCU ID，自动匹配内核、系列与烧录 target；OpenOCD 后端直接调用 `openocd`，J-Link/pyOCD 后端使用生成的 `flash.py`，带阶段进度、输出与失败诊断。
 - **Cortex-Debug 配置**：生成 launch/attach 两条配置，可带 SVD、`preLaunchTask` 与工具链前缀。
-- **工具链只保留 GNU Arm GCC**：未检测到 `arm-none-eabi-gcc` 或 OpenOCD 时，通知栏提供下载；pyOCD 通过 pip 安装，J-Link 跳转 SEGGER 下载页。
+- **装完即可用**：编译链只保留 GNU Arm GCC；缺 ARM GCC、CMake、Ninja 或 OpenOCD 时，通知栏一次列出并一键下载（可取消、带进度），装完自动写设置。pyOCD 通过 pip 安装，J-Link 跳转 SEGGER 下载页。
 - **三种目标**：MCU 固件、Linux/SoC（loongarch64、aarch64、armv7hf、riscv64）、桌面 C/C++（编译器由 CMake Tools Kit 选择）。
 
 ## 安装
@@ -39,10 +39,11 @@ cmake --build --preset debug
 - VS Code 1.85+
 - CMake ≥ 3.22、Ninja、GNU Arm GCC（`arm-none-eabi-*`）
 - CMake Tools、Cortex-Debug（扩展依赖，自动安装）
+- 首次运行可在侧栏一键下载 ARM GNU 工具链、CMake、Ninja、OpenOCD（仅 Windows，安装到用户数据目录）
 - 调试需要 `arm-none-eabi-gdb`；Linux 方向需要对应前缀的 `gcc`/`g++`
 - 烧录需要 OpenOCD、J-Link 或 pyOCD 之一，以及对应探针驱动
 
-工具缺失时侧栏「编译与烧录工具」会给出下载入口，也支持在设置里填写自定义路径。
+工具缺失时通知栏会给出下载入口，也支持在设置里填写自定义路径。
 
 导入的 Pack 与下载的工具存放在用户数据目录（Windows `%APPDATA%\cmake-forge`，其他平台 `$XDG_DATA_HOME/cmake-forge`）。旧版本放在扩展全局存储里的内容会在首次启动时自动迁移。
 
@@ -53,6 +54,8 @@ cmake --build --preset debug
 | 设置 | 说明 |
 | --- | --- |
 | `cmakeForge.armGccPath` | GNU Arm GCC 的 `bin` 目录或 `gcc` 路径；空值使用 `PATH` |
+| `cmakeForge.cmakePath` | `cmake.exe` 或所在 `bin` 目录；空值使用 `PATH` |
+| `cmakeForge.ninjaPath` | `ninja.exe` 或所在目录；空值使用 `PATH` |
 | `cmakeForge.openocdPath` | `openocd` 可执行文件路径；空值使用 `PATH` |
 | `cmakeForge.jlinkPath` | `JLink.exe` 路径；空值使用 `PATH` |
 | `cmakeForge.pyocdPath` | `pyocd` 可执行文件路径；空值使用 `PATH` |

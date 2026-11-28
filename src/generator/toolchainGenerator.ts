@@ -11,7 +11,11 @@ function gccCompiler(profile: DeviceProfile, tool: 'gcc' | 'g++'): string {
 
 /** Quotes a compiler command/path for `set(...)`; paths with spaces must stay one value. */
 function cmakeQuoted(value: string): string {
-  return `"${value.replace(/"/g, '\\"')}"`;
+  // CMake treats `\` inside a quoted argument as an escape sequence, so a
+  // Windows path copied verbatim fails with "Invalid character escape '\U'".
+  // Forward slashes are accepted by every tool we invoke.
+  const normalized = value.replace(/\\/g, '/').replace(/"/g, '\\"');
+  return `"${normalized}"`;
 }
 
 function gccToolchainFile(profile: DeviceProfile): string {
